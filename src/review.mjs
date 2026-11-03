@@ -32,12 +32,12 @@ export function openReview(mission,{candidateSha,hostReport={},risk='MEDIUM',git
   insist(['LOW','MEDIUM','HIGH'].includes(risk),'Invalid risk level');
   const host=evaluateHost(hostReport);
   insist(host.allowed,'The requested model or reasoning effort does not match this host report');
+  insist((mission.reviewCount||0)<Math.min(MAX_VERIFIED_ROUNDS,budgetOf(mission).maxReviewRounds),
+    'Verified review correction limit reached; operator intervention required');
   if(gitEvidence){
     insist(gitEvidence.assurance==='LOCAL_GIT_OBSERVED'&&gitEvidence.clean===true&&
       gitEvidence.candidateSha===candidateSha&&SHA.test(gitEvidence.treeSha)&&
       SHA.test(gitEvidence.baseSha),'Candidate must have verified, clean local Git evidence');
-    insist((mission.reviewCount||0)<Math.min(MAX_VERIFIED_ROUNDS,budgetOf(mission).maxReviewRounds),
-      'Verified review correction limit reached; operator intervention required');
   }
   const old=mission.review;
   if(old){

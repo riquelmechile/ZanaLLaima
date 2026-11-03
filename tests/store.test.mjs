@@ -1,4 +1,5 @@
 import test from 'node:test';
+import {DatabaseSync} from 'node:sqlite';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -226,10 +227,19 @@ test('archived review retention never exceeds 200 records',async()=>{
         evidence:['Actual source validation']});
       return s;
     },f.file);
-    for(let i=0;i<204;i++)await transact(s=>{
-      openReview(s,{candidateSha:i.toString(16).padStart(40,'0')});
-      return s;
-    },f.file);
+    // Test storage retention independently of the enforced per-mission
+    // maximum of five review rounds: prepopulate historical archived rows.
+    const db=new DatabaseSync(databasePath(f.file));
+    try{
+      db.exec('BEGIN IMMEDIATE');
+      const insert=db.prepare('INSERT INTO review_archive(mission_id,review_id,content,created_at) VALUES(?,?,?,?)');
+      for(let i=0;i<204;i++){
+        const id='archive-fixture-'+i;
+        insert.run('historical-mission',id,JSON.stringify({id,lenses:[]}),new Date().toISOString());
+      }
+      db.exec('COMMIT');
+    }finally{db.close();}
+    await transact(s=>{s.revision++;return s;},f.file);
     assert.equal((await storageStatus(f.file)).archivedReviews,200);
     const page=await readReviewArchive({limit:100},f.file);
     const second=await readReviewArchive({limit:100,before:page.nextCursor},f.file);

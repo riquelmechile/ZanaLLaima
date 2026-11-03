@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { evaluateHost } from './core.mjs';
 import { matchesReviewCandidate } from './git-evidence.mjs';
+import { budgetOf, budgetExpired, requirePayloadBudget } from './budget.mjs';
 
 export const REVIEW_LENSES=Object.freeze([
   {id:'risk',title:'Risk and security',
@@ -23,6 +24,7 @@ const blocking=new Set(['BLOCKER','CRITICAL','HIGH']);
 export function openReview(mission,{candidateSha,hostReport={},risk='MEDIUM',gitEvidence=null}={}){
   insist(mission?.schema===1&&Array.isArray(mission.units),'An existing mission is required');
   insist((mission.status||'ACTIVE')==='ACTIVE','Mission must be active for review');
+  insist(!budgetExpired(mission),'Mission time budget exhausted');
   insist(mission.units.length>0&&mission.units.every(x=>x.status==='DONE'),
     'All mission units must be completed successfully before review');
   insist(typeof candidateSha==='string'&&SHA.test(candidateSha),
@@ -34,7 +36,7 @@ export function openReview(mission,{candidateSha,hostReport={},risk='MEDIUM',git
     insist(gitEvidence.assurance==='LOCAL_GIT_OBSERVED'&&gitEvidence.clean===true&&
       gitEvidence.candidateSha===candidateSha&&SHA.test(gitEvidence.treeSha)&&
       SHA.test(gitEvidence.baseSha),'Candidate must have verified, clean local Git evidence');
-    insist((mission.reviewCount||0)<MAX_VERIFIED_ROUNDS,
+    insist((mission.reviewCount||0)<Math.min(MAX_VERIFIED_ROUNDS,budgetOf(mission).maxReviewRounds),
       'Verified review correction limit reached; operator intervention required');
   }
   const old=mission.review;
@@ -130,6 +132,7 @@ export function startReviewBatch(mission,hostReport){
   const plan=nextReviewBatch(mission,hostReport);
   insist(plan.lenses.length>0,'No review lenses available');
   const review=mission.review;
+  insist(!budgetExpired(mission),'Mission time budget exhausted');
   if(review.mode==='NATIVE_PLANNED'&&plan.mode==='SOLO_SEQUENTIAL'){
     review.mode='SOLO_SEQUENTIAL';
     review.maxParallel=1;
@@ -168,6 +171,7 @@ export function submitReview(mission,{lensId,token,candidateSha,verdict,summary,
     (x.path===undefined||validText(x.path,240))),'Invalid findings');
   insist(verdict!=='PASS'||!findings.some(x=>blocking.has(x.severity)),
     'A PASS cannot contain blocking findings');
+  requirePayloadBudget(mission,{summary,evidence,findings,execution,contextId},'review result');
   const expected=lens.run.execution;
   insist(execution===expected,'Execution provenance contradicts the reserved review packet');
   if(expected==='NATIVE_SUBAGENT'){

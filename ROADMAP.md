@@ -20,7 +20,7 @@
 | --- | --- | --- | --- |
 | 0 | P0 | Evitar bloqueos, errores de autorización y pérdidas de trabajo | [ ] Control local probado; gate real de escrituras del anfitrión pendiente |
 | 1 | P1 | Persistencia transaccional y recuperación tras reinicio | [x] Implementada y probada; gate operacional pendiente de Fase 0 |
-| 2 | P1 | RDD verificable sobre SHA exacto y revisión de una sola cuenta | [ ] Pendiente |
+| 2 | P1 | RDD verificable sobre SHA exacto y revisión de una sola cuenta | [x] Motor local y pruebas; integración real pendiente |
 | 3 | P1 | MCP compatible e integración real con el anfitrión GPT | [ ] Pendiente |
 | 4 | P2 | Aprovechar paralelismo nativo y mejorar rendimiento | [ ] Pendiente |
 | 5 | P2 | CI, seguridad de repositorio y criterios de entrega | [ ] Pendiente |
@@ -52,14 +52,16 @@
 
 ### Fase 2. RDD de una sola cuenta (P1; depende de fases 0 y 1)
 
-- [ ] **ZL-010. Evidencia Git real.** Leer el HEAD/árbol real desde un componente autorizado y congelar SHA de 40 caracteres, destino y limpieza del worktree. No confiar únicamente en un SHA pasado como argumento.
-- [ ] **ZL-011. Revisión 4R adaptable.** Limitar los paquetes al número **efectivamente observado** de contextos nativos. Si se pierde capacidad, transicionar de forma controlada al modo secuencial sin fingir independencia.
-- [ ] **ZL-012. Procedencia y aislamiento.** Registrar ID de contexto, ejecución y candidato; impedir contaminación entre perspectivas y no elevar reportes autodeclarados a atestaciones verificadas.
-- [ ] **ZL-013. Corrección y nuevo candidato.** Fallos bloqueantes exigen cambios explícitamente autorizados, nuevo SHA, invalidación de recibos anteriores y revisión desde cero. Limitar correcciones repetidas.
-- [ ] **ZL-014. Gate de entrega separado.** Combinar evidencia Git, CI del SHA exacto, hallazgos y aprobación del operador sin confundir “revisión terminada” con permiso de merge/deploy.
-- [ ] **ZL-015. Pruebas RDD.** Casos de SHA cambiado durante revisión, contextos repetidos, subagente ausente, evidencia inventada, pruebas vencidas y hallazgos críticos.
+**Implementación local candidata PR #1:** Git HEAD/árbol/destino y worktree limpio comprobados por proceso local; revisión 4R adaptable (1–4), fallback secuencial y procedencia etiquetada sin afirmar independencia; invalidación de SHA y máximo cinco rondas verificadas; gate de entrega con atestaciones Ed25519 separadas de CI y operador. **No hay lanzamientos reales de subagentes ni fuente CI conectada todavía**. El gate operativo queda pendiente de la futura fase de integración.
 
-**Gate:** cuatro perspectivas completan su ciclo, pero solo una autoridad independiente basada en evidencia real puede elevar el estado de revisión. Sin prueba externa, `approved: false`.
+- [x] **ZL-010. Evidencia Git real.** Leer el HEAD/árbol real desde un componente autorizado y congelar SHA de 40 caracteres, destino y limpieza del worktree. No confiar únicamente en un SHA pasado como argumento.
+- [x] **ZL-011. Revisión 4R adaptable.** Limitar los paquetes al número **efectivamente observado** de contextos nativos. Si se pierde capacidad, transicionar de forma controlada al modo secuencial sin fingir independencia.
+- [x] **ZL-012. Procedencia y aislamiento.** Registrar ID de contexto, ejecución y candidato; impedir contaminación entre perspectivas y no elevar reportes autodeclarados a atestaciones verificadas.
+- [x] **ZL-013. Corrección y nuevo candidato.** Fallos bloqueantes exigen cambios explícitamente autorizados, nuevo SHA, invalidación de recibos anteriores y revisión desde cero. Limitar correcciones repetidas.
+- [x] **ZL-014. Gate de entrega separado.** Combinar evidencia Git, CI del SHA exacto, hallazgos y aprobación del operador sin confundir “revisión terminada” con permiso de merge/deploy.
+- [x] **ZL-015. Pruebas RDD.** Casos de SHA cambiado durante revisión, contextos repetidos, subagente ausente, evidencia inventada, pruebas vencidas y hallazgos críticos.
+
+**Gate local:** cuatro perspectivas con procedencia honesta, invalidez ante Git cambiante y firmas verificadas. Sin prueba externa, `approved: false`. **Gate E2E pendiente:** aislamiento real de contextos y atestaciones CI producidas por un verificador conectado; no considerar el RDD independiente ni autorizado para despliegue antes de la fase de integración.
 
 ### Fase 3. MCP e integración de anfitrión (P1; depende de fase 0; puede avanzar en paralelo a fases 1 y 2)
 

@@ -23,20 +23,40 @@ Read-only work can be recovered from expired leases and retried deliberately wit
 
 The local planner cannot enforce file mutations by external host tools; host integration must apply the same controls at the actual effect boundary before production use.
 
+## Phase 2: Git-bound four-lens review
+
+After all mission tasks are DONE, configure the local worktree with `ZANA_REVIEW_REPO=/absolute/path/to/repo` and an optional `ZANA_REVIEW_TARGET_REF=refs/heads/main`. The local controller independently checks the actual Git commit, tree, branch, target-base and clean worktree. Client-supplied SHA values are rejected if they differ from Git. Dirty or changed candidates invalidate outstanding review packets.
+
+```sh
+node src/cli.mjs review-open "$(git rev-parse HEAD)"
+node src/cli.mjs review-next [host.json]
+node src/cli.mjs review-start [host.json]
+node src/cli.mjs review-status
+node src/cli.mjs review-check
+node src/cli.mjs delivery-check ci-attestation.json operator-approval.json
+```
+
+Native 4R uses at most the host-reported context capacity, capped at four; if it disappears, remaining reviews fall back to a single context and are labeled self-checks. No mode claims independently verified subagents. Up to five verified candidate rounds are permitted per mission.
+
+The **delivery gate** requires both a separately signed CI attestation and a separately signed operator decision in addition to a clean, unchanged Git candidate and passing review lenses. Its highest result is `READY_FOR_MANUAL_RELEASE`: it **never** authorizes or performs merge/deploy. CI signatures are tested locally with temporary keys; authentic CI receipt production and GPT-host integration remain scheduled for later. See [the RDD security contract](docs/solo-rdd.md).
+
 ## Durable storage
 
-The state backend uses SQLite WAL, with conservative migration from existing JSON, real multiprocess transactions, bounded historical reviews, backup and offline restore. See [storage operations](docs/sqlite-storage.md). This does **not** yet recover uncertain running work; the Phase 0 safety gate remains open.
+The state backend uses SQLite WAL (schema v3), with conservative JSON migration, fenced concurrent writes, persistent review correction rounds, bounded histories, backup and offline restore. See [storage operations](docs/sqlite-storage.md). Expired READ work has controlled retries; uncertain WRITE work still requires separate operator reconciliation.
 
 ## Components
 
 - `src/core.mjs`: isolated mission DAG, permission gates, capability-aware batch planning, fenced per-unit completion.
-- `src/store.mjs`: single-writer local JSON state, atomic replacement and fail-closed lock.
+- `src/store.mjs`: transactional SQLite WAL state, migration, receipts, audit history and archival.
+- `src/git-evidence.mjs`: trusted local Git HEAD/tree/branch/cleanliness observation.
+- `src/review.mjs`: adaptive, candidate-bound four-lens review engine.
+- `src/delivery.mjs`: separately signed CI/operator attestation gate, without release actions.
 - `src/actions.mjs`: tiny stateful action layer.
 - `src/mcp.mjs`: local Model Context Protocol server over standard input/output.
 - `src/cli.mjs`: command-line interface for development and inspection.
 - `AGENTS.md`: instructions for a host using this project.
 
-This is an initial **local development release**, not a public remote ChatGPT app or an autonomous background agent. Remote connectivity would need its own security and OAuth design. Node.js 22+ is required; there are no npm runtime dependencies.
+This is an initial **local development release**, not a public remote ChatGPT app or an autonomous background agent. Remote connectivity would need its own security and OAuth design. Node.js 22.16+ is required; there are no npm runtime dependencies.
 
 ## Try it locally
 
@@ -56,7 +76,7 @@ npm run cli -- status
 node src/cli.mjs complete <unit-id> <run-token> actual-outcome.json
 ```
 
-Each result must contain `success` (boolean), a factual `summary` and a nonempty list of `evidence`. The JSON in `examples/outcome.json` is **illustrative only**, not a valid substitute for actual checks. Use `ZANA_STATE_FILE=/safe/path/state.json` to select a separate state file. The default is `.zana/state.json`, which is ignored by Git. Only one active mission per state file is supported initially.
+Each result must contain `success` (boolean), a factual `summary` and a nonempty list of `evidence`. The JSON in `examples/outcome.json` is **illustrative only**, not a valid substitute for actual checks. Use `ZANA_STATE_FILE=/safe/path/state.json` to select a separate state file. The default is `.zana/state.json`, which is ignored by Git. Only one active mission per state file is supported; close/archive the prior mission before starting the next.
 
 ## Connect to a local MCP-compatible host
 

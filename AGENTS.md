@@ -32,3 +32,9 @@ Before launching a WRITE, inspect `zana_permission_status` and require a valid s
 Preserve `token`, `leaseGeneration` and `expiresAt` from every reserved unit. Use `zana_unit_heartbeat` to extend only an active lease; never send a completion for a stale or expired claim. Run `zana_recover_expired` on resumption. READ work may be explicitly retried within the bounded limit; interrupted WRITE work must remain `OUTCOME_UNKNOWN` until operator-signed reconciliation proves completion or no effect. Do not infer non-execution from a lost response.
 
 For files under the workspace root, reject symbolic links and recheck permissions at the actual moment of the file operation. The local preflight is not a substitute for a trusted OS-enforced write boundary. Mission close/archive is separate from PR approval and release.
+
+## Phase 2 RDD safety
+
+Use the Git-bound commands in `docs/solo-rdd.md`. Before opening a review, confirm that the local commit and worktree are clean. Do not submit a synthetic SHA or claim an unverified branch, target or Git tree. Check Git again before each review packet and the release decision. Any drift invalidates old packets and requires a newly committed candidate. The verified correction loop is bounded to five rounds.
+
+Never present four reported context IDs as independent verification. Respect the available native capacity, including a fallback to one self-review context when it disappears; do not share other lenses' outputs before completion. A signed CI attestation must come from an external verifier with a separate key, and the operator approval must be signed independently. The delivery gate returns only manual-release readiness and cannot authorize merging or deployment.

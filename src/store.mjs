@@ -263,6 +263,7 @@ export async function readHistory({ limit=25, before=null, category=null } = {},
 }
 
 export async function readReviewArchive({limit=25,before=null}={},file=statePath()){
+  await refuseInterruptedRestore(file);
   if (!Number.isInteger(limit)||limit<1||limit>100||
       (before!==null&&(!Number.isSafeInteger(before)||before<1)))
     fail('Invalid review archive pagination');

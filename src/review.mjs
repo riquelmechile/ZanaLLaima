@@ -141,7 +141,7 @@ export function submitReview(mission, { lensId, token, candidateSha, verdict, su
   lens.state = 'DONE';
   lens.run = null;
   lens.result = {
-    verdict, summary, evidence, findings, execution,
+    verdict, summary, evidence, findings, execution, packetToken: token,
     ...(contextId === undefined ? {} : { contextId }),
     assurance: expected === 'SELF_CONTEXT' ? 'SELF_REPORTED_UNVERIFIED' :
       'HOST_REPORTED_UNVERIFIED',

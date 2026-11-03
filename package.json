@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": {"node": ">=22"},
+  "engines": {"node": ">=22.16.0"},
   "scripts": {
     "test": "node --test tests/*.test.mjs",
     "check": "node --check src/core.mjs && node --check src/review.mjs && node --check src/actions.mjs && node --check src/store.mjs && node --check src/cli.mjs && node --check src/mcp.mjs",

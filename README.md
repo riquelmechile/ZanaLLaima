@@ -15,6 +15,10 @@ A standalone, GPT-native engineering workspace. One GPT host coordinates an obje
 
 The prioritized audit backlog, acceptance gates and delivery milestones are in [ROADMAP.md](ROADMAP.md). It tracks planned work only; unchecked items are not implemented.
 
+## Durable storage
+
+The state backend uses SQLite WAL, with conservative migration from existing JSON, real multiprocess transactions, bounded historical reviews, backup and offline restore. See [storage operations](docs/sqlite-storage.md). This does **not** yet recover uncertain running work; the Phase 0 safety gate remains open.
+
 ## Components
 
 - `src/core.mjs`: isolated mission DAG, permission gates, capability-aware batch planning, fenced per-unit completion.

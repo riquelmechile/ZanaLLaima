@@ -1,9 +1,15 @@
 import { createMission, nextBatch, startBatch, completeUnit, publicStatus, HOST_REQUEST } from './core.mjs';
-import { readState, transact } from './store.mjs';
+import { readState, transact, readHistory, readReviewArchive, storageStatus, migrateLegacy, backupState, restoreBackup } from './store.mjs';
 import { openReview, reviewStatus, nextReviewBatch, startReviewBatch, submitReview, checkCandidate } from './review.mjs';
 
 export const operations = {
   profile: async () => ({ requested: HOST_REQUEST, assurance: 'REQUESTED_ONLY' }),
+  storageStatus: async () => storageStatus(),
+  storageHistory: async (args = {}) => readHistory(args),
+  storageReviews: async (args = {}) => readReviewArchive(args),
+  storageMigrate: async () => ({ mission: publicStatus(await migrateLegacy()), backend: await storageStatus() }),
+  storageBackup: async ({ destination }) => backupState(destination),
+  storageRestore: async ({ source, offline = false }) => restoreBackup(source, undefined, { offline }),
   init: async ({ spec }) => {
     const result = await transact(existing => {
       if (existing) throw Error('Mission exists; finish or archive it before starting another');

@@ -1,3 +1,10 @@
 .zana/
 node_modules/
 *.log
+
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.pre-sqlite.bak
+*.restore-pending
+*.quarantine.*

@@ -124,7 +124,7 @@ export function startBatch(mission, report = {}) {
     const unit = mission.units.find(x => x.id === u.id);
     const token = randomUUID();
     unit.status = 'RUNNING';
-    unit.run = { token, startedAt: stamp(),
+    unit.run = { token, leaseGeneration: (unit.run?.leaseGeneration ?? 0) + 1, startedAt: stamp(),
       mode: plan.host.executionMode, evidence: plan.host.capabilityEvidence };
     return { missionId: mission.id, unitId: unit.id, token,
       instruction: unit.instruction, effect: unit.effect, paths: unit.paths,

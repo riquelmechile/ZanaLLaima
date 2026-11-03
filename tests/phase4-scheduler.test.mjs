@@ -194,3 +194,15 @@ test('SQLite rejects altered budgets and forged mixed writer/reader reservations
     assert.equal(restored.revision,0);
   }finally{await rm(dir,{recursive:true,force:true});}
 });
+
+
+test('a nearly exhausted deadline cannot create leases that outlive the mission',()=>{
+  const m=readMission(1);
+  m.budget.deadlineAt=new Date(Date.now()+3000).toISOString();
+  const plan=nextBatch(m,host);
+  assert.equal(plan.mode,'BLOCKED');
+  assert.match(plan.reason,/minimum lease/);
+  assert.throws(()=>startBatch(m,host),/No runnable batch/);
+  assert.equal(m.units[0].attempts,0);
+  assert.equal(m.units[0].status,'PENDING');
+});

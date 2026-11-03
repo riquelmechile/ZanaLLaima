@@ -30,3 +30,20 @@ test('CLI persists review progress and invalidates changed candidate', () => {
     const outcome = json('outcome.json', { success: true, summary: 'Verified inspected files',
       evidence: ['Inspected the source and confirmed the requirement'] });
     run('complete', packet.unitId, packet.token, outcome);
+
+    const shaA = 'a'.repeat(40);
+    const shaB = 'b'.repeat(40);
+    run('review-open', shaA);
+    const reviewPacket = run('review-start').packets[0];
+    const review = json('review.json', { verdict: 'PASS',
+      summary: 'Confirmed the candidate review requirements',
+      evidence: ['Reviewed the current source and relevant tests'], findings: [],
+      execution: 'SELF_CONTEXT' });
+    run('review-submit', reviewPacket.lensId, reviewPacket.token, shaA, review);
+    assert.equal(run('review-status').lenses[0].state, 'DONE');
+    assert.equal(run('review-check', shaB).gate, 'INVALIDATED_CANDIDATE');
+    assert.equal(run('review-status').approved, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

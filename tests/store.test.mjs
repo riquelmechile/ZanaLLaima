@@ -24,7 +24,7 @@ test('SQLite WAL keeps normalized units and durable receipts across reopen',asyn
     const info=await storageStatus(f.file);
     assert.equal(info.backend,'SQLITE_WAL');
     assert.equal(info.journalMode,'wal');
-    assert.equal(info.schemaVersion,2);
+    assert.equal(info.schemaVersion,3);
     assert.equal(info.integrity,'ok');
     const unit=await transact(s=>{
       const packet=startBatch(s).batch.packets[0];

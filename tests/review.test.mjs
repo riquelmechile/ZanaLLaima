@@ -64,3 +64,14 @@ test('stale review packets cannot complete', () => {
   submitReview(m, outcome(packet));
   assert.throws(() => submitReview(m, outcome(packet)), /stale/);
 });
+
+test('blocking findings prevent pass decisions', () => {
+  const m = prepared();
+  openReview(m, { candidateSha: shaA });
+  const packet = startReviewBatch(m).packets[0];
+  const finding = { severity: 'HIGH', description: 'Missing access check' };
+  assert.throws(() => submitReview(m, { ...outcome(packet), findings: [finding] }), /PASS/);
+  submitReview(m, { ...outcome(packet), verdict: 'CHANGES', findings: [finding] });
+  for (let i = 0; i < 3; i++) submitReview(m, outcome(startReviewBatch(m).packets[0]));
+  assert.equal(reviewStatus(m).gate, 'CHANGES_REQUIRED');
+});

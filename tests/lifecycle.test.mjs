@@ -51,7 +51,7 @@ test('unsigned write intent is not an effective permission',()=>{
   completeUnit(m,'first',p.token,failure,p.leaseGeneration,grant());
   assert.equal(m.units[0].status,'OUTCOME_UNKNOWN');
   assert.throws(()=>retryRead(m,'first'),/READ/);
-  assert.throws(()=>closeMission(m),/incomplete/);
+  assert.throws(()=>closeMission(m),/complete successfully/);
   reconcileWrite(m,{unitId:'first',token:p.token,leaseGeneration:p.leaseGeneration,
     decision:'CONFIRMED_NO_EFFECT',evidence:['No write appeared after checking the actual workspace']});
   const next=startBatch(m,{},grant()).batch.packets[0];

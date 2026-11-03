@@ -132,8 +132,10 @@ export function createServer(){
   return server;
 }
 if(process.argv[1] && import.meta.url===new URL('file://'+process.argv[1]).href){
-  void serveStdio(createServer).catch(error=>{
-    console.error('MCP stdio stopped:',String(error?.message||error));
+  try {
+    serveStdio(createServer);
+  } catch (error) {
+    console.error('MCP stdio startup failed:',String(error?.message||error));
     process.exitCode=1;
-  });
+  }
 }

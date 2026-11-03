@@ -11,3 +11,11 @@ This project is operated by a single GPT host. Do not create external workers or
 7. Before proposing a merge or deployment, report the exact candidate, completed checks, unresolved risks and required operator approval. Never infer release permission from successful task completion.
 
 Memory, local work state and instructions must remain private to this repository. Avoid unrelated project references, cross-repository tooling and inherited configuration files.
+
+## Candidate-bound four-lens review
+
+When mission units finish and a real Git candidate SHA is available, open a local RDD cycle. Request perspectives for risk, reliability, resilience and readability without choosing external reviewers.
+
+When native subagents are actually available, send independent packets into separate host-native contexts. Never share the sibling reviewers' observations until each has returned. When native subagents are unavailable, use the single-context sequential path; label it a self-check rather than an independent review.
+
+Submit only genuine findings and evidence with the exact frozen SHA and packet token. A changed SHA invalidates previous review evidence. High-severity findings block a passing verdict. Neither a completed solo review nor host-reported native contexts certify independence, Git checks or permission to merge. Respect `approved: false` in the review status.

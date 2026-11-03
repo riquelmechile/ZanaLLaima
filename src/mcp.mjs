@@ -29,10 +29,10 @@ const schemas = {
   zana_mission_history: {...obj,properties:{limit:{type:'integer',minimum:1,maximum:100},
     before:{type:'integer',minimum:1}}},
   zana_review_open: { ...obj, properties: { candidateSha: { type: 'string' },
-    hostReport: { type: 'object' }, risk: { type: 'string' } }, required: ['candidateSha'] },
+    hostReport: { type: 'object' }, risk: { type: 'string' } } },
   zana_review_status: { ...obj, properties: {} },
-  zana_review_next: { ...obj, properties: {} },
-  zana_review_start: { ...obj, properties: {} },
+  zana_review_next: { ...obj, properties: {hostReport: {type:'object'}} },
+  zana_review_start: { ...obj, properties: {hostReport: {type:'object'}} },
   zana_review_submit: { ...obj, properties: { lensId: { type: 'string' },
     token: { type: 'string' }, candidateSha: { type: 'string' },
     verdict: { type: 'string' }, summary: { type: 'string' },
@@ -40,8 +40,7 @@ const schemas = {
     findings: { type: 'array' }, execution: { type: 'string' },
     contextId: { type: 'string' } },
     required: ['lensId', 'token', 'candidateSha', 'verdict', 'summary', 'evidence'] },
-  zana_review_check: { ...obj, properties: { observedSha: { type: 'string' } },
-    required: ['observedSha'] },
+  zana_review_check: { ...obj, properties: {} },
 };
 const actions = {
   zana_profile: 'profile', zana_mission_init: 'init',

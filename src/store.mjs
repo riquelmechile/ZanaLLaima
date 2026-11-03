@@ -223,7 +223,10 @@ export async function readState(file = statePath()) {
   if (!await exists(dbPath)) return legacySnapshot(legacyPath(file));
   const db = connect(dbPath, true);
   try {
-    return load(db);
+    const state=load(db);
+    if(state)return state;
+    const imported=db.prepare("SELECT value FROM metadata WHERE key='legacy_imported'").get();
+    return imported ? null : await legacySnapshot(legacyPath(file));
   } finally { db.close(); }
 }
 

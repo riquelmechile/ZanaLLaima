@@ -263,6 +263,6 @@ test('verified review correction count survives process reopen',async()=>{
     const restarted=await readState(f.file);
     assert.equal(restarted.reviewCount,2);
     assert.equal(restarted.review.round,2);
-    assert.equal((await storageStatus(f.file)).schemaVersion,3);
+    assert.equal((await storageStatus(f.file)).schemaVersion,4);
   }finally{await f.cleanup();}
 });

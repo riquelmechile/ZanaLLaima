@@ -26,7 +26,7 @@ test('MCP stdio handshake and native workflow tools are available', async () => 
     send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25' } });
     assert.equal((await response(1)).result.serverInfo.name, 'zana-llaima');
     send({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
-    assert.equal((await response(2)).result.tools.length, 6);
+    assert.equal((await response(2)).result.tools.length, 12);
     send({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'zana_profile', arguments: {} } });
     assert.equal((await response(3)).result.structuredContent.requested.reasoningEffort, 'max');
   } finally {

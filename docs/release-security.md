@@ -8,11 +8,13 @@
 - El checkout usa el SHA explícito `github.event.pull_request.head.sha || github.sha` y comprueba `git rev-parse HEAD` antes de ejecutar código. El runner opera con permisos `contents: read`, `persist-credentials: false`, sin secretos de despliegue.
 - Acciones oficiales fijadas a commits: checkout v4.2.2 `11bd71901bbe5b1630ceea73d27597364c9af683` y setup-node v4.4.0 `49933ea5288caeca8642d1e84afbd3f7d6820020`, verificados contra sus tags de GitHub.
 - Instalación reproducible: `npm ci --ignore-scripts --no-audit --no-fund` con `package-lock.json` v3, resoluciones del registry npm y hashes de integridad de las dependencias. Sin instalación dinámica `npm install` en CI.
-- Matriz: Node **22.16.0**, **22.23.4** y **24**, cada uno con sintaxis, preflight, suite de integración y estrés. Cobertura con umbral aplicada a `src/*.mjs` en Node 22.23.4.
+- Matriz: Node **22.16.0**, **22.23.4** y **24**, cada uno con sintaxis, preflight, suite de integración y estrés. Cobertura de `src/*.mjs` medida en Node 22.23.4; umbrales mínimos **90 % líneas, 80 % ramas y 85 % funciones** (no se cuentan los tests para aprobar los umbrales).
 - Auditoría de producción: `npm audit --omit=dev --audit-level=high`, con fallo ante vulnerabilidades altas o críticas. Los resultados son específicos del commit y de la fecha del análisis, no una garantía perpetua.
 - `timeout-minutes: 20`, `cancel-in-progress: true`, `strategy.fail-fast: false`. No se publican artefactos de release ni se hace merge o deploy.
 
 El comando `npm run release:preflight` valida localmente la integridad estática del lockfile, versiones, acciones fijadas, permisos read-only, checkout del SHA exacto y ausencia de claves privadas rastreadas. Su salida incluye invariablemente `releaseAuthorized:false`: **no** es autoridad para hacer merge ni para desplegar.
+
+**Evidencia de referencia:** el CI del SHA `d7fe3e8fac692d57407fb1a05d372d2e394c9d83` superó las tres versiones Node. En Node 22.23.4 midió 95,39 % de líneas de código fuente, 82,19 % de ramas y 88,83 % de funciones; el audit de producción informó cero vulnerabilidades. Los siguientes commits deben superar los nuevos umbrales sobre su propio SHA, no reutilizar esa ejecución.
 
 ## Hallazgos y puertas de seguridad
 

@@ -40,6 +40,14 @@ export function assessBuildPolicy({pkg,lock,workflow,trackedFiles=[]}){
     fail(errors,'EXACT_SHA_GATE_MISSING');
   if(!/timeout-minutes:/.test(workflow)||!/cancel-in-progress:\s*true/.test(workflow))
     fail(errors,'NO_TIMEOUT_OR_CANCEL_POLICY');
+  if(!/--test-coverage-include=src\/\*\.mjs/.test(pkg.scripts?.['test:coverage']||'') ||
+     !/--test-coverage-lines=90/.test(pkg.scripts?.['test:coverage']||'') ||
+     !/--test-coverage-branches=80/.test(pkg.scripts?.['test:coverage']||'') ||
+     !/--test-coverage-functions=85/.test(pkg.scripts?.['test:coverage']||''))
+     fail(errors,'SOURCE_COVERAGE_THRESHOLD_MISSING');
+  if(!/npm run test:stress/.test(workflow)||!/npm run test:coverage/.test(workflow)||
+     !/npm audit --omit=dev --audit-level=high/.test(workflow))
+     fail(errors,'STRESS_COVERAGE_OR_AUDIT_STEP_MISSING');
   for(const name of trackedFiles){
     if(/(?:^|\/)(?:\.env(?:\..+)?|id_rsa|id_ed25519)$|(?:^|\/)[^/]+\.(?:pem|key|p12|pfx|sqlite|db|sqlite-wal|sqlite-shm)$/.test(name))
       fail(errors,'SENSITIVE_FILE_TRACKED');

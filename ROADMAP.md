@@ -101,15 +101,17 @@
 
 **Gate:** CI verde, revisión real y reproducible, controles de rama comprobados, E2E documentado y aprobación humana para cualquier entrega.
 
-## Hallazgos confirmados que originan el roadmap
+## Hallazgos de la auditoría inicial (históricos; no describen el código actual)
 
-- `src/core.mjs`: `RUNNING` bloquea nuevas tandas; no hay recuperación, cancelación o retry; el contrato de capacidad no inicia realmente subagentes.
-- `src/actions.mjs`: no admite iniciar otra misión cuando ya existe un archivo de estado.
-- `src/review.mjs`: prepara cuatro lentes nativos sin usar el límite real de concurrencia; acepta SHA informado por el cliente; no implementa replanificación de capacidad.
-- `src/store.mjs`: persiste con un JSON completo y lock sin reconciliador; carece de pruebas de caída del proceso.
-- `src/mcp.mjs`: adaptador manual local, sin prueba de compatibilidad con cliente oficial moderno.
-- `.github/workflows/ci.yml`: pruebas unitarias y sintaxis, sin matriz de recuperación, cobertura ni validación de integraciones reales.
-- GitHub al corte: PR #1 abierto como borrador, 14 pruebas correctas, sin revisiones formales registradas, `main` reportada sin protección activa.
+Los puntos siguientes fueron constatados sobre el commit de auditoría original y motivaron este roadmap. Muchos ya cuentan con correcciones y pruebas posteriores; consultar el estado de cada ZL antes de tratarlos como defectos actuales.
+
+- `src/core.mjs`: originalmente no había recuperación ni reintentos. Ya se implementaron leases/reconciliación local, pero el contrato sigue sin iniciar subagentes reales.
+- `src/actions.mjs`: inicialmente no admitía más misiones; ahora existe cierre y archivo persistente.
+- `src/review.mjs`: los defectos iniciales de cupo y SHA cliente se corrigieron con planificación adaptable y Git local; faltan contextos reales del anfitrión.
+- `src/store.mjs`: el almacén JSON fue reemplazado por SQLite WAL con pruebas de concurrencia, caída y restauración.
+- `src/mcp.mjs`: el adaptador manual fue sustituido por SDK MCP v2 con pruebas del cliente oficial local.
+- `.github/workflows/ci.yml`: las pruebas originales eran limitadas; el pipeline actual incluye lockfile, matriz Node, estrés, cobertura y seguridad; E2E ChatGPT real todavía no existe.
+- GitHub al corte original: PR #1 en borrador, 14 pruebas y `main` desprotegida. En la Fase 5, la rama `main` continúa sin protección; el resto de métricas iniciales son históricas.
 
 ## Prioridad de implementación
 

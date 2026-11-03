@@ -41,3 +41,10 @@ test('tracking a private key or .env is a hard failure',()=>{
   assert.equal(result.passed,false);
   assert.ok(result.errors.includes('SENSITIVE_FILE_TRACKED'));
 });
+
+test('coverage thresholds and production audit cannot be silently removed',()=>{
+  const weak={...pkg,scripts:{...pkg.scripts,'test:coverage':'node --test tests/*.test.mjs'}};
+  assert.ok(assess({pkg:weak}).errors.includes('SOURCE_COVERAGE_THRESHOLD_MISSING'));
+  const modified=workflow.replace('npm audit --omit=dev --audit-level=high','echo skipped audit');
+  assert.ok(assess({workflow:modified}).errors.includes('STRESS_COVERAGE_OR_AUDIT_STEP_MISSING'));
+});

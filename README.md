@@ -40,9 +40,24 @@ Native 4R uses at most the host-reported context capacity, capped at four; if it
 
 The **delivery gate** requires both a separately signed CI attestation and a separately signed operator decision in addition to a clean, unchanged Git candidate and passing review lenses. Its highest result is `READY_FOR_MANUAL_RELEASE`: it **never** authorizes or performs merge/deploy. CI signatures are tested locally with temporary keys; authentic CI receipt production and GPT-host integration remain scheduled for later. See [the RDD security contract](docs/solo-rdd.md).
 
+## Phase 4: incremental scheduling and bounded resources
+
+The scheduler now **refills available READ slots immediately**, without waiting for every member of the previous batch. Capacity is bounded by the minimum of the host-reported concurrency, mission budget and hard ceiling of four. Host reports remain unverified; this planner does not itself launch native subagents.
+
+A WRITE is always exclusive, even if another WRITE uses a different path. An authorized waiting WRITE drains active readers; unresolved write outcomes block fresh scheduling. SQLite refuses forged simultaneous read/write or two-writer snapshots. Real host-side write enforcement still requires ZL-004.
+
+Mission budgets are immutable and persisted in SQLite v4. A mission may set `budget.maxActiveReads`, `maxUnitAttempts`, `maxWorkStarts`, `maxLeaseSeconds`, `maxResultBytes`, `maxReviewRounds` and `maxMissionSeconds`. `zana_mission_status` returns remaining attempts, activity and the deadline.
+
+```sh
+npm run benchmark:phase4
+node src/cli.mjs start examples/host-report.json 120
+```
+
+The benchmark reports actual SQLite p50/p95 read/write/history/recovery timings and a **deterministic logical throughput comparison** against barrier scheduling. The latter is not a claim of measured GPT speedup. See [Phase 4 performance and resource limits](docs/phase4-performance.md).
+
 ## Durable storage
 
-The state backend uses SQLite WAL (schema v3), with conservative JSON migration, fenced concurrent writes, persistent review correction rounds, bounded histories, backup and offline restore. See [storage operations](docs/sqlite-storage.md). Expired READ work has controlled retries; uncertain WRITE work still requires separate operator reconciliation.
+The state backend uses SQLite WAL (schema v4), with conservative JSON migration, fenced concurrent writes, persistent review correction rounds, bounded histories, backup and offline restore. See [storage operations](docs/sqlite-storage.md). Expired READ work has controlled retries; uncertain WRITE work still requires separate operator reconciliation.
 
 ## Components
 

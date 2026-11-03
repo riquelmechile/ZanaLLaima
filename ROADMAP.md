@@ -22,7 +22,7 @@
 | 1 | P1 | Persistencia transaccional y recuperación tras reinicio | [x] Implementada y probada; gate operacional pendiente de Fase 0 |
 | 2 | P1 | RDD verificable sobre SHA exacto y revisión de una sola cuenta | [x] Motor local y pruebas; integración real pendiente |
 | 3 | P1 | MCP compatible e integración real con el anfitrión GPT | [ ] SDK y E2E local implementados; ZL-018 real pendiente |
-| 4 | P2 | Aprovechar paralelismo nativo y mejorar rendimiento | [ ] Pendiente |
+| 4 | P2 | Aprovechar paralelismo nativo y mejorar rendimiento | [x] Planificador, cuotas y benchmark locales probados; E2E host pendiente |
 | 5 | P2 | CI, seguridad de repositorio y criterios de entrega | [x] CI, documentación, auditoría y protección de main verificadas; release real pendiente |
 
 ### Fase 0. Seguridad funcional y ciclo de vida (P0)
@@ -77,12 +77,15 @@
 
 ### Fase 4. Rendimiento y planificación (P2; depende de fases 0 y 1)
 
-- [ ] **ZL-021. Planificación incremental.** Admitir nuevos trabajos independientes cuando quede capacidad libre, sin esperar a que termine toda la tanda anterior.
-- [ ] **ZL-022. Aislamiento de escrituras.** Mantener un único escritor; ampliar a escritores paralelos solo con worktrees realmente aislados, permisos diferenciados y tests de conflicto.
-- [ ] **ZL-023. Rendimiento de almacén.** Medir latencia de lectura/escritura, tamaño de historial, concurrencia y recuperación. Optimizar con datos, no por intuición.
-- [ ] **ZL-024. Límites de recursos.** Establecer presupuesto por misión, trabajo, revisión, reintento, longitud de resultado y tiempo de espera.
+**Implementación local de fase 4:** se reponen cupos READ mientras continúan otros trabajos; se prioriza el drenaje de lecturas ante un WRITE firmado; SQLite impide transiciones que solapen escritores; los límites de misión, intentos, leases, resultados y rondas RDD son inmutables y persistentes (`user_version=4`). `scripts/benchmark-phase4.mjs` registra latencia p50/p95 de SQLite, tamaño, historial, contención y recuperación, y compara tiempos lógicos deterministas. **No se midió throughput de agentes GPT reales ni se habilitaron escritores paralelos**. Ver `docs/phase4-performance.md`.
 
-**Gate:** benchmarks reproducibles demuestran mejora de throughput sin vulnerar los invariantes de estado y autorización.
+
+- [x] **ZL-021. Planificación incremental.** Admitir nuevos trabajos independientes cuando quede capacidad libre, sin esperar a que termine toda la tanda anterior.
+- [x] **ZL-022. Aislamiento de escrituras.** Mantener un único escritor; ampliar a escritores paralelos solo con worktrees realmente aislados, permisos diferenciados y tests de conflicto.
+- [x] **ZL-023. Rendimiento de almacén.** Medir latencia de lectura/escritura, tamaño de historial, concurrencia y recuperación. Optimizar con datos, no por intuición.
+- [x] **ZL-024. Límites de recursos.** Establecer presupuesto por misión, trabajo, revisión, reintento, longitud de resultado y tiempo de espera.
+
+**Gate local:** pruebas multiproceso, estrés y benchmark reproducible, con ganancia de *tiempo lógico simulado* frente a barreras. Las operaciones SQLite sí se miden en tiempo real. **Gate host pendiente:** observar throughput de tareas nativas realmente lanzadas y probar enforcement de escrituras del ejecutor, sin presentar simulaciones como aprobaciones independientes.
 
 ### Fase 5. Calidad y entrega (P2; transversal)
 
@@ -90,7 +93,7 @@
 
 **ZL-026 resuelto y verificado:** el token de la integración de archivos no administra reglas, pero una sesión GitHub CLI autorizada de `riquelmechile` con `permissions.admin=true` aplicó protección a `main`. Se comprobó por GET administrativo que están activos tres checks obligatorios, revisión independiente, invalidación de aprobaciones obsoletas, aprobación posterior al último push, resolución de conversaciones, reglas para administradores y prohibición de force-push/eliminación. Una segunda lectura de GitHub confirmó `main.protected=true`. Se utilizó **branch protection**, no un ruleset; el listado de rulesets puede seguir vacío sin invalidar la protección.
 
-**Bloqueo de release ZL-029:** auditoría local escrita, pero la autorización efectiva de escrituras del anfitrión (ZL-004), las pruebas reales ChatGPT (ZL-018), la Fase 4, atestaciones CI independientes y una revisión independiente siguen pendientes. Esto impide producción.
+**Bloqueo de release ZL-029:** auditoría local escrita, pero la autorización efectiva de escrituras del anfitrión (ZL-004), las pruebas reales ChatGPT (ZL-018), el E2E de rendimiento nativo de la Fase 4, atestaciones CI independientes y una revisión independiente siguen pendientes. Esto impide producción.
 
 
 - [x] **ZL-025. CI robusto.** Tests de integración, estrés, fallos de proceso, cobertura e incompatibilidades MCP; fijar versiones de acciones por SHA, permisos mínimos y timeout.
@@ -115,6 +118,6 @@ Los puntos siguientes fueron constatados sobre el commit de auditoría original 
 
 ## Prioridad de implementación
 
-ZL-001 a ZL-003 y ZL-005 a ZL-009 tienen implementación local y pruebas; ZL-004 mantiene pendiente el enforcement del ejecutor real. Debe validarse la aplicación efectiva de permisos en el anfitrión antes de operar autónomamente. La implementación local de RDD, SDK MCP y gates CI/release ya está desarrollada. Falta completar la Fase 4, enforcement del ejecutor, atestaciones externas, revisión independiente y E2E real de GPT antes de liberar software.
+ZL-001 a ZL-003 y ZL-005 a ZL-009 tienen implementación local y pruebas; ZL-004 mantiene pendiente el enforcement del ejecutor real. Debe validarse la aplicación efectiva de permisos en el anfitrión antes de operar autónomamente. La implementación local de RDD, SDK MCP y gates CI/release ya está desarrollada. Las fases de implementación local 1, 2, 4 y 5 están desarrolladas; faltan enforcement del ejecutor (ZL-004), atestaciones externas, revisión independiente, conexión y E2E real de GPT (ZL-018) antes de liberar software.
 
 **Criterio de versión lista:** una única cuenta GPT puede iniciar más de una misión en momentos distintos, completar trabajo, recuperarse de interrupciones, ejecutar las cuatro perspectivas con procedencia honesta y presentar una decisión verificable sobre un candidato Git sin declarar aprobaciones o capacidades inexistentes.

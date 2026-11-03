@@ -25,7 +25,7 @@ El comando `npm run release:preflight` valida localmente la integridad estática
 | Host GPT y subagentes no autenticados | **BLOCKER** | No se ha conectado ni medido un host real; no inferir modelo o independencia | Pendiente ZL-018 |
 | Firma CI independiente aún no conectada | **HIGH** | `deliveryGate` valida firmas de prueba, pero aún no existe emisor CI externo autenticado | Pendiente |
 | Sin revisión de PR verdaderamente independiente | **HIGH** | PR en borrador; una sola cuenta no convierte autocomprobaciones en revisión independiente | Pendiente |
-| Planificador incremental y métricas sin terminar | **MEDIUM** | Fase 4 todavía pendiente por prioridad del propietario | Pendiente |
+| Planificador incremental y métricas (Fase 4) | **RESUELTO LOCALMENTE** | Reposición READ, writer único y cuotas SQLite v4 con tests y benchmark; throughput del host GPT todavía no medido | E2E host pendiente |
 | Dependencias y acciones sin bloqueo previo | **HIGH, resuelto localmente** | Lockfile npm, `npm ci`, pins SHA, pruebas en matriz y auditoría de producción | Implementado |
 | Eventos de CI duplicados | **MEDIUM, resuelto localmente** | Separación `pull_request` vs. `push: main` y cancelación por grupo | Implementado |
 | SQLite experimental en Node 22 | **MEDIUM** | Pruebas en Node 22.16.0 y 22.23.4; compatibilidad también probada en Node 24 | Riesgo aceptado para desarrollo, no producción |
@@ -53,7 +53,7 @@ Se configuró **branch protection**, no se creó un ruleset. El endpoint `/rules
 
 - **ZL-004:** validar permisos al aplicar cada mutación del ejecutor real, no solo en el plan.
 - **ZL-018:** conectividad ChatGPT real, modelo/esfuerzo observado y subagentes cuando existan.
-- **Fase 4:** scheduler incremental, presupuestos, aislamiento de escrituras y benchmarks.
+- **Fase 4:** implementación y benchmark locales completos; queda observar throughput nativo real y enforcement de escrituras al integrar ChatGPT.
 - **Gobernanza:** protección de `main` activa; falta recibir una revisión realmente independiente sobre el SHA exacto.
 - **CI confiable:** fuente auténtica de atestaciones CI vinculadas al SHA y al runner, separada del propio modelo.
 
@@ -72,3 +72,8 @@ npm audit --omit=dev --audit-level=high
 ```
 
 Verificar el estado del PR y la rama de destino desde una cuenta autorizada antes de cualquier merge; **no** reutilizar resultados de otro commit.
+
+
+## Seguimiento de Fase 4
+
+El planificador local ya admite reposición incremental READ mientras otros tokens están en RUNNING y SQLite impide guardar escritores simultáneos. Los presupuestos inmutables se conservan en SQLite v4; los tests negativos cubren snapshots falsificados y contadores agotados. El benchmark produce métricas p50/p95 locales y un modelo determinista de throughput, **no** una validación de capacidad de subagentes ni una ganancia medida de la cuenta GPT. La conexión real, los recibos CI firmados y el control del ejecutor siguen abiertos. Ver [phase4-performance.md](phase4-performance.md).

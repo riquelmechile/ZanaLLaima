@@ -48,3 +48,11 @@ Work with one authenticated host context, complete `READ` tasks, then run the fo
 ## Phase 5: release and repository governance
 
 Before claiming readiness, require `npm ci`, `npm run release:preflight`, `npm test`, `npm run test:stress`, `npm run test:coverage`, and the security audit on the exact candidate SHA. Verify both required GitHub status checks for all supported Node versions; never treat another commit's green CI as the current HEAD. Check the live GitHub branch rules and approval on the exact SHA using an authorized administrative or reviewer identity. The local preflight cannot verify GitHub rulesets, an independent reviewer, a trusted external CI signature or real executor authorization. No agent can approve its own release and no passing test automatically enables merge or deployment. See `docs/release-security.md`.
+
+## Phase 4: incremental scheduling and budgets
+
+Whenever a READ finishes, check `zana_next_batch` again to refill only available READ slots without waiting for the entire previous batch. Respect the minimum of current host capacity and `mission.budget.maxActiveReads`, capped at four. An available READ slot is **not** evidence of a launched subagent. When the host cannot launch real subagents, operate in a single sequential context and do not overstate throughput.
+
+Never overlap WRITE with another WRITE or READ. If an operator-authorized WRITE is ready, drain existing readers; do not continue refilling to starve the writer. If any WRITE is `OUTCOME_UNKNOWN`, stop until signed reconciliation. The SQLite commit boundary now enforces exclusive writer state and rejects changes to mission budgets. Do not bypass it with direct repository/OS tools.
+
+Budgets cover mission duration, starts, attempts, active reads, lease seconds, result bytes (UTF-8), and verified RDD rounds. Respect the immutable deadline and return `BLOCKED` rather than inventing extensions. Review [docs/phase4-performance.md](docs/phase4-performance.md) and run `npm run benchmark:phase4` for local measurements. The deterministic comparison is not a host-native performance attestation.

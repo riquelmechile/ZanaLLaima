@@ -5,7 +5,7 @@ ZanaLLaima usa almacenamiento transaccional local basado en el módulo `node:sql
 ## Estructura e invariantes
 
 - Ruta por defecto: `.zana/state.sqlite`; la variable heredada `ZANA_STATE_FILE=.zana/state.json` sigue aceptada y se traduce a la ruta SQLite.
-- `PRAGMA journal_mode=WAL`, `synchronous=FULL`, `busy_timeout=10000`, `foreign_keys=ON`, `user_version=3`.
+- `PRAGMA journal_mode=WAL`, `synchronous=FULL`, `busy_timeout=10000`, `foreign_keys=ON`, `user_version=4`.
 - Una misión activa, unidades normalizadas por fila, revisión activa separada, recibos de trabajo y revisión con unicidad por token, eventos y revisiones históricas.
 - `BEGIN IMMEDIATE` serializa las transiciones entre procesos y obliga a leer el estado después de adquirir el bloqueo. El token de cada ejecución protege de completados duplicados. La generación de intento y el contador de correcciones RDD se conservan en el estado; los reintentos de trabajo siguen las reglas de seguridad de la Fase 0.
 - Los eventos recientes están limitados a 2000 registros y las revisiones archivadas a 200; los lectores acceden mediante paginación por cursor descendente.
@@ -52,8 +52,15 @@ Si se encuentra `.restore-pending`, **todos los comandos de lectura, historia y 
 
 Los tokens de ejecución se guardan en recibos internos. Los eventos de historial solo incluyen un resumen SHA-256 del token y las consultas de revisiones ocultan los tokens de paquetes. Las consultas MCP del almacén son de solo lectura; la restauración está reservada al CLI local.
 
-La generación inicial de intento y los tokens protegen de dobles completados. No hay todavía renovación de leases ni reintentos automáticos seguros; ese procedimiento depende de la Fase 0.
+Los tokens y generaciones de intento protegen de dobles completados. El heartbeat renovable y la recuperación controlada de READ están implementados. Ningún WRITE incierto se reintenta sin reconciliación firmada; su aplicación real por herramientas externas del anfitrión permanece pendiente de ZL-004.
 
 ## Versión 3 y revisiones verificadas
 
 La migración de SQLite v2 a v3 agrega `review_count` para conservar el límite de cinco rondas RDD verificadas al reiniciar. Ejecutar `storage-migrate` con el almacén detenido antes de operaciones de solo lectura cuando exista una base anterior. El historial archivado sigue separado de la revisión activa. Ver [RDD sobre Git](solo-rdd.md).
+
+
+## Versión 4: presupuestos durables de misión
+
+La migración v3→v4 agrega `active_mission.budget` (JSON) sin modificar trabajo o historia previos. Misiones heredadas sin presupuesto no reciben una fecha de vencimiento retroactiva. Las nuevas misiones almacenan límites inmutables de tareas activas, reintentos, intentos acumulados, lease, tamaño de resultados, rondas RDD y duración máxima. Una transacción que intente alterar `budget`, exceder el contador global o persistir varios escritores activos se rechaza y se revierte íntegramente. La lectura de una base v3 exige ejecutar primero una transacción de migración autorizada; no asumir compatibilidad de lectura antes de actualizar.
+
+Detalles y verificación reproducible en [Fase 4](phase4-performance.md).

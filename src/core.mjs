@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { createBudget, budgetOf, budgetExpired, budgetStatus, remainingStarts, requirePayloadBudget } from './budget.mjs';
 
 export const HOST_REQUEST = Object.freeze({
   model: 'gpt-6-astra',
@@ -91,8 +92,10 @@ export function createMission(input) {
     visiting.delete(id); visited.add(id);
   }
   units.forEach(u => walk(u.id));
+  const createdAt=stamp();
+  const budget=createBudget(input.budget??{},Date.parse(createdAt),units.length);
   return { schema: 1, status:'ACTIVE', id: randomUUID(), objective: input.objective.trim(),
-    revision: 0, createdAt: stamp(), authorization: { writesAllowed: authorization.writesAllowed,
+    revision: 0, createdAt, budget, authorization: { writesAllowed: authorization.writesAllowed,
       allowedPaths }, units };
 }
 
@@ -118,32 +121,56 @@ function readyUnits(mission) {
 }
 
 export function nextBatch(mission, report = {}, grant = null) {
-  const host = evaluateHost(report);
-  if ((mission.status||'ACTIVE')!=='ACTIVE') return {host,mode:'BLOCKED',units:[],reason:'Mission not active'};
-  const running = mission.units.filter(u => u.status === 'RUNNING');
-  const ready = readyUnits(mission);
-  if (!host.allowed) return { host, mode: 'BLOCKED', units: [], reason: 'The reported model/effort differs from the required host request.' };
-  if (running.length) return { host, mode: 'WAITING', units: [], reason: 'Finish or reconcile active work before planning another batch.' };
-  const selected = [];
-  for (const unit of ready) {
-    if (selected.length >= host.maxParallel) break;
-    // Writes require independently observed isolated workspaces. This MVP does
-    // not admit concurrent writers, even when their declared paths differ.
-    if (unit.effect === 'WRITE' && selected.length > 0) continue;
-    if (selected.some(x => x.effect === 'WRITE')) continue;
-    if(!grantPermits(unit,grant))continue;
-    selected.push(unit);
+  const host=evaluateHost(report);
+  const blocked=reason=>({host,mode:'BLOCKED',units:[],reason});
+  if((mission.status||'ACTIVE')!=='ACTIVE')return blocked('Mission not active');
+  if(!host.allowed)return blocked('The reported model/effort differs from the required host request.');
+  if(budgetExpired(mission))return blocked('Mission deadline expired; cancel or reconcile before further work');
+  if(mission.units.some(u=>u.status==='OUTCOME_UNKNOWN'))
+    return blocked('Uncertain write outcome requires signed operator reconciliation');
+
+  const running=mission.units.filter(u=>u.status==='RUNNING');
+  const writers=running.filter(u=>u.effect==='WRITE');
+  const readers=running.filter(u=>u.effect==='READ');
+  if(writers.length>1||(writers.length>0&&readers.length>0))
+    return blocked('Concurrent writer or mixed read/write claims violate serial-write isolation');
+  if(writers.length)return {host,mode:'WAITING',units:[],reason:'One writer already holds the exclusive slot'};
+  const budget=budgetOf(mission);
+  const available=Math.min(host.maxParallel,budget.maxActiveReads)-readers.length;
+  if(available<=0)return {host,mode:'WAITING',units:[],
+    reason:'No read-only capacity is free under current host and mission limits'};
+  const remaining=remainingStarts(mission);
+  if(remaining<=0)return blocked('Mission work-start budget exhausted');
+
+  const ready=readyUnits(mission);
+  const authorizedWrite=ready.find(u=>u.effect==='WRITE'&&grantPermits(u,grant));
+  // Fairness: once a signed writer is ready, drain existing readers instead of
+  // endlessly refilling with new readers. Every WRITE remains an exclusive run.
+  if(authorizedWrite&&readers.length)return {host,mode:'WAITING',units:[],
+    reason:'Drain in-flight READ units before an authorized exclusive WRITE'};
+  const selected=authorizedWrite?[authorizedWrite]:
+    ready.filter(u=>u.effect==='READ').slice(0,Math.min(available,remaining));
+  if(!selected.length){
+    if(readers.length)return {host,mode:'WAITING',units:[],
+      reason:'In-flight reads remain; dependencies or permissions prevent safe refill'};
+    return {host,mode:ready.length?'BLOCKED':'IDLE',units:[],
+      reason:ready.length?'No safe or authorized batch.':'No runnable units.'};
   }
-  if (!selected.length) return { host, mode: ready.length ? 'BLOCKED' : 'IDLE',
-    units: [], reason: ready.length ? 'No safe or authorized batch.' : 'No runnable units.' };
-  return { host, mode: selected.length > 1 ? 'PARALLEL_PLAN' : 'SERIAL_PLAN',
-    units: selected.map(x => ({ id: x.id, instruction: x.instruction, effect: x.effect, paths: x.paths })),
-    reason: selected.length > 1 ? 'Independent read-only native work, if host supports actual fanout.' :
-      'Execute in the currently connected GPT host.' };
+  if(selected.length>remaining)selected.length=remaining;
+  const parallel=selected.length+readers.length>1;
+  return {host,mode:parallel?'PARALLEL_PLAN':'SERIAL_PLAN',
+    units:selected.map(x=>({id:x.id,instruction:x.instruction,effect:x.effect,paths:x.paths})),
+    availableSlots:Math.max(0,available-selected.length),
+    runningReads:readers.length,
+    budgetRemaining:remaining-selected.length,
+    reason:authorizedWrite?'Exclusive signed WRITE; no overlapping work permitted':
+      parallel?'Fill free slots with independent READ units, only if host can actually execute them':
+      'Execute the newly reserved READ in the active host context.'};
 }
 
-export function startBatch(mission, report = {}, grant = null, leaseSeconds = LEASE_SECONDS) {
-  assert(Number.isInteger(leaseSeconds)&&leaseSeconds>=5&&leaseSeconds<=3600,'Lease must be 5-3600 seconds');
+export function startBatch(mission, report = {}, grant = null, leaseSeconds = Math.min(LEASE_SECONDS,budgetOf(mission).maxLeaseSeconds)) {
+  assert(Number.isInteger(leaseSeconds)&&leaseSeconds>=5&&leaseSeconds<=budgetOf(mission).maxLeaseSeconds,
+    'Lease exceeds mission time budget');
   const plan = nextBatch(mission, report, grant);
   assert(plan.host.allowed, 'Requested model/effort mismatch');
   assert(plan.units.length, `No runnable batch: ${plan.reason}`);
@@ -176,6 +203,7 @@ export function completeUnit(mission, unitId, token, outcome, generation, grant 
   assert(Array.isArray(outcome.evidence) && outcome.evidence.length > 0 &&
     outcome.evidence.length <= 20 && outcome.evidence.every(x => typeof x === 'string' && x.trim() && x.length <= 2000),
     'Outcome requires bounded evidence items');
+  requirePayloadBudget(mission,outcome,'work result');
   unit.status = outcome.success ? 'DONE' : unit.effect==='WRITE' ? 'OUTCOME_UNKNOWN':'FAILED';
   if(unit.status==='OUTCOME_UNKNOWN')unit.run.uncertainty={reason:'WRITE_REPORTED_FAILURE',since:stamp()};
   unit.result = { success: outcome.success, summary: outcome.summary,
@@ -186,7 +214,7 @@ export function completeUnit(mission, unitId, token, outcome, generation, grant 
 
 export function publicStatus(mission) {
   return {id:mission.id,objective:mission.objective,revision:mission.revision,
-    state:mission.status||'ACTIVE',
+    state:mission.status||'ACTIVE',budget:budgetStatus(mission),
     units:mission.units.map(u=>({id:u.id,effect:u.effect,status:u.status,
       attempts:u.attempts||0,leaseGeneration:u.run?.leaseGeneration||0,
       expiresAt:u.status==='RUNNING'?u.run?.expiresAt:null,

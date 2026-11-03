@@ -1,0 +1,10 @@
+{
+  "objective": "Inspect a codebase, improve documentation, then verify the result",
+  "authorization": {"writesAllowed": true, "allowedPaths": ["docs"]},
+  "units": [
+    {"id": "inspect-readme", "effect": "READ", "instruction": "Inspect the current README and report gaps with exact file references.", "paths": ["README.md"]},
+    {"id": "inspect-tests", "effect": "READ", "instruction": "Inspect existing test scripts and summarize how to run them.", "paths": ["tests"]},
+    {"id": "write-guide", "effect": "WRITE", "instruction": "Create an accurate documentation guide using the completed inspection results.", "paths": ["docs"], "dependsOn": ["inspect-readme", "inspect-tests"]},
+    {"id": "verify", "effect": "READ", "instruction": "Verify the guide against source files and run applicable checks; report actual evidence.", "paths": ["docs"], "dependsOn": ["write-guide"]}
+  ]
+}

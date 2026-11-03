@@ -96,7 +96,7 @@ test('mission attempts, runtime, lease and UTF-8 result budgets fail closed',()=
     leaseGeneration:p.leaseGeneration,leaseSeconds:15}),/lease budget/);
   assert.throws(()=>completeUnit(m,'r0',p.token,{
     success:true,summary:'x'.repeat(3000),evidence:['real test evidence'],
-  }),/Outcome requires/);
+  }),/budget/);
   assert.throws(()=>completeUnit(m,'r0',p.token,{
     success:true,summary:'Verified result ✅'.repeat(100),
     evidence:['UTF-8 bytes matter'].concat(Array.from({length:10},()=>('漢'.repeat(150)))),

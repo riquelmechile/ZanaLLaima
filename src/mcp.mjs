@@ -13,11 +13,28 @@ const schemas = {
   zana_complete_unit: { ...obj, properties: { unitId: { type: 'string' },
     token: { type: 'string' }, outcome: { type: 'object' } },
     required: ['unitId', 'token', 'outcome'] },
+  zana_review_open: { ...obj, properties: { candidateSha: { type: 'string' },
+    hostReport: { type: 'object' }, risk: { type: 'string' } }, required: ['candidateSha'] },
+  zana_review_status: { ...obj, properties: {} },
+  zana_review_next: { ...obj, properties: {} },
+  zana_review_start: { ...obj, properties: {} },
+  zana_review_submit: { ...obj, properties: { lensId: { type: 'string' },
+    token: { type: 'string' }, candidateSha: { type: 'string' },
+    verdict: { type: 'string' }, summary: { type: 'string' },
+    evidence: { type: 'array', items: { type: 'string' } },
+    findings: { type: 'array' }, execution: { type: 'string' },
+    contextId: { type: 'string' } },
+    required: ['lensId', 'token', 'candidateSha', 'verdict', 'summary', 'evidence'] },
+  zana_review_check: { ...obj, properties: { observedSha: { type: 'string' } },
+    required: ['observedSha'] },
 };
 const actions = {
   zana_profile: 'profile', zana_mission_init: 'init',
   zana_mission_status: 'status', zana_next_batch: 'next',
   zana_start_batch: 'start', zana_complete_unit: 'complete',
+  zana_review_open: 'reviewOpen', zana_review_status: 'reviewStatus',
+  zana_review_next: 'reviewNext', zana_review_start: 'reviewStart',
+  zana_review_submit: 'reviewSubmit', zana_review_check: 'reviewCheckCandidate',
 };
 function send(id, result, error) {
   const msg = { jsonrpc: '2.0', id };

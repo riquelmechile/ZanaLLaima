@@ -106,9 +106,9 @@ function addEvent(db, m, category, detail) {
 }
 
 function trimHistory(db) {
-  db.exec('DELETE FROM state_events WHERE seq <= COALESCE((SELECT seq FROM state_events ORDER BY seq DESC LIMIT 1 OFFSET ' +
+  db.exec('DELETE FROM state_events WHERE seq < COALESCE((SELECT seq FROM state_events ORDER BY seq DESC LIMIT 1 OFFSET ' +
     (MAX_EVENTS - 1) + '), -1) AND seq < (SELECT MAX(seq) FROM state_events)');
-  db.exec('DELETE FROM review_archive WHERE seq <= COALESCE((SELECT seq FROM review_archive ORDER BY seq DESC LIMIT 1 OFFSET ' +
+  db.exec('DELETE FROM review_archive WHERE seq < COALESCE((SELECT seq FROM review_archive ORDER BY seq DESC LIMIT 1 OFFSET ' +
     (MAX_ARCHIVES - 1) + '), -1) AND seq < (SELECT MAX(seq) FROM review_archive)');
 }
 
@@ -137,6 +137,9 @@ function persist(db, previous, next, kind = 'STATE_CHANGED') {
       db.prepare('UPDATE units SET ordinal=?,instruction=?,effect=?,depends_on=?,paths=?,status=?,run=?,result=? WHERE mission_id=? AND id=?')
         .run(i,u.instruction,u.effect,json(u.dependsOn),json(u.paths),u.status,
           json(u.run),json(u.result),next.id,u.id);
+    }
+    if ((!old || old.status !== u.status) && u.status === 'RUNNING') {
+      addEvent(db,next,'UNIT_STARTED',{unitId:u.id,token:u.run?.token,generation:u.run?.leaseGeneration});
     }
     if ((!old || old.status !== u.status) && (u.status === 'DONE' || u.status === 'FAILED')) {
       if (!u.run?.token || !u.result) fail('Completed unit lacks a real run token or result');
@@ -186,7 +189,13 @@ function assertHealthy(db) {
   if (row.quick_check !== 'ok') fail('SQLite integrity failed: ' + row.quick_check);
 }
 
+async function refuseInterruptedRestore(file) {
+  if (await exists(databasePath(file) + '.restore-pending'))
+    fail('Interrupted offline restore detected; inspect the database and quarantine before resuming');
+}
+
 export async function readState(file = statePath()) {
+  await refuseInterruptedRestore(file);
   const dbPath = databasePath(file);
   if (!await exists(dbPath)) return legacySnapshot(legacyPath(file));
   const db = connect(dbPath, true);
@@ -198,6 +207,7 @@ export async function readState(file = statePath()) {
 
 export async function transact(change, file = statePath()) {
   if (typeof change !== 'function') fail('Transaction needs a state transformation');
+  await refuseInterruptedRestore(file);
   const path = databasePath(file);
   await ensureFile(path);
   const db = connect(path);
@@ -235,6 +245,7 @@ export async function readHistory({ limit=25, before=null, category=null } = {},
       (before!==null && (!Number.isSafeInteger(before) || before<1)) ||
       (category!==null && (typeof category !== 'string' || category.length>64)))
     fail('Invalid history pagination');
+  await refuseInterruptedRestore(file);
   const path=databasePath(file);
   if (!await exists(path)) return {items:[],nextCursor:null};
   const db=connect(path,true);
@@ -269,6 +280,7 @@ export async function readReviewArchive({limit=25,before=null}={},file=statePath
 }
 
 export async function storageStatus(file=statePath()) {
+  await refuseInterruptedRestore(file);
   const path=databasePath(file);
   if (!await exists(path)) return {backend:'LEGACY_OR_EMPTY',databasePath:path,legacyExists:await exists(legacyPath(file))};
   const db=connect(path,true);
@@ -285,6 +297,7 @@ export async function storageStatus(file=statePath()) {
 }
 
 export async function backupState(destination,file=statePath()) {
+  await refuseInterruptedRestore(file);
   const path=databasePath(file), target=resolve(destination);
   if (path===target || await exists(target)) fail('Backup destination must be new and distinct from database');
   if (!await exists(path)) fail('No SQLite database available for backup');
@@ -330,7 +343,8 @@ export async function restoreBackup(source,file=statePath(),{offline=false}={}){
     }
     const temp=path+'.restoring.'+randomUUID();
     try {
-      await copyFile(src,temp,constants.COPYFILE_EXCL);
+      const source=connect(src,true);
+      try { await backup(source,temp); } finally { source.close(); }
       await chmod(temp,0o600);
       const check=connect(temp,true);
       try {assertHealthy(check);if (!load(check))fail('Restored database has no mission');}

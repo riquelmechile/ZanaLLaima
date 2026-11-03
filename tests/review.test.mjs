@@ -18,3 +18,5 @@ const outcome = (packet, execution = 'SELF_CONTEXT', contextId) => ({
   evidence: ['Inspected source and related tests'], findings: [], execution,
   ...(contextId ? { contextId } : {}),
 });
+
+test('review definitions', () => { assert.equal(shaA.length, 40); });

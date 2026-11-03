@@ -131,3 +131,45 @@ test('corrupt database is never silently reset, recovery needs explicit operator
     assert.equal((await storageStatus(f.file)).integrity,'ok');
   }finally{await f.cleanup();}
 });
+
+test('interrupted restore marker fails closed across reads and writes',async()=>{
+  const f=await fixture();
+  try {
+    await transact(()=>createMission(input()),f.file);
+    const marker=databasePath(f.file)+'.restore-pending';
+    await writeFile(marker,'pending');
+    await assert.rejects(readState(f.file),/Interrupted offline restore/);
+    await assert.rejects(storageStatus(f.file),/Interrupted offline restore/);
+    await assert.rejects(readHistory({},f.file),/Interrupted offline restore/);
+    await assert.rejects(readReviewArchive({},f.file),/Interrupted offline restore/);
+    await assert.rejects(transact(s=>s,f.file),/Interrupted offline restore/);
+    await rm(marker);
+    assert.equal((await storageStatus(f.file)).integrity,'ok');
+  } finally {await f.cleanup();}
+});
+
+test('history keeps a bounded 2000 events under repeated transactions',async()=>{
+  const f=await fixture();
+  try {
+    await transact(()=>createMission(input()),f.file);
+    for(let i=0;i<2003;i++) await transact(s=>{s.revision++;return s;},f.file);
+    assert.equal((await storageStatus(f.file)).events,2000);
+    const first=await readHistory({limit:50},f.file);
+    assert.equal(first.items.length,50);
+    const next=await readHistory({limit:50,before:first.nextCursor},f.file);
+    assert.equal(next.items.length,50);
+    assert.ok(next.items[0].id<first.items[first.items.length-1].id);
+  } finally {await f.cleanup();}
+});
+
+test('conflicting legacy backup blocks migration without changing source data',async()=>{
+  const f=await fixture();
+  try{
+    const previous=JSON.stringify(createMission(input()));
+    await writeFile(f.file,previous);
+    await writeFile(f.file+'.pre-sqlite.bak','unrelated bytes');
+    await assert.rejects(migrateLegacy(f.file),/migration backup differs/);
+    assert.equal(await readFile(f.file,'utf8'),previous);
+    assert.equal((await readState(f.file)).id,JSON.parse(previous).id);
+  }finally{await f.cleanup();}
+});

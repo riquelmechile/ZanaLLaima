@@ -45,9 +45,11 @@ export function openReview(mission, { candidateSha, hostReport = {}, risk = 'MED
 export function reviewStatus(mission) {
   const review = mission?.review;
   if (!review) return { state: 'NOT_STARTED', approved: false };
-  const statuses = review.lenses.map(x => ({
-    id: x.id, state: x.state, result: x.result,
-  }));
+  const statuses = review.lenses.map(x => {
+    if (!x.result) return { id:x.id, state:x.state, result:null };
+    const { packetToken, ...publicResult } = x.result;
+    return { id:x.id, state:x.state, result:publicResult };
+  });
   const unfinished = review.lenses.some(x => x.state !== 'DONE');
   const objections = review.lenses.some(x => x.result &&
     (x.result.verdict === 'CHANGES' || x.result.findings.some(f => blocking.has(f.severity))));

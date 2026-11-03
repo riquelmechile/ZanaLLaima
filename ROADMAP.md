@@ -39,10 +39,10 @@
 
 **Implementación en PR #1:** SQLite WAL con unidades normalizadas, migración JSON preservando original, recibos y generación inicial por ejecución, backup/restauración offline, historial paginado con retención y pruebas multiproceso, corrupción y recuperación. Código de Fase 1 entregado; **el gate de operación autónoma sigue bloqueado por Fase 0**. La generación de intentos no puede renovarse automáticamente hasta implementar reconciliación de efectos inciertos.
 
-- [ ] **ZL-006. SQLite WAL.** Sustituir la reescritura completa del JSON por transacciones con esquema versionado, `busy_timeout`, WAL y migración conservadora del estado previo; incluir backup y rollback.
-- [ ] **ZL-007. Exclusión real entre procesos.** Probar dos procesos compitiendo por la misma tarea, escritura y resultado; asegurar un único ganador y fencing por intento/generación.
-- [ ] **ZL-008. Política de historial.** Guardar resultados RDD y ejecuciones de forma consultable, paginada y acotada; separar estado activo del histórico.
-- [ ] **ZL-009. Recuperación de almacenamiento.** Probar interrupciones en fronteras transaccionales, corrupción, errores de disco y restauración de backups.
+- [x] **ZL-006. SQLite WAL.** Sustituir la reescritura completa del JSON por transacciones con esquema versionado, `busy_timeout`, WAL y migración conservadora del estado previo; incluir backup y rollback.
+- [x] **ZL-007. Exclusión real entre procesos.** Probar dos procesos compitiendo por la misma tarea, escritura y resultado; asegurar un único ganador y fencing por intento/generación.
+- [x] **ZL-008. Política de historial.** Guardar resultados RDD y ejecuciones de forma consultable, paginada y acotada; separar estado activo del histórico.
+- [x] **ZL-009. Recuperación de almacenamiento.** Probar interrupciones en fronteras transaccionales, corrupción, errores de disco y restauración de backups.
 
 **Gate:** reinicio y concurrencia multiproceso conservan invariantes, identidad de intentos y recibos, sin estado duplicado.
 

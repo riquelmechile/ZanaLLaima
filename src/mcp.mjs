@@ -73,7 +73,8 @@ const schemas = {
   zana_mission_init: z.object({spec:object}).strict(),
   zana_mission_status: z.object({}).strict(),
   zana_next_batch: z.object({hostReport:hostReport.optional()}).strict(),
-  zana_start_batch: z.object({hostReport:hostReport.optional()}).strict(),
+  zana_start_batch: z.object({hostReport:hostReport.optional(),
+    leaseSeconds:z.number().int().min(5).max(3600).optional()}).strict(),
   zana_complete_unit: z.object({
     unitId:s(),token:uuid(),leaseGeneration:z.number().int().positive().optional(),outcome,
   }).strict(),

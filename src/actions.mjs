@@ -37,14 +37,14 @@ export const operations = {
     const grant=status.valid?{...status,valid:true}:null;
     return nextBatch(state, hostReport,grant);
   },
-  start: async ({ hostReport = {} } = {}) => {
+  start: async ({ hostReport = {}, leaseSeconds } = {}) => {
     let batch;
     await transact(async (existing,context) => {
       if (!existing) throw Error('No mission initialized');
       const preview=nextBatch(existing,hostReport,context.writeGrant);
       for(const unit of preview.units.filter(x=>x.effect==='WRITE'))
         await verifyWorkspacePaths(unit.paths);
-      const changed = startBatch(existing, hostReport,context.writeGrant);
+      const changed = startBatch(existing, hostReport,context.writeGrant,leaseSeconds);
       batch = changed.batch;
       return changed.mission;
     });

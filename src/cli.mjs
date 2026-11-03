@@ -9,7 +9,10 @@ const readJson = async path => JSON.parse(await readFile(path, 'utf8'));
 try {
   let input = {};
   if (command === 'init') input = { spec: await readJson(args[0]) };
-  else if (command === 'next' || command === 'start') input = { hostReport: args[0] ? await readJson(args[0]) : {} };
+  else if (command === 'next' || command === 'start') input = {
+    hostReport: args[0] ? await readJson(args[0]) : {},
+    ...(command==='start'&&args[1]!==undefined?{leaseSeconds:Number(args[1])}:{})
+  };
   else if (command === 'complete') input = { unitId: args[0], token: args[1], outcome: await readJson(args[2]),
     leaseGeneration: args[3] ? Number(args[3]) : undefined };
   else if (command === 'heartbeat') input = { unitId: args[0],token:args[1],

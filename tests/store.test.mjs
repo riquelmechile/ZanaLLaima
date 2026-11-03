@@ -236,3 +236,33 @@ test('archived review retention never exceeds 200 records',async()=>{
     assert.equal(page.items.length+second.items.length,200);
   }finally{await f.cleanup();}
 });
+
+test('verified review correction count survives process reopen',async()=>{
+  const f=await fixture();
+  const sha=n=>n.toString(16).padStart(40,'0');
+  const git=n=>({assurance:'LOCAL_GIT_OBSERVED',repoRoot:'/tmp/verification',
+    candidateSha:sha(n),treeSha:sha(n+100),baseSha:sha(500),
+    branchRef:'refs/heads/review',targetRef:'refs/heads/main',
+    clean:true,observedAt:new Date().toISOString()});
+  try{
+    await transact(()=>createMission(input()),f.file);
+    await transact(m=>{
+      const p=startBatch(m).batch.packets[0];
+      completeUnit(m,p.unitId,p.token,{success:true,summary:'Verified source behavior',
+        evidence:['Inspected and verified actual source checks']});
+      return m;
+    },f.file);
+    await transact(m=>{
+      openReview(m,{candidateSha:sha(1),gitEvidence:git(1)});return m;
+    },f.file);
+    assert.equal((await readState(f.file)).reviewCount,1);
+    await transact(m=>{
+      m.review.state='INVALIDATED';
+      openReview(m,{candidateSha:sha(2),gitEvidence:git(2)});return m;
+    },f.file);
+    const restarted=await readState(f.file);
+    assert.equal(restarted.reviewCount,2);
+    assert.equal(restarted.review.round,2);
+    assert.equal((await storageStatus(f.file)).schemaVersion,3);
+  }finally{await f.cleanup();}
+});

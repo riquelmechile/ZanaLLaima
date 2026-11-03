@@ -1,12 +1,17 @@
 import { grantPermits, missionSummary } from './core.mjs';
+import { budgetOf, budgetExpired, remainingStarts } from './budget.mjs';
 
 const check=(ok,msg)=>{if(!ok)throw new Error(msg)};
 const stamp=()=>new Date().toISOString();
 const find=(m,id)=>m.units.find(x=>x.id===id);
 
-export function heartbeatUnit(m,{unitId,token,leaseGeneration,leaseSeconds=300},grant=null){
+export function heartbeatUnit(m,{unitId,token,leaseGeneration,leaseSeconds},grant=null){
   check((m.status||'ACTIVE')==='ACTIVE','Mission not active');
-  check(Number.isInteger(leaseSeconds)&&leaseSeconds>=5&&leaseSeconds<=3600,'Invalid lease seconds');
+  check(!budgetExpired(m),'Mission time budget exhausted');
+  const limit=budgetOf(m);
+  const seconds=leaseSeconds??Math.min(300,limit.maxLeaseSeconds);
+  check(Number.isInteger(seconds)&&seconds>=5&&seconds<=limit.maxLeaseSeconds,
+    'Heartbeat exceeds mission lease budget');
   const u=find(m,unitId);
   check(u?.status==='RUNNING' && u.run?.token===token
     && u.run?.leaseGeneration===leaseGeneration,'Invalid or stale heartbeat');
@@ -14,7 +19,8 @@ export function heartbeatUnit(m,{unitId,token,leaseGeneration,leaseSeconds=300},
     'Lease expired; reconciliation required');
   check(grantPermits(u,grant),'Effective write permission missing or revoked');
   u.run.heartbeatAt=stamp();
-  u.run.expiresAt=new Date(Date.now()+leaseSeconds*1000).toISOString();
+  u.run.expiresAt=new Date(Math.min(Date.now()+seconds*1000,
+    limit.deadlineAt?Date.parse(limit.deadlineAt):Infinity)).toISOString();
   m.revision++;
   return {unitId,leaseGeneration,expiresAt:u.run.expiresAt};
 }
@@ -40,7 +46,8 @@ export function retryRead(m,unitId){
   const u=find(m,unitId);
   check(u?.effect==='READ' && ['EXPIRED','FAILED'].includes(u.status),
     'Only expired or failed READ work can be retried');
-  check((u.attempts||0)<3,'Retry limit reached');
+  check((u.attempts||0)<budgetOf(m).maxUnitAttempts,'Retry limit reached');
+  check(remainingStarts(m)>0,'Mission work-start budget exhausted');
   u.status='PENDING';u.result=null;m.revision++;
   return missionSummary(m);
 }
@@ -56,15 +63,21 @@ export function reconcileWrite(m,{unitId,token,leaseGeneration,decision,evidence
     evidence.every(x=>typeof x==='string'&&x.length>=8&&x.length<=2000),
     'Actual operator evidence required');
   check(decision==='CONFIRMED_DONE'||decision==='CONFIRMED_NO_EFFECT','Invalid decision');
-  if(decision==='CONFIRMED_NO_EFFECT' && m.status==='ACTIVE')
-    check((u.attempts||0)<3,'Retry limit reached');
+  // An exhausted uncertain write can still be reconciled as definitively
+  // non-executed. Record a terminal failure rather than leaving it stuck.
+  const retryPossible=(u.attempts||0)<budgetOf(m).maxUnitAttempts&&remainingStarts(m)>0;
   u.run.reconciliation={decision,evidence,recordedAt:stamp(),assurance:'OPERATOR_ATTESTED'};
   if(decision==='CONFIRMED_DONE'){
     u.status='DONE';
     u.result={success:true,summary:'Uncertain WRITE reconciled by operator',
       evidence,recordedAt:stamp(),assurance:'OPERATOR_ATTESTED'};
   }else if(m.status==='CANCELLING')u.status='CANCELLED';
-  else {u.status='PENDING';u.result=null;}
+  else if(retryPossible){u.status='PENDING';u.result=null;}
+  else{
+    u.status='FAILED';
+    u.result={success:false,summary:'Write confirmed to have no effect; retry budget exhausted',
+      evidence,recordedAt:stamp(),assurance:'OPERATOR_ATTESTED'};
+  }
   if(m.status==='CANCELLING' && m.units.every(x=>!['RUNNING','OUTCOME_UNKNOWN'].includes(x.status)))
     m.status='CANCELLED';
   m.revision++;return missionSummary(m);

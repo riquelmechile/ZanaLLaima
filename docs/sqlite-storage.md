@@ -42,7 +42,7 @@ El backup debe ser válido, del mismo esquema y no contener trabajo `RUNNING`. L
 
 `npm test` verifica migración, recibos persistentes, transacciones fallidas, contenido archivado, contención entre procesos, rechazo de dobles completados, salida abrupta sin `COMMIT`, backup y restauración de corrupción simulada.
 
-**No equivale a la Fase 0**: no hay todavía expiración de leases, reconciliación de escrituras inciertas, reintentos de efectos o autorización de escrituras independiente. Si una tarea queda `RUNNING`, detenerse y reconciliarla; nunca relanzarla automáticamente por haber reiniciado SQLite.
+**La Fase 0 ya incluye controles locales de leases, reconciliación firmada y reintentos acotados**; ver [seguridad y ciclo de vida](safety-lifecycle.md). Sigue pendiente verificar su aplicación en el ejecutor real del anfitrión. Al reiniciar una unidad WRITE incierta, no relanzarla automáticamente.
 
 El almacenamiento es local: no usarlo como base compartida por filesystem de red ni asumir fiabilidad de locking remoto. Mantener copias externas y probar el procedimiento de restauración antes de una operación crítica.
 

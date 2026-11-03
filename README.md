@@ -15,6 +15,14 @@ A standalone, GPT-native engineering workspace. One GPT host coordinates an obje
 
 The prioritized audit backlog, acceptance gates and delivery milestones are in [ROADMAP.md](ROADMAP.md). It tracks planned work only; unchecked items are not implemented.
 
+## Safe mission lifecycle (Phase 0)
+
+A write request inside a mission is **not** permission to modify files. Reserving a `WRITE` requires a valid, unexpired Ed25519 operator-signed approval, a configured local workspace root and a scoped path inspection. The operator's **private key must never be placed in this repository or provided to the model**. Only local CLI can import signed operator decisions. A cancelled mission revokes active grants.
+
+Read-only work can be recovered from expired leases and retried deliberately with fresh fencing tokens. An interrupted write transitions to `OUTCOME_UNKNOWN` and **cannot be replayed without a separate signed reconciliation based on actual evidence**. Close and archive completed or cancelled missions before starting the next mission. See [the recovery and security contract](docs/safety-lifecycle.md).
+
+The local planner cannot enforce file mutations by external host tools; host integration must apply the same controls at the actual effect boundary before production use.
+
 ## Durable storage
 
 The state backend uses SQLite WAL, with conservative migration from existing JSON, real multiprocess transactions, bounded historical reviews, backup and offline restore. See [storage operations](docs/sqlite-storage.md). This does **not** yet recover uncertain running work; the Phase 0 safety gate remains open.
@@ -52,7 +60,7 @@ Each result must contain `success` (boolean), a factual `summary` and a nonempty
 
 ## Connect to a local MCP-compatible host
 
-Start the local transport with `npm start` or configure the client command `node /absolute/path/to/ZanaLLaima/src/mcp.mjs`. The MCP exposes 15 local tools: 12 for missions and four-lens review, plus read-only `zana_storage_status`, `zana_storage_history`, and `zana_storage_reviews`. Storage migration, backup and restore are operator-only CLI commands, not MCP tools. All use local files and the authenticated capabilities of the *calling application*, not an API key stored here.
+Start the local transport with `npm start` or configure the client command `node /absolute/path/to/ZanaLLaima/src/mcp.mjs`. The MCP exposes 22 local tools for mission lifecycle, bounded retry, lease heartbeats, RDD and read-only storage status. Signed operator actions, backup, restore and archival remain CLI-only operations. Storage migration, backup and restore are operator-only CLI commands, not MCP tools. All use local files and the authenticated capabilities of the *calling application*, not an API key stored here.
 
 The MCP adapter is **stdio-only** and assumes a trusted local operator. Do not expose it as an unauthenticated HTTP endpoint. ChatGPT web app integration and real subagent launch must be tested separately on a host that supports those features.
 

@@ -8,3 +8,8 @@ node_modules/
 *.pre-sqlite.bak
 *.restore-pending
 *.quarantine.*
+
+# Operator private material must remain outside this repository
+*.key
+.env
+.env.*

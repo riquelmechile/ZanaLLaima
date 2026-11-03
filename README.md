@@ -11,6 +11,10 @@ A standalone, GPT-native engineering workspace. One GPT host coordinates an obje
 - **Truthfulness:** planned parallel work is not evidence that workers launched. Host-reported capabilities, model settings, reviews and results remain unverified until separately attested.
 - **Scope:** no remote task sending, no impersonation, no hidden agents, no automatic release actions. PR merges and deployments require separate permission.
 
+## Project roadmap
+
+The prioritized audit backlog, acceptance gates and delivery milestones are in [ROADMAP.md](ROADMAP.md). It tracks planned work only; unchecked items are not implemented.
+
 ## Components
 
 - `src/core.mjs`: isolated mission DAG, permission gates, capability-aware batch planning, fenced per-unit completion.

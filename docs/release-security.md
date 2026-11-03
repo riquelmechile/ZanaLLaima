@@ -20,7 +20,7 @@ El comando `npm run release:preflight` valida localmente la integridad estática
 
 | Hallazgo | Severidad | Evidencia / mitigación | Estado |
 | --- | --- | --- | --- |
-| GitHub `main` sin protección efectiva | **BLOCKER** | `main.protected=false`, reglas `[]`; habilitar reglas con credencial administrativa | Pendiente ZL-026 |
+| GitHub `main` sin protección (hallazgo inicial) | **RESUELTO** | Branch protection activada con sesión administrativa; GET de GitHub confirma `protected=true` y tres checks obligatorios | ZL-026 verificado |
 | Escritor externo puede eludir el controlador MCP | **BLOCKER** | Firmas y rutas verificadas al reservar, no en toda mutación del ejecutor real; riesgo TOCTOU/symlink | Pendiente ZL-004 |
 | Host GPT y subagentes no autenticados | **BLOCKER** | No se ha conectado ni medido un host real; no inferir modelo o independencia | Pendiente ZL-018 |
 | Firma CI independiente aún no conectada | **HIGH** | `deliveryGate` valida firmas de prueba, pero aún no existe emisor CI externo autenticado | Pendiente |
@@ -32,26 +32,29 @@ El comando `npm run release:preflight` valida localmente la integridad estática
 
 **Ningún gate de entrega permite merge o despliegue automáticamente**, incluso cuando un resultado firmado devuelve `READY_FOR_MANUAL_RELEASE`. El operador debe comprobar la autoridad real y autorizar cada acción por separado.
 
-## Protección de GitHub que debe configurar el administrador
+## Protección de GitHub aplicada y comprobada (ZL-026)
 
-La conexión GitHub disponible permite lectura y escritura de archivos, pero **no** administración de ramas. Leer `/branches/main/protection` devuelve `403 Resource not accessible by integration`; no se debe afirmar protección aplicada por haber escrito este documento.
+**Estado verificado:** la rama `main` ya está protegida. El conector GitHub de archivos seguía devolviendo `403` para acciones de administración, pero una sesión GitHub CLI autenticada como administrador del repositorio (`riquelmechile`) pudo configurar la protección por API. Tras el cambio, tanto un GET administrativo a `/branches/main/protection` como la lectura general de `/branches/main` confirmaron las reglas y `protected=true`.
 
-En `Settings → Rules → Rulesets` (o `Settings → Branches`, según capacidades del repositorio), crear una regla **activa** para `main` con:
+Configuración activa, recuperada por GET:
 
-1. Bloquear pushes directos, force-push y eliminación de la rama; exigir Pull Request.
-2. Exigir al menos **una aprobación independiente** y descartar aprobaciones obsoletas cuando cambie el SHA. Resolver conversaciones antes de merge; no permitir que el autor apruebe su propio cambio.
-3. Exigir los status checks de **todos los Node de la matriz** para el SHA actual, seleccionados exactamente desde la interfaz de GitHub después de una ejecución verde.
-4. Evitar bypass de administradores, aplicaciones y bots, o justificarlo explícitamente mediante política humana.
-5. No activar auto-merge ni despliegue por un `PASS` de RDD. La prueba independiente debe estar ligada al SHA revisado.
+1. `required_status_checks.strict=true` y exactamente tres checks de GitHub Actions: `test (Node 22.16.0)`, `test (Node 22.23.4)`, `test (Node 24)`, asociados a GitHub Actions `app_id=15368`.
+2. `required_pull_request_reviews.required_approving_review_count=1`: se requiere aprobación de PR. `dismiss_stale_reviews=true` y `require_last_push_approval=true` rechazan aprobaciones anteriores o del autor del último push.
+3. `required_conversation_resolution.enabled=true`, `enforce_admins.enabled=true`: conversaciones resueltas y controles aplicados a administradores.
+4. `allow_force_pushes.enabled=false` y `allow_deletions.enabled=false`: sin force-push ni eliminación de la rama protegida.
 
-**Verificación requerida:** volver a consultar la protección/regla con una identidad autorizada y adjuntar evidencia del ruleset habilitado, checks exigidos y enforcement real. Hasta entonces, ZL-026 sigue abierto.
+Se configuró **branch protection**, no se creó un ruleset. El endpoint `/rulesets` podría seguir devolviendo `[]` y eso no contradice la protección activa de `main`.
+
+**Nota:** los checks y la revisión independiente siguen siendo requisitos para una futura solicitud de merge. Configurar estas reglas no crea ni simula una revisión formal. La protección tampoco sustituye los gates del ejecutor, del host GPT o del verificador externo de CI; no habilita despliegues automáticos.
+
+**Invariante administrativo:** revisar y conservar estas reglas antes de cualquier merge. No reducirlas durante operaciones rutinarias ni asumir que un job verde concede permiso de release.
 
 ## Gates que siguen impidiendo release
 
 - **ZL-004:** validar permisos al aplicar cada mutación del ejecutor real, no solo en el plan.
 - **ZL-018:** conectividad ChatGPT real, modelo/esfuerzo observado y subagentes cuando existan.
 - **Fase 4:** scheduler incremental, presupuestos, aislamiento de escrituras y benchmarks.
-- **Gobernanza:** reglas de `main` y una revisión independiente sobre el SHA exacto.
+- **Gobernanza:** protección de `main` activa; falta recibir una revisión realmente independiente sobre el SHA exacto.
 - **CI confiable:** fuente auténtica de atestaciones CI vinculadas al SHA y al runner, separada del propio modelo.
 
 Un informe local, un PDF, una ejecución de pruebas o una firma suministrada por el propio agente **no** reemplaza estas evidencias. El proyecto permanece local, sin servidor HTTP ni entrega automática.

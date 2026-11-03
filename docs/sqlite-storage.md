@@ -45,3 +45,11 @@ El backup debe ser válido, del mismo esquema y no contener trabajo `RUNNING`. L
 **No equivale a la Fase 0**: no hay todavía expiración de leases, reconciliación de escrituras inciertas, reintentos de efectos o autorización de escrituras independiente. Si una tarea queda `RUNNING`, detenerse y reconciliarla; nunca relanzarla automáticamente por haber reiniciado SQLite.
 
 El almacenamiento es local: no usarlo como base compartida por filesystem de red ni asumir fiabilidad de locking remoto. Mantener copias externas y probar el procedimiento de restauración antes de una operación crítica.
+
+## Recuperación de una restauración interrumpida
+
+Si se encuentra `.restore-pending`, **todos los comandos de lectura, historia y modificación rechazan el almacén**. El operador debe inspeccionar las rutas del archivo SQLite, sus posibles `-wal`/`-shm` y los archivos `.quarantine.*`, detener los clientes y validar una copia antes de retirar manualmente el marcador. No eliminar el marcador mientras haya un proceso activo o sin entender qué fase de restauración quedó pendiente.
+
+Los tokens de ejecución se guardan en recibos internos. Los eventos de historial solo incluyen un resumen SHA-256 del token y las consultas de revisiones ocultan los tokens de paquetes. Las consultas MCP del almacén son de solo lectura; la restauración está reservada al CLI local.
+
+La generación inicial de intento y los tokens protegen de dobles completados. No hay todavía renovación de leases ni reintentos automáticos seguros; ese procedimiento depende de la Fase 0.

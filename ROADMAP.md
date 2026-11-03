@@ -19,7 +19,7 @@
 | Fase | Prioridad | Objetivo | Estado |
 | --- | --- | --- | --- |
 | 0 | P0 | Evitar bloqueos, errores de autorización y pérdidas de trabajo | [ ] Pendiente |
-| 1 | P1 | Persistencia transaccional y recuperación tras reinicio | [ ] Código en revisión; bloqueada por fase 0 |
+| 1 | P1 | Persistencia transaccional y recuperación tras reinicio | [x] Implementada y probada; gate operacional pendiente de Fase 0 |
 | 2 | P1 | RDD verificable sobre SHA exacto y revisión de una sola cuenta | [ ] Pendiente |
 | 3 | P1 | MCP compatible e integración real con el anfitrión GPT | [ ] Pendiente |
 | 4 | P2 | Aprovechar paralelismo nativo y mejorar rendimiento | [ ] Pendiente |
@@ -37,7 +37,7 @@
 
 ### Fase 1. Estado durable (P1; depende de fase 0)
 
-**Implementación candidata en PR #1:** SQLite WAL, migración, recibos, backup/restauración y tests de concurrencia. No cerrar el gate ni interpretar el CI como verificación de ejecución autónoma hasta completar la Fase 0.
+**Implementación en PR #1:** SQLite WAL con unidades normalizadas, migración JSON preservando original, recibos y generación inicial por ejecución, backup/restauración offline, historial paginado con retención y pruebas multiproceso, corrupción y recuperación. Código de Fase 1 entregado; **el gate de operación autónoma sigue bloqueado por Fase 0**. La generación de intentos no puede renovarse automáticamente hasta implementar reconciliación de efectos inciertos.
 
 - [ ] **ZL-006. SQLite WAL.** Sustituir la reescritura completa del JSON por transacciones con esquema versionado, `busy_timeout`, WAL y migración conservadora del estado previo; incluir backup y rollback.
 - [ ] **ZL-007. Exclusión real entre procesos.** Probar dos procesos compitiendo por la misma tarea, escritura y resultado; asegurar un único ganador y fencing por intento/generación.

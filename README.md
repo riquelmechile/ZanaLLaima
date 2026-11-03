@@ -52,9 +52,13 @@ Each result must contain `success` (boolean), a factual `summary` and a nonempty
 
 ## Connect to a local MCP-compatible host
 
-Start the local transport with `npm start` or configure the client command `node /absolute/path/to/ZanaLLaima/src/mcp.mjs`. The six exposed tools are `zana_profile`, `zana_mission_init`, `zana_mission_status`, `zana_next_batch`, `zana_start_batch` and `zana_complete_unit`. All use local files and the authenticated capabilities of the *calling application*, not an API key stored here.
+Start the local transport with `npm start` or configure the client command `node /absolute/path/to/ZanaLLaima/src/mcp.mjs`. The MCP exposes 15 local tools: 12 for missions and four-lens review, plus read-only `zana_storage_status`, `zana_storage_history`, and `zana_storage_reviews`. Storage migration, backup and restore are operator-only CLI commands, not MCP tools. All use local files and the authenticated capabilities of the *calling application*, not an API key stored here.
 
 The MCP adapter is **stdio-only** and assumes a trusted local operator. Do not expose it as an unauthenticated HTTP endpoint. ChatGPT web app integration and real subagent launch must be tested separately on a host that supports those features.
+
+## Storage operator commands
+
+Use `node src/cli.mjs storage-status` for integrity and schema status; `storage-history 25` and `storage-reviews 25` for paginated data. To migrate a legacy JSON state, stop other clients and execute `storage-migrate`. For an SQLite-consistent backup run `storage-backup /new/backup.sqlite`. Restoring a backup requires all clients stopped and `ZANA_RESTORE_OFFLINE=1 node src/cli.mjs storage-restore /backup.sqlite`. Review [the operational precautions](docs/sqlite-storage.md) first.
 
 ## Verification
 

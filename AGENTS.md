@@ -19,3 +19,7 @@ When mission units finish and a real Git candidate SHA is available, open a loca
 When native subagents are actually available, send independent packets into separate host-native contexts. Never share the sibling reviewers' observations until each has returned. When native subagents are unavailable, use the single-context sequential path; label it a self-check rather than an independent review.
 
 Submit only genuine findings and evidence with the exact frozen SHA and packet token. A changed SHA invalidates previous review evidence. High-severity findings block a passing verdict. Neither a completed solo review nor host-reported native contexts certify independence, Git checks or permission to merge. Respect `approved: false` in the review status.
+
+## Persistent storage
+
+Use `zana_storage_status` to inspect schema and integrity and `zana_storage_history`/`zana_storage_reviews` for paginated, read-only historical evidence. Treat a pending offline restoration as a hard stop. Backup, migration and restoration remain explicit operator-only CLI actions and must not be inferred from a tool result or executed by a model without separate operator authorization. Do not retry uncertain writes automatically.

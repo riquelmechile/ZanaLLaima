@@ -206,3 +206,14 @@ test('a nearly exhausted deadline cannot create leases that outlive the mission'
   assert.equal(m.units[0].attempts,0);
   assert.equal(m.units[0].status,'PENDING');
 });
+
+
+test('review round budget also bounds local unverified review cycles',()=>{
+  const m=readMission(1,{maxReviewRounds:1});
+  const p=startBatch(m).batch.packets[0];
+  completeUnit(m,p.unitId,p.token,evidence);
+  openReview(m,{candidateSha:'a'.repeat(40)});
+  m.review.state='INVALIDATED';
+  assert.throws(()=>openReview(m,{candidateSha:'b'.repeat(40)}),
+    /correction limit/);
+});

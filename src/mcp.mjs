@@ -6,6 +6,11 @@ import { operations } from './actions.mjs';
 const obj = { type: 'object', additionalProperties: false };
 const schemas = {
   zana_profile: { ...obj, properties: {} },
+  zana_storage_status: { ...obj, properties: {} },
+  zana_storage_history: { ...obj, properties: { limit: { type: 'integer', minimum: 1, maximum: 100 },
+    before: { type: 'integer', minimum: 1 }, category: { type: 'string' } } },
+  zana_storage_reviews: { ...obj, properties: { limit: { type: 'integer', minimum: 1, maximum: 100 },
+    before: { type: 'integer', minimum: 1 } } },
   zana_mission_init: { ...obj, properties: { spec: { type: 'object' } }, required: ['spec'] },
   zana_mission_status: { ...obj, properties: {} },
   zana_next_batch: { ...obj, properties: { hostReport: { type: 'object' } } },
@@ -30,6 +35,8 @@ const schemas = {
 };
 const actions = {
   zana_profile: 'profile', zana_mission_init: 'init',
+  zana_storage_status: 'storageStatus', zana_storage_history: 'storageHistory',
+  zana_storage_reviews: 'storageReviews',
   zana_mission_status: 'status', zana_next_batch: 'next',
   zana_start_batch: 'start', zana_complete_unit: 'complete',
   zana_review_open: 'reviewOpen', zana_review_status: 'reviewStatus',

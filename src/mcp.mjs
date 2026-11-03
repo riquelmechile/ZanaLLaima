@@ -101,6 +101,29 @@ const schemas = {
   zana_review_check: z.object({}).strict(),
 };
 
+
+function cancelledResult(duringExecution=false){
+  return {isError:true,content:[{type:'text',
+    text:duringExecution
+      ?'Request cancelled during an operation. The effect may have committed; inspect persisted state before retrying.'
+      :'Request cancelled before dispatch. No operation started.'}]};
+}
+
+// Separate the MCP transport from the operation so cancellation can be tested
+// deterministically without needing a model or a socket.
+export async function dispatchTool(action,args={}, {signal,implementation=operations}={}){
+  if(signal?.aborted)return cancelledResult(false);
+  try{
+    const data=action==='capabilityStatus' ? capabilityContract(args.hostReport??{})
+      :await implementation[action](args);
+    if(signal?.aborted)return cancelledResult(true);
+    return {content:[{type:'text',text:JSON.stringify(data)}],structuredContent:data};
+  }catch(error){
+    return {isError:true,content:[{type:'text',
+      text:String(error?.message||'Operation failed').slice(0,2000)}]};
+  }
+}
+
 export function createServer(){
   const server=new McpServer({name:'zana-llaima',version:'0.2.0'},
     {maxToolInputElements:1000});
@@ -111,22 +134,7 @@ export function createServer(){
       annotations:{readOnlyHint:readOnly,destructiveHint:!readOnly,
         idempotentHint:readOnly},
     },async(args,ctx)=>{
-      // MCP cancellation is advisory. A request canceled after a committed state
-      // transition must be reconciled from persisted state, never blindly replayed.
-      if(ctx.mcpReq.signal.aborted)return {
-        isError:true,content:[{type:'text',text:'Request cancelled before dispatch. Read persisted state before retrying.'}],
-      };
-      try{
-        const data=action==='capabilityStatus'
-          ?capabilityContract(args.hostReport??{})
-          :await operations[action](args);
-        return {content:[{type:'text',text:JSON.stringify(data)}],
-          structuredContent:data};
-      }catch(error){
-        // Expected application errors remain tool results, not JSON-RPC failures.
-        return {isError:true,content:[{type:'text',
-          text:String(error?.message||'Operation failed').slice(0,2000)}]};
-      }
+      return dispatchTool(action,args,{signal:ctx.mcpReq.signal});
     });
   }
   return server;

@@ -83,7 +83,7 @@ export function reviewStatus(mission){
     round:review.round??1,maxParallel:review.maxParallel??1,
     risk:review.risk,state:review.state,gate,
     approved:false,independentReviewVerified:false,
-    candidateVerifiedByGit:review.gitEvidence?.assurance==='LOCAL_GIT_OBSERVED',
+    candidateVerifiedByGit:review.state==='OPEN'&&review.gitEvidence?.assurance==='LOCAL_GIT_OBSERVED',
     candidateGitCheckedAt:review.gitEvidence?.observedAt??null,
     hostModelVerified:false,capabilityEvidence:review.capabilityEvidence,
     fallbackReason:review.fallbackReason??null,lenses,

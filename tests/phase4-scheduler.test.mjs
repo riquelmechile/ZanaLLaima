@@ -164,3 +164,33 @@ test('terminal reconciliation records a failed uncertain WRITE after retry budge
   assert.equal(nextBatch(m,host,grant).mode,'BLOCKED');
   assert.equal(status.uncertain,0);
 });
+
+
+test('SQLite rejects altered budgets and forged mixed writer/reader reservations atomically',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'zana-phase4-invariants-'));
+  const file=join(dir,'state.json');
+  try{
+    const m=createMission({objective:'Guard exclusive database writer state',
+      authorization:{writesAllowed:true,allowedPaths:['docs']},
+      budget:{maxActiveReads:2,maxWorkStarts:3},
+      units:[
+        {id:'read',effect:'READ',instruction:'Inspect files safely'},
+        {id:'write',effect:'WRITE',instruction:'Update scoped file',paths:['docs/a']},
+      ]});
+    await transact(()=>m,file);
+    await assert.rejects(transact(state=>{
+      state.budget.maxActiveReads=4;state.revision++;return state;
+    },file),/cannot be modified/);
+    await assert.rejects(transact(state=>{
+      state.units[0].status='RUNNING';
+      state.units[0].run={token:'read-forgery',leaseGeneration:1};
+      state.units[1].status='RUNNING';
+      state.units[1].run={token:'write-forgery',leaseGeneration:1};
+      state.revision++;return state;
+    },file),/Exclusive WRITE invariant/);
+    const restored=await readState(file);
+    assert.equal(restored.budget.maxActiveReads,2);
+    assert.ok(restored.units.every(x=>x.status==='PENDING'));
+    assert.equal(restored.revision,0);
+  }finally{await rm(dir,{recursive:true,force:true});}
+});

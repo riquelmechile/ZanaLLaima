@@ -201,6 +201,8 @@ function persist(db, previous, next, kind = 'STATE_CHANGED') {
     if(old && old.status!==u.status && ['EXPIRED','OUTCOME_UNKNOWN','CANCELLED','PENDING'].includes(u.status))
       addEvent(db,next,'UNIT_'+u.status,{unitId:u.id,previousStatus:old.status});
   }
+  if(previous && (previous.status||'ACTIVE')==='ACTIVE' && next.status && next.status!=='ACTIVE')
+    db.prepare('UPDATE operator_grants SET revoked=1 WHERE mission_id=?').run(next.id);
   if(previous && previous.status!==next.status)
     addEvent(db,next,'MISSION_'+(next.status||'ACTIVE'),{prior:previous.status||'ACTIVE'});
   addEvent(db,next,kind,{previousRevision:previous?.revision ?? null,revision:next.revision});

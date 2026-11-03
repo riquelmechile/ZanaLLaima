@@ -134,6 +134,15 @@ function persist(db, previous, next, kind = 'STATE_CHANGED') {
   validate(next);
   if (previous && previous.id !== next.id) fail('Replacing an active mission is not authorized');
   if (previous && next.revision < previous.revision) fail('Mission revision went backwards');
+  if(previous && json(previous.budget??null)!==json(next.budget??null))
+    fail('Mission resource budget cannot be modified after creation');
+  const activeWriters=next.units.filter(u=>u.effect==='WRITE'&&u.status==='RUNNING');
+  const activeReaders=next.units.filter(u=>u.effect==='READ'&&u.status==='RUNNING');
+  if(activeWriters.length>1||(activeWriters.length&&activeReaders.length))
+    fail('Exclusive WRITE invariant violated: concurrent read/write or multiple writers');
+  const allowedStarts=next.budget?.maxWorkStarts;
+  if(allowedStarts!==undefined && next.units.reduce((n,u)=>n+(u.attempts||0),0)>allowedStarts)
+    fail('Mission work-start budget exceeded');
   if (!previous) {
     db.prepare('INSERT INTO active_mission(slot,id,objective,authorization,revision,created_at,updated_at,lifecycle,closed_at,review_count,budget) VALUES(1,?,?,?,?,?,?,?,?,?,?)')
       .run(next.id,next.objective,json(next.authorization),next.revision,next.createdAt,now(),next.status||'ACTIVE',next.closedAt||null,next.reviewCount||0,json(next.budget??null));

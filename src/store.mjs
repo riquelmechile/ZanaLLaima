@@ -2,13 +2,14 @@ import { DatabaseSync, backup } from 'node:sqlite';
 import { constants } from 'node:fs';
 import { access, chmod, copyFile, link, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 const SCHEMA_VERSION = 1;
 const MAX_EVENTS = 2000;
 const MAX_ARCHIVES = 200;
 const BUSY_MS = 10000;
 const now = () => new Date().toISOString();
+const tokenHash = token => createHash('sha256').update(token).digest('hex');
 const fail = (message) => { throw new Error(message); };
 const json = x => JSON.stringify(x);
 const parse = x => x == null ? null : JSON.parse(x);
@@ -110,6 +111,9 @@ function trimHistory(db) {
     (MAX_EVENTS - 1) + '), -1) AND seq < (SELECT MAX(seq) FROM state_events)');
   db.exec('DELETE FROM review_archive WHERE seq < COALESCE((SELECT seq FROM review_archive ORDER BY seq DESC LIMIT 1 OFFSET ' +
     (MAX_ARCHIVES - 1) + '), -1) AND seq < (SELECT MAX(seq) FROM review_archive)');
+  const active=db.prepare('SELECT content FROM active_review LIMIT 1').get();
+  const current=active ? parse(active.content).id : '';
+  db.prepare('DELETE FROM review_receipts WHERE review_id != ? AND review_id NOT IN (SELECT review_id FROM review_archive)').run(current);
 }
 
 function persist(db, previous, next, kind = 'STATE_CHANGED') {
@@ -139,13 +143,13 @@ function persist(db, previous, next, kind = 'STATE_CHANGED') {
           json(u.run),json(u.result),next.id,u.id);
     }
     if ((!old || old.status !== u.status) && u.status === 'RUNNING') {
-      addEvent(db,next,'UNIT_STARTED',{unitId:u.id,token:u.run?.token,generation:u.run?.leaseGeneration});
+      addEvent(db,next,'UNIT_STARTED',{unitId:u.id,tokenHash:tokenHash(u.run.token),generation:u.run?.leaseGeneration});
     }
     if ((!old || old.status !== u.status) && (u.status === 'DONE' || u.status === 'FAILED')) {
       if (!u.run?.token || !u.result) fail('Completed unit lacks a real run token or result');
       db.prepare('INSERT OR IGNORE INTO work_receipts(mission_id,unit_id,token,generation,status,result,created_at) VALUES(?,?,?,?,?,?,?)')
         .run(next.id,u.id,u.run.token,u.run.leaseGeneration || 1,u.status,json(u.result),now());
-      addEvent(db,next,'UNIT_'+u.status,{unitId:u.id,token:u.run.token});
+      addEvent(db,next,'UNIT_'+u.status,{unitId:u.id,tokenHash:tokenHash(u.run.token)});
     }
   }
   if (previous?.review && next.review && previous.review.id === next.review.id) {
@@ -156,7 +160,7 @@ function persist(db, previous, next, kind = 'STATE_CHANGED') {
         if (!token) fail('Completed review lacks original packet token');
         db.prepare('INSERT OR IGNORE INTO review_receipts(review_id,lens_id,token,result,created_at) VALUES(?,?,?,?,?)')
           .run(next.review.id,lens.id,token,json(lens.result),now());
-        addEvent(db,next,'REVIEW_LENS_DONE',{reviewId:next.review.id,lensId:lens.id,token});
+        addEvent(db,next,'REVIEW_LENS_DONE',{reviewId:next.review.id,lensId:lens.id,tokenHash:tokenHash(token)});
       }
     }
   }
@@ -262,6 +266,15 @@ export async function readHistory({ limit=25, before=null, category=null } = {},
   } finally {db.close();}
 }
 
+function publicArchivedReview(value) {
+  const r=structuredClone(value);
+  for (const lens of r.lenses || []) {
+    if (lens.run) lens.run={issuedAt:lens.run.issuedAt,tokenRedacted:true};
+    if (lens.result) delete lens.result.packetToken;
+  }
+  return r;
+}
+
 export async function readReviewArchive({limit=25,before=null}={},file=statePath()){
   await refuseInterruptedRestore(file);
   if (!Number.isInteger(limit)||limit<1||limit>100||
@@ -275,7 +288,7 @@ export async function readReviewArchive({limit=25,before=null}={},file=statePath
       ?db.prepare('SELECT * FROM review_archive ORDER BY seq DESC LIMIT ?').all(limit+1)
       :db.prepare('SELECT * FROM review_archive WHERE seq<? ORDER BY seq DESC LIMIT ?').all(before,limit+1);
     const page=rows.slice(0,limit);
-    return {items:page.map(x=>({id:x.seq,review:parse(x.content),archivedAt:x.created_at})),
+    return {items:page.map(x=>({id:x.seq,review:publicArchivedReview(parse(x.content)),archivedAt:x.created_at})),
       nextCursor:rows.length>limit?page[page.length-1].seq:null};
   } finally {db.close();}
 }

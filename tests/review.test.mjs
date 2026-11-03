@@ -20,3 +20,15 @@ const outcome = (packet, execution = 'SELF_CONTEXT', contextId) => ({
 });
 
 test('review definitions', () => { assert.equal(shaA.length, 40); });
+
+test('sequential review requires four completions', () => {
+  const m = prepared();
+  openReview(m, { candidateSha: shaA });
+  for (const id of ['risk', 'reliability', 'resilience', 'readability']) {
+    const packet = startReviewBatch(m).packets[0];
+    assert.equal(packet.lensId, id);
+    submitReview(m, outcome(packet));
+  }
+  assert.equal(reviewStatus(m).gate, 'SELF_CHECK_COMPLETE_UNVERIFIED');
+  assert.equal(reviewStatus(m).approved, false);
+});

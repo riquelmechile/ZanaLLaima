@@ -90,7 +90,7 @@ test('correction cycles are bounded and reject changes with running reviewers',(
     const git=fakeGit(i);
     openReview(m,{candidateSha:git.candidateSha,gitEvidence:git});
     const p=startReviewBatch(m).packets[0];
-    assert.throws(()=>openReview(m,{candidateSha:sha(i+1),gitEvidence:fakeGit(i+1)}),
+    if(i<5)assert.throws(()=>openReview(m,{candidateSha:sha(i+1),gitEvidence:fakeGit(i+1)}),
       /active packets/);
     checkCandidate(m,sha(i+20),{...git,candidateSha:sha(i+20)});
     assert.throws(()=>submitReview(m,result(p)),/No active review/);

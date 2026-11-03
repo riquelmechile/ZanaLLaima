@@ -18,7 +18,7 @@
 
 | Fase | Prioridad | Objetivo | Estado |
 | --- | --- | --- | --- |
-| 0 | P0 | Evitar bloqueos, errores de autorización y pérdidas de trabajo | [x] Control local y pruebas implementados; E2E del ejecutor pendiente |
+| 0 | P0 | Evitar bloqueos, errores de autorización y pérdidas de trabajo | [ ] Control local probado; gate real de escrituras del anfitrión pendiente |
 | 1 | P1 | Persistencia transaccional y recuperación tras reinicio | [x] Implementada y probada; gate operacional pendiente de Fase 0 |
 | 2 | P1 | RDD verificable sobre SHA exacto y revisión de una sola cuenta | [ ] Pendiente |
 | 3 | P1 | MCP compatible e integración real con el anfitrión GPT | [ ] Pendiente |
@@ -32,8 +32,10 @@
 - [x] **ZL-001. Recuperación de tareas `RUNNING`.** Añadir lease, heartbeat, expiración, estado `OUTCOME_UNKNOWN` para escrituras y reconciliación explícita. Una pérdida de sesión no debe bloquear para siempre la misión ni provocar repetición ciega de efectos.
 - [x] **ZL-002. Misiones reutilizables.** Permitir cerrar, cancelar, archivar y crear una misión posterior sin borrar manualmente el archivo de estado. Conservar historial y controles de versión.
 - [x] **ZL-003. Fallos y reintentos.** Distinguir fallo reintentable, bloqueo, cancelación y efecto incierto. Añadir límites de reintento y replanificación de dependencias. Nunca marcar `DONE` una tarea dependiente de otra fallida.
-- [x] **ZL-004. Autorización auténtica de escrituras.** Separar la propuesta de la misión del consentimiento del operador; permisos efímeros, por ruta y operación, verificados también donde ocurren las escrituras. Prevenir traversal por rutas reales, enlaces simbólicos y cambios posteriores.
+- [ ] **ZL-004. Autorización auténtica de escrituras.** Separar la propuesta de la misión del consentimiento del operador; permisos efímeros, por ruta y operación, verificados también donde ocurren las escrituras. Prevenir traversal por rutas reales, enlaces simbólicos y cambios posteriores.
 - [x] **ZL-005. Pruebas adversariales.** Cubrir caída tras reservar tarea, caída después de escritura antes del recibo, doble finalización, reintentos obsoletos, permisos revocados y misión cancelada.
+
+**ZL-004: implementación parcial verificable.** Firma Ed25519 del operador, comprobación de vigencia, revocación y alcance se aplican al reservar y completar trabajos dentro del MCP local. La inspección de rutas rechaza symlinks antes de reservar. **Pendiente bloqueante:** conectar estas comprobaciones al propio ejecutor que modifica archivos/repositorios, con aislamiento resistente a carreras; la infraestructura actual no puede impedir acciones realizadas por herramientas externas que ignoren el plano de control.
 
 **Gate local verificado:** las transiciones conservan estado y exigen reconciliación antes de cualquier reintento WRITE. **Gate operativo pendiente:** un ejecutor anfitrión real debe demostrar que ninguna herramienta puede escribir saltándose los permisos y que la autorización se revalida al aplicar cada efecto.
 
@@ -100,6 +102,6 @@
 
 ## Prioridad de implementación
 
-ZL-001 a ZL-009 tienen implementación local y pruebas; aún debe validarse la aplicación efectiva de permisos en el anfitrión antes de operar autónomamente. A continuación, RDD confiable. Integración real con el anfitrión puede desarrollarse en paralelo siempre que no omita los controles de permisos. Rendimiento y automatización de entrega se abordan después de asegurar recuperación y evidencia.
+ZL-001 a ZL-003 y ZL-005 a ZL-009 tienen implementación local y pruebas; ZL-004 mantiene pendiente el enforcement del ejecutor real. Debe validarse la aplicación efectiva de permisos en el anfitrión antes de operar autónomamente. A continuación, RDD confiable. Integración real con el anfitrión puede desarrollarse en paralelo siempre que no omita los controles de permisos. Rendimiento y automatización de entrega se abordan después de asegurar recuperación y evidencia.
 
 **Criterio de versión lista:** una única cuenta GPT puede iniciar más de una misión en momentos distintos, completar trabajo, recuperarse de interrupciones, ejecutar las cuatro perspectivas con procedencia honesta y presentar una decisión verificable sobre un candidato Git sin declarar aprobaciones o capacidades inexistentes.

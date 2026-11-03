@@ -59,6 +59,6 @@ No hay listener TCP, HTTP, SSE ni URL de callback. La exposición remota no es u
 
 - Los contextos nativos y el modelo efectivo permanecen sin verificar.
 - La reconexión y cancelación MCP no sustituyen leases, recibos y reconciliación de operaciones WRITE.
-- El SDK está fijado por versión, pero todavía no se incluyó un `package-lock.json` reproducible; cerrar esta deuda en la Fase 5 antes del release.
+- El SDK y sus dependencias transitivas están fijados en `package-lock.json` v3; CI utiliza `npm ci --ignore-scripts`, un preflight estático y auditoría de dependencias de producción. El estado de release sigue bloqueado por requisitos externos de GitHub y del anfitrión.
 - La interfaz local no puede impedir ediciones directas realizadas por herramientas externas que no pasen por el controlador.
 - Sin merge, deploy o habilitación HTTP hasta pasar gates de seguridad y revisión independiente.

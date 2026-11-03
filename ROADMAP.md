@@ -23,7 +23,7 @@
 | 2 | P1 | RDD verificable sobre SHA exacto y revisión de una sola cuenta | [x] Motor local y pruebas; integración real pendiente |
 | 3 | P1 | MCP compatible e integración real con el anfitrión GPT | [ ] SDK y E2E local implementados; ZL-018 real pendiente |
 | 4 | P2 | Aprovechar paralelismo nativo y mejorar rendimiento | [ ] Pendiente |
-| 5 | P2 | CI, seguridad de repositorio y criterios de entrega | [ ] Pendiente |
+| 5 | P2 | CI, seguridad de repositorio y criterios de entrega | [ ] Implementación local auditada; protección de main y gates reales pendientes |
 
 ### Fase 0. Seguridad funcional y ciclo de vida (P0)
 
@@ -86,11 +86,18 @@
 
 ### Fase 5. Calidad y entrega (P2; transversal)
 
-- [ ] **ZL-025. CI robusto.** Tests de integración, estrés, fallos de proceso, cobertura e incompatibilidades MCP; fijar versiones de acciones por SHA, permisos mínimos y timeout.
+**Ejecución de Fase 5:** `package-lock.json` reproducible, `npm ci`, acciones de GitHub fijadas por SHA, permisos `contents: read`, Git checkout del HEAD exacto, matriz Node 22.16.0/22.23.4/24, cobertura del código fuente con umbral, pruebas de estrés/seguridad y auditoría de dependencias. `pull_request` ejecuta el CI una sola vez por actualización y `push` solo en `main`. El preflight estático nunca autoriza merge/deploy. Ver `docs/release-security.md`.
+
+**Bloqueo administrativo ZL-026:** GitHub devolvió `main.protected=false` y `rulesets=[]`; la API de protección respondió `403 Resource not accessible by integration`. No existe una herramienta disponible con permiso para aplicar protección. **No marcar como realizado** hasta que un administrador configure la regla y se compruebe de nuevo.
+
+**Bloqueo de release ZL-029:** auditoría local escrita, pero la autorización efectiva de escrituras del anfitrión (ZL-004), las pruebas reales ChatGPT (ZL-018), la Fase 4, atestaciones CI independientes y una revisión independiente siguen pendientes. Esto impide producción.
+
+
+- [x] **ZL-025. CI robusto.** Tests de integración, estrés, fallos de proceso, cobertura e incompatibilidades MCP; fijar versiones de acciones por SHA, permisos mínimos y timeout.
 - [ ] **ZL-026. Seguridad del repositorio.** Proteger `main` y exigir CI del SHA exacto y revisión independiente antes de merge. Auditar rulesets/branch protection con una credencial administrativa autorizada.
-- [ ] **ZL-027. Reducir trabajo duplicado.** Revisar la duplicación de CI para `push` y `pull_request` y adoptar concurrency/cancel-in-progress cuando sea seguro.
-- [ ] **ZL-028. Documentación.** Sincronizar README con el inventario real de 12 herramientas MCP y añadir guía de recuperación, operación local y límites de evidencia.
-- [ ] **ZL-029. Revisión de seguridad de release.** Evaluar rutas, bloqueo de estado, secretos, errores y superficies expuestas; no desplegar sin superar los gates anteriores.
+- [x] **ZL-027. Reducir trabajo duplicado.** Revisar la duplicación de CI para `push` y `pull_request` y adoptar concurrency/cancel-in-progress cuando sea seguro.
+- [x] **ZL-028. Documentación.** Sincronizar README con el inventario real de 23 herramientas MCP y añadir guía de recuperación, operación local y límites de evidencia.
+- [x] **ZL-029. Revisión de seguridad de release.** Evaluar rutas, bloqueo de estado, secretos, errores y superficies expuestas; no desplegar sin superar los gates anteriores.
 
 **Gate:** CI verde, revisión real y reproducible, controles de rama comprobados, E2E documentado y aprobación humana para cualquier entrega.
 
@@ -106,6 +113,6 @@
 
 ## Prioridad de implementación
 
-ZL-001 a ZL-003 y ZL-005 a ZL-009 tienen implementación local y pruebas; ZL-004 mantiene pendiente el enforcement del ejecutor real. Debe validarse la aplicación efectiva de permisos en el anfitrión antes de operar autónomamente. A continuación, RDD confiable. Integración real con el anfitrión puede desarrollarse en paralelo siempre que no omita los controles de permisos. Rendimiento y automatización de entrega se abordan después de asegurar recuperación y evidencia.
+ZL-001 a ZL-003 y ZL-005 a ZL-009 tienen implementación local y pruebas; ZL-004 mantiene pendiente el enforcement del ejecutor real. Debe validarse la aplicación efectiva de permisos en el anfitrión antes de operar autónomamente. La implementación local de RDD, SDK MCP y gates CI/release ya está desarrollada. Falta completar la Fase 4, protección administrativa de GitHub, enforcement del ejecutor y E2E real de GPT antes de liberar software.
 
 **Criterio de versión lista:** una única cuenta GPT puede iniciar más de una misión en momentos distintos, completar trabajo, recuperarse de interrupciones, ejecutar las cuatro perspectivas con procedencia honesta y presentar una decisión verificable sobre un candidato Git sin declarar aprobaciones o capacidades inexistentes.

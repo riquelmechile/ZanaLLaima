@@ -56,12 +56,12 @@ The state backend uses SQLite WAL (schema v3), with conservative JSON migration,
 - `src/cli.mjs`: command-line interface for development and inspection.
 - `AGENTS.md`: instructions for a host using this project.
 
-This is an initial **local development release**, not a public remote ChatGPT app or an autonomous background agent. Remote connectivity would need its own security and OAuth design. Node.js 22.16+ is required; runtime dependencies are pinned to `@modelcontextprotocol/server` and `zod`; install with `npm install --ignore-scripts --no-audit --no-fund`.
+This is an initial **local development release**, not a public remote ChatGPT app or an autonomous background agent. Remote connectivity would need its own security and OAuth design. Node.js 22.16+ is required; runtime dependencies are pinned to `@modelcontextprotocol/server` and `zod`; install with `npm ci --ignore-scripts --no-audit --no-fund`.
 
 ## Try it locally
 
 ```bash
-npm install --ignore-scripts --no-audit --no-fund
+npm ci --ignore-scripts --no-audit --no-fund
 npm run check
 npm test
 npm run cli -- profile
@@ -97,9 +97,25 @@ The MCP transport is **stdio-only** and assumes a trusted local operator. Do not
 
 Use `node src/cli.mjs storage-status` for integrity and schema status; `storage-history 25` and `storage-reviews 25` for paginated data. To migrate a legacy JSON state, stop other clients and execute `storage-migrate`. For an SQLite-consistent backup run `storage-backup /new/backup.sqlite`. Restoring a backup requires all clients stopped and `ZANA_RESTORE_OFFLINE=1 node src/cli.mjs storage-restore /backup.sqlite`. Review [the operational precautions](docs/sqlite-storage.md) first.
 
+## Phase 5: CI and release security
+
+Dependencies are locked in `package-lock.json` and installed with `npm ci --ignore-scripts`. GitHub Actions tests the exact pull-request HEAD on Node 22.16.0, 22.23.4 and 24, using SHA-pinned actions, read-only permissions, non-persisted checkout credentials and a bounded job timeout. PR updates use one `pull_request` trigger; `push` runs only on `main`. Coverage is measured on `src/*.mjs` separately from the test files; multi-process contention, security preflight and a production dependency audit run in CI.
+
+```sh
+npm ci --ignore-scripts --no-audit --no-fund
+npm run check
+npm run release:preflight
+npm test
+npm run test:stress
+npm run test:coverage
+npm audit --omit=dev --audit-level=high
+```
+
+The static preflight reports `releaseAuthorized:false` even when all local checks pass. GitHub branch protection, independent review, trusted CI attestations and real host-enforced permissions are separate release requirements. Details, open blockers and recommended administrator settings: [release security assessment](docs/release-security.md).
+
 ## Verification
 
-`npm run check` validates the Node modules. `npm test` covers permissions, cycles, model mismatch, parallel read batches, serialized writes, stale tokens, lock behavior and MCP handshake. A passing CI run verifies those code paths, not the real model configuration or actual native subagent fanout.
+`npm run check` validates Node module syntax. `npm test` covers core state, adversarial permissions, Git-bound reviews and official MCP integration; `npm run test:stress` checks concurrent process fencing; `npm run test:coverage` measures production-source coverage with mandatory thresholds. None of these checks attests real native subagent execution or authorizes release.
 
 
 ## Single-account RDD

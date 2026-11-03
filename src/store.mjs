@@ -6,7 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { operatorPublicKey, verifySignedAction, verifyStoredGrant } from './operator.mjs';
 import { reconcileWrite, revokeRunningWrites } from './lifecycle.mjs';
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 const MAX_EVENTS = 2000;
 const MAX_ARCHIVES = 200;
 const BUSY_MS = 10000;
@@ -64,6 +64,7 @@ function connect(path, readonly = false) {
         if(!columns.includes('lifecycle')) db.exec("ALTER TABLE active_mission ADD COLUMN lifecycle TEXT NOT NULL DEFAULT 'ACTIVE'");
         if(!columns.includes('closed_at')) db.exec('ALTER TABLE active_mission ADD COLUMN closed_at TEXT');
         if(!columns.includes('review_count')) db.exec('ALTER TABLE active_mission ADD COLUMN review_count INTEGER NOT NULL DEFAULT 0');
+        if(!columns.includes('budget')) db.exec('ALTER TABLE active_mission ADD COLUMN budget TEXT');
         const unitColumns=db.prepare('PRAGMA table_info(units)').all().map(x=>x.name);
         if(!unitColumns.includes('attempts')) db.exec('ALTER TABLE units ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0');
         db.exec('PRAGMA user_version = ' + SCHEMA_VERSION + '; COMMIT');
@@ -108,7 +109,7 @@ function load(db) {
       attempts:x.attempts||0, run:parse(x.run), result:parse(x.result) }));
   const r = db.prepare('SELECT content FROM active_review WHERE mission_id=?').get(m.id);
   const state = { schema:1, id:m.id, status:m.lifecycle||'ACTIVE', objective:m.objective,
-    authorization:parse(m.authorization), revision:m.revision, reviewCount:m.review_count||0, createdAt:m.created_at, units };
+    authorization:parse(m.authorization), revision:m.revision, reviewCount:m.review_count||0, createdAt:m.created_at, budget:parse(m.budget),units };
   if(m.closed_at)state.closedAt=m.closed_at;
   if (r) state.review = parse(r.content);
   return validate(state);
@@ -134,11 +135,11 @@ function persist(db, previous, next, kind = 'STATE_CHANGED') {
   if (previous && previous.id !== next.id) fail('Replacing an active mission is not authorized');
   if (previous && next.revision < previous.revision) fail('Mission revision went backwards');
   if (!previous) {
-    db.prepare('INSERT INTO active_mission(slot,id,objective,authorization,revision,created_at,updated_at,lifecycle,closed_at,review_count) VALUES(1,?,?,?,?,?,?,?,?,?)')
-      .run(next.id,next.objective,json(next.authorization),next.revision,next.createdAt,now(),next.status||'ACTIVE',next.closedAt||null,next.reviewCount||0);
+    db.prepare('INSERT INTO active_mission(slot,id,objective,authorization,revision,created_at,updated_at,lifecycle,closed_at,review_count,budget) VALUES(1,?,?,?,?,?,?,?,?,?,?)')
+      .run(next.id,next.objective,json(next.authorization),next.revision,next.createdAt,now(),next.status||'ACTIVE',next.closedAt||null,next.reviewCount||0,json(next.budget??null));
   } else {
-    db.prepare('UPDATE active_mission SET objective=?, authorization=?, revision=?, updated_at=?, lifecycle=?, closed_at=?, review_count=? WHERE slot=1')
-      .run(next.objective,json(next.authorization),next.revision,now(),next.status||'ACTIVE',next.closedAt||null,next.reviewCount||0);
+    db.prepare('UPDATE active_mission SET objective=?, authorization=?, revision=?, updated_at=?, lifecycle=?, closed_at=?, review_count=?, budget=? WHERE slot=1')
+      .run(next.objective,json(next.authorization),next.revision,now(),next.status||'ACTIVE',next.closedAt||null,next.reviewCount||0,json(next.budget??null));
   }
 
   const prior = new Map((previous?.units || []).map(x => [x.id,x]));

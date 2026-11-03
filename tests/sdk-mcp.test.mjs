@@ -116,7 +116,7 @@ test('a single local SDK client completes READ mission and four-lens RDD without
     assert.equal(status.value.independentReviewVerified,false);
     const verify=await c.call('zana_review_check');
     assert.equal(verify.value.gate,'SELF_CHECK_COMPLETE_UNVERIFIED');
-    const missing=await c.call('zana_review_start');
-    assert.equal(missing.response.isError,true);
+    const missing=await c.client.callTool({name:'zana_review_start',arguments:{}});
+    assert.equal(missing.isError,true);
   }finally{if(c)await c.client.close();await f.cleanup();}
 });

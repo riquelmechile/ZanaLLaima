@@ -30,6 +30,7 @@ test('MCP stdio handshake and native workflow tools are available', async () => 
     const negotiated=await response(1);
     assert.ok(negotiated.result,JSON.stringify(negotiated));
     assert.equal(negotiated.result.serverInfo.name,'zana-llaima');
+    assert.equal(negotiated.result.protocolVersion,'2025-11-25');
     send({jsonrpc:'2.0',method:'notifications/initialized'});
     send({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
     assert.equal((await response(2)).result.tools.length, 23);

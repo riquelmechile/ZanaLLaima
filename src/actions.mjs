@@ -4,6 +4,8 @@ import { readState, transact, readHistory, readReviewArchive, storageStatus, mig
 import { openReview, reviewStatus, nextReviewBatch, startReviewBatch, submitReview, checkCandidate } from './review.mjs';
 import { heartbeatUnit, expireUnits, retryRead, cancelMission, closeMission } from './lifecycle.mjs';
 import { verifyWorkspacePaths } from './paths.mjs';
+import { observeGit, matchesReviewCandidate } from './git-evidence.mjs';
+import { deliveryGate, readVerifierKey } from './delivery.mjs';
 
 export const operations = {
   profile: async () => ({ requested: HOST_REQUEST, assurance: 'REQUESTED_ONLY' }),
@@ -48,51 +50,96 @@ export const operations = {
     });
     return batch;
   },
-  reviewOpen: async (args) => {
+  reviewOpen: async (args = {}) => {
+    const observation=observeGit();
+    if(!observation.clean)throw Error('Review requires a clean Git worktree');
+    if(args.candidateSha && args.candidateSha!==observation.candidateSha)
+      throw Error('Candidate SHA differs from verified local Git HEAD');
     let status;
-    await transact(existing => {
-      if (!existing) throw Error('No mission initialized');
-      status = openReview(existing, args);
+    await transact(existing=>{
+      if(!existing)throw Error('No mission initialized');
+      status=openReview(existing,{...args,candidateSha:observation.candidateSha,
+        gitEvidence:observation});
       return existing;
     });
     return status;
   },
   reviewStatus: async () => {
-    const state = await readState();
-    if (!state) throw Error('No mission initialized');
-    return reviewStatus(state);
+    const state=await readState();
+    if(!state)throw Error('No mission initialized');
+    if(!state.review?.gitEvidence)return reviewStatus(state);
+    const observation=observeGit();
+    if(matchesReviewCandidate(state.review,observation))return reviewStatus(state);
+    let status;
+    await transact(existing=>{
+      status=checkCandidate(existing,observation.candidateSha,observation);
+      return existing;
+    });
+    return status;
   },
-  reviewNext: async () => {
-    const state = await readState();
-    if (!state) throw Error('No mission initialized');
-    return nextReviewBatch(state);
+  reviewNext: async ({hostReport}={}) => {
+    const state=await readState();
+    if(!state)throw Error('No mission initialized');
+    if(state.review?.gitEvidence){
+      const obs=observeGit();
+      if(!matchesReviewCandidate(state.review,obs)){
+        let status;
+        await transact(existing=>{
+          status=checkCandidate(existing,obs.candidateSha,obs);
+          return existing;
+        });
+        return status;
+      }
+    }
+    return nextReviewBatch(state,hostReport);
   },
-  reviewStart: async () => {
+  reviewStart: async ({hostReport}={}) => {
+    const obs=observeGit();
     let result;
-    await transact(existing => {
-      if (!existing) throw Error('No mission initialized');
-      result = startReviewBatch(existing);
+    await transact(existing=>{
+      if(!existing)throw Error('No mission initialized');
+      if(existing.review?.gitEvidence){
+        const check=checkCandidate(existing,obs.candidateSha,obs);
+        if(check.gate==='INVALIDATED_CANDIDATE'){result=check;return existing;}
+      }
+      result=startReviewBatch(existing,hostReport);
       return existing;
     });
     return result;
   },
-  reviewSubmit: async (args) => {
-    let status;
-    await transact(existing => {
-      if (!existing) throw Error('No mission initialized');
-      status = submitReview(existing, args);
+  reviewSubmit: async args => {
+    const obs=observeGit();
+    let result;
+    await transact(existing=>{
+      if(!existing)throw Error('No mission initialized');
+      if(existing.review?.gitEvidence){
+        const check=checkCandidate(existing,obs.candidateSha,obs);
+        if(check.gate==='INVALIDATED_CANDIDATE'){result=check;return existing;}
+      }
+      result=submitReview(existing,args);
       return existing;
     });
-    return status;
+    return result;
   },
-  reviewCheckCandidate: async ({ observedSha }) => {
-    let status;
-    await transact(existing => {
-      if (!existing) throw Error('No mission initialized');
-      status = checkCandidate(existing, observedSha);
+  reviewCheckCandidate: async () => {
+    const obs=observeGit();
+    let result;
+    await transact(existing=>{
+      if(!existing)throw Error('No mission initialized');
+      result=checkCandidate(existing,obs.candidateSha,obs);
       return existing;
     });
-    return status;
+    return result;
+  },
+  deliveryCheck: async ({ciEnvelope=null,operatorEnvelope=null}={}) => {
+    const state=await readState();
+    if(!state)throw Error('No mission initialized');
+    const observation=observeGit();
+    return deliveryGate(state,observation,{
+      ciEnvelope,operatorEnvelope,
+      ciKey:readVerifierKey(process.env.ZANA_CI_PUBLIC_KEY_PATH),
+      operatorKey:readVerifierKey(process.env.ZANA_OPERATOR_PUBLIC_KEY_PATH),
+    });
   },
 
   heartbeat: async args => {

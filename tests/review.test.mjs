@@ -46,3 +46,11 @@ test('native packet planning does not grant verified approval', () => {
   assert.equal(reviewStatus(m).gate, 'NATIVE_4R_REPORTED_UNVERIFIED');
   assert.equal(reviewStatus(m).independentReviewVerified, false);
 });
+
+test('candidate cannot be replaced silently', () => {
+  const m = prepared();
+  openReview(m, { candidateSha: shaA });
+  assert.equal(checkCandidate(m, shaB).gate, 'INVALIDATED_CANDIDATE');
+  openReview(m, { candidateSha: shaB });
+  assert.equal(m.reviewHistory.length, 1);
+});

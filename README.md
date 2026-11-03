@@ -51,3 +51,17 @@ The MCP adapter is **stdio-only** and assumes a trusted local operator. Do not e
 ## Verification
 
 `npm run check` validates the Node modules. `npm test` covers permissions, cycles, model mismatch, parallel read batches, serialized writes, stale tokens, lock behavior and MCP handshake. A passing CI run verifies those code paths, not the real model configuration or actual native subagent fanout.
+
+
+## Single-account RDD
+
+After all mission units are complete, freeze the exact Git candidate and run a four-lens review. The same GPT can handle all lenses sequentially, or the host may launch up to four genuinely available native contexts. The local control plane prepares packets but never launches agents itself.
+
+```sh
+node src/cli.mjs review-open $(git rev-parse HEAD)
+node src/cli.mjs review-next
+node src/cli.mjs review-start
+node src/cli.mjs review-status
+```
+
+Use `review-submit` with exact lens ID, packet token, candidate SHA and actual evidence. Check for candidate changes using `review-check`. A complete self-review is **not an independent approval**; host-reported native review is also unverified. Both always report `approved: false`. See [the local review contract](docs/solo-rdd.md).

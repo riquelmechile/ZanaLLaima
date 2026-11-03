@@ -32,3 +32,17 @@ test('sequential review requires four completions', () => {
   assert.equal(reviewStatus(m).gate, 'SELF_CHECK_COMPLETE_UNVERIFIED');
   assert.equal(reviewStatus(m).approved, false);
 });
+
+test('native packet planning does not grant verified approval', () => {
+  const m = prepared();
+  openReview(m, { candidateSha: shaA, hostReport: {
+    model: 'gpt-6-astra', reasoningEffort: 'max',
+    nativeSubagents: { available: true, maxConcurrent: 4 }
+  } });
+  const packets = startReviewBatch(m).packets;
+  assert.equal(packets.length, 4);
+  for (let i = 0; i < packets.length; i++)
+    submitReview(m, outcome(packets[i], 'NATIVE_SUBAGENT', 'context-' + i));
+  assert.equal(reviewStatus(m).gate, 'NATIVE_4R_REPORTED_UNVERIFIED');
+  assert.equal(reviewStatus(m).independentReviewVerified, false);
+});

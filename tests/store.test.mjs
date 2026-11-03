@@ -4,7 +4,7 @@ import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMission, startBatch, completeUnit } from '../src/core.mjs';
-import { openReview } from '../src/review.mjs';
+import { openReview, startReviewBatch, submitReview, reviewStatus } from '../src/review.mjs';
 import { transact, readState, databasePath, storageStatus, readHistory,
   readReviewArchive, backupState, restoreBackup, migrateLegacy } from '../src/store.mjs';
 
@@ -171,5 +171,35 @@ test('conflicting legacy backup blocks migration without changing source data',a
     await assert.rejects(migrateLegacy(f.file),/migration backup differs/);
     assert.equal(await readFile(f.file,'utf8'),previous);
     assert.equal((await readState(f.file)).id,JSON.parse(previous).id);
+  }finally{await f.cleanup();}
+});
+
+test('review receipts retain packet identities privately and public queries redact tokens',async()=>{
+  const f=await fixture();
+  try {
+    await transact(()=>createMission(input()),f.file);
+    await transact(s=>{
+      const packet=startBatch(s).batch.packets[0];
+      completeUnit(s,packet.unitId,packet.token,{success:true,
+        summary:'Verified all source files',evidence:['Reviewed tests']});
+      return s;
+    },f.file);
+    await transact(s=>{openReview(s,{candidateSha:'a'.repeat(40)});return s;},f.file);
+    let packet;
+    await transact(s=>{packet=startReviewBatch(s).packets[0];return s;},f.file);
+    await transact(s=>{submitReview(s,{lensId:packet.lensId,token:packet.token,
+      candidateSha:packet.candidateSha,verdict:'PASS',
+      summary:'Completed risk review',evidence:['Verified repository contracts'],
+      execution:'SELF_CONTEXT'});return s;},f.file);
+    assert.equal((await storageStatus(f.file)).reviewReceipts,1);
+    const live=reviewStatus(await readState(f.file));
+    assert.equal(live.lenses[0].result.packetToken,undefined);
+    const history=await readHistory({category:'REVIEW_LENS_DONE'},f.file);
+    assert.equal(history.items.length,1);
+    assert.equal(history.items[0].detail.token,undefined);
+    assert.equal(history.items[0].detail.tokenHash.length,64);
+    await transact(s=>{openReview(s,{candidateSha:'b'.repeat(40)});return s;},f.file);
+    const archive=await readReviewArchive({limit:10},f.file);
+    assert.equal(archive.items[0].review.lenses[0].result.packetToken,undefined);
   }finally{await f.cleanup();}
 });

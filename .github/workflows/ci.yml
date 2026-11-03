@@ -44,6 +44,9 @@ jobs:
       - name: Coverage gate
         if: matrix.node == '22.23.4'
         run: npm run test:coverage
+      - name: Phase 4 measured SQLite and scheduler benchmark
+        if: matrix.node == '22.23.4'
+        run: npm run benchmark:phase4
       - name: Production dependency vulnerability audit
         if: matrix.node == '22.23.4'
         run: npm audit --omit=dev --audit-level=high

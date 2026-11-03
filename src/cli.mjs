@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { operations } from './actions.mjs';
 
 const [command, ...args] = process.argv.slice(2);
-const usage = 'Usage: node src/cli.mjs profile | init <spec.json> | status | next [host.json] | start [host.json] | complete <unit-id> <run-token> <outcome.json>';
+const usage = 'Commands: profile, init, status, next, start, complete, review-open, review-next, review-start, review-submit, review-check, review-status';
 const readJson = async path => JSON.parse(await readFile(path, 'utf8'));
 try {
   let input = {};

@@ -38,3 +38,9 @@ For files under the workspace root, reject symbolic links and recheck permission
 Use the Git-bound commands in `docs/solo-rdd.md`. Before opening a review, confirm that the local commit and worktree are clean. Do not submit a synthetic SHA or claim an unverified branch, target or Git tree. Check Git again before each review packet and the release decision. Any drift invalidates old packets and requires a newly committed candidate. The verified correction loop is bounded to five rounds.
 
 Never present four reported context IDs as independent verification. Respect the available native capacity, including a fallback to one self-review context when it disappears; do not share other lenses' outputs before completion. A signed CI attestation must come from an external verifier with a separate key, and the operator approval must be signed independently. The delivery gate returns only manual-release readiness and cannot authorize merging or deployment.
+
+## Official MCP SDK and host provenance
+
+The local MCP transport uses the official SDK v2; read [docs/mcp-v2.md](docs/mcp-v2.md). Treat `zana_capability_status.requested` as configuration intent, `hostReported` as an unverified user/host report, and `verified` as independent evidence unavailable until an external authenticated integration exists. Never infer model, effort, context isolation, native launch count, or permissions from a report.
+
+Work with one authenticated host context, complete `READ` tasks, then run the four RDD lenses in solo mode when native subagents cannot truly be launched. Cancellation can arrive after a committed effect: inspect mission state, preserve uncertainty and do not repeat a `WRITE`. Keep MCP on local stdio only; never manufacture an HTTP endpoint, callback or bearer token.

@@ -56,11 +56,12 @@ The state backend uses SQLite WAL (schema v3), with conservative JSON migration,
 - `src/cli.mjs`: command-line interface for development and inspection.
 - `AGENTS.md`: instructions for a host using this project.
 
-This is an initial **local development release**, not a public remote ChatGPT app or an autonomous background agent. Remote connectivity would need its own security and OAuth design. Node.js 22.16+ is required; there are no npm runtime dependencies.
+This is an initial **local development release**, not a public remote ChatGPT app or an autonomous background agent. Remote connectivity would need its own security and OAuth design. Node.js 22.16+ is required; runtime dependencies are pinned to `@modelcontextprotocol/server` and `zod`; install with `npm install --ignore-scripts --no-audit --no-fund`.
 
 ## Try it locally
 
 ```bash
+npm install --ignore-scripts --no-audit --no-fund
 npm run check
 npm test
 npm run cli -- profile
@@ -78,11 +79,19 @@ node src/cli.mjs complete <unit-id> <run-token> actual-outcome.json
 
 Each result must contain `success` (boolean), a factual `summary` and a nonempty list of `evidence`. The JSON in `examples/outcome.json` is **illustrative only**, not a valid substitute for actual checks. Use `ZANA_STATE_FILE=/safe/path/state.json` to select a separate state file. The default is `.zana/state.json`, which is ignored by Git. Only one active mission per state file is supported; close/archive the prior mission before starting the next.
 
+## Phase 3: official MCP SDK and capability provenance
+
+The MCP server is implemented using [the official TypeScript SDK v2](docs/mcp-v2.md), with protocol 2026-07-28 support and a verified local legacy handshake for 2025-11-25. The client-side automated test launches a genuine SDK stdio server process and completes a READ mission followed by sequential four-lens review. The test **does not involve a model**.
+
+Call `zana_capability_status` to distinguish `requested`, `hostReported`, and `verified`. The latter is intentionally `NOT_OBSERVED` until a real host provides independent authenticated evidence. Never pass a claimed verification flag through a host report and treat it as proof.
+
+Remote transport, OAuth, actual host model verification, and native subagents remain deferred. Local stdio has no public URL or bearer token. SDK cancellation is cooperative: inspect persisted state after lost calls before attempting any retry.
+
 ## Connect to a local MCP-compatible host
 
-Start the local transport with `npm start` or configure the client command `node /absolute/path/to/ZanaLLaima/src/mcp.mjs`. The MCP exposes 22 local tools for mission lifecycle, bounded retry, lease heartbeats, RDD and read-only storage status. Signed operator actions, backup, restore and archival remain CLI-only operations. Storage migration, backup and restore are operator-only CLI commands, not MCP tools. All use local files and the authenticated capabilities of the *calling application*, not an API key stored here.
+Start the local transport with `npm start` or configure the client command `node /absolute/path/to/ZanaLLaima/src/mcp.mjs`. The MCP now exposes **23 local tools** through the official TypeScript SDK v2 over stdio, including `zana_capability_status`. The SDK validates requests, negotiates the protocol and returns recoverable `isError` tool results. The server still does not connect to ChatGPT or launch real subagents. Signed operator actions, backup, restore and archival remain CLI-only operations. Storage migration, backup and restore are operator-only CLI commands, not MCP tools. All use local files and the authenticated capabilities of the *calling application*, not an API key stored here.
 
-The MCP adapter is **stdio-only** and assumes a trusted local operator. Do not expose it as an unauthenticated HTTP endpoint. ChatGPT web app integration and real subagent launch must be tested separately on a host that supports those features.
+The MCP transport is **stdio-only** and assumes a trusted local operator. Do not expose it as an unauthenticated HTTP endpoint. ChatGPT web app integration and real subagent launch must be tested separately on a host that supports those features.
 
 ## Storage operator commands
 

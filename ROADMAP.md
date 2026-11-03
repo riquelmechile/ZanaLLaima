@@ -1,6 +1,6 @@
 # Roadmap técnico de ZanaLLaima
 
-**Estado:** backlog propuesto, sin implementación de los cambios aquí enumerados.
+**Estado:** seguimiento vivo de fases implementadas localmente y gates pendientes de integración.
 **Corte de auditoría:** 2026-11-03, commit `df9535a41f774daa547b28812b5125765ce78238`, PR #1.
 **Objetivo:** un único anfitrión GPT que planifique, ejecute con sus capacidades nativas, se recupere de interrupciones y revise resultados con evidencia verificable, sin delegación entre cuentas ni llamadas a APIs de inferencia.
 
@@ -21,7 +21,7 @@
 | 0 | P0 | Evitar bloqueos, errores de autorización y pérdidas de trabajo | [ ] Control local probado; gate real de escrituras del anfitrión pendiente |
 | 1 | P1 | Persistencia transaccional y recuperación tras reinicio | [x] Implementada y probada; gate operacional pendiente de Fase 0 |
 | 2 | P1 | RDD verificable sobre SHA exacto y revisión de una sola cuenta | [x] Motor local y pruebas; integración real pendiente |
-| 3 | P1 | MCP compatible e integración real con el anfitrión GPT | [ ] Pendiente |
+| 3 | P1 | MCP compatible e integración real con el anfitrión GPT | [ ] SDK y E2E local implementados; ZL-018 real pendiente |
 | 4 | P2 | Aprovechar paralelismo nativo y mejorar rendimiento | [ ] Pendiente |
 | 5 | P2 | CI, seguridad de repositorio y criterios de entrega | [ ] Pendiente |
 
@@ -65,13 +65,15 @@
 
 ### Fase 3. MCP e integración de anfitrión (P1; depende de fase 0; puede avanzar en paralelo a fases 1 y 2)
 
-- [ ] **ZL-016. SDK MCP oficial.** Reemplazar o encapsular el parser `stdio` manual; validar negociación de versiones, esquema, notificaciones, cancelación y errores recuperables `isError`.
-- [ ] **ZL-017. Contrato de capacidades.** Distinguir `REQUESTED`, `HOST_REPORTED` y `VERIFIED`; nunca permitir que un informe del modelo cambie permisos efectivos.
-- [ ] **ZL-018. Prueba con una cuenta GPT real.** Verificar, con recibos observables, qué controles de modelo/esfuerzo y qué lanzadores nativos existen en esa superficie; medir cuántos subagentes funcionan de verdad.
-- [ ] **ZL-019. Sin subagentes.** Completar una misión y su 4R en un solo contexto, sin fingir paralelismo ni independencia.
-- [ ] **ZL-020. Límite de exposición.** Mantener `stdio` local por defecto. Cualquier interfaz remota requiere diseño explícito de autenticación, autorización, transporte seguro, cuotas y pruebas negativas antes de habilitarla.
+**Código desarrollado en PR #1:** SDK oficial MCP v2 `stdio` con esquemas de entrada y errores `isError`; capacidad `requested` / `hostReported` / `verified` (sin evidencia real de modelo); cliente SDK que completa misión READ y 4R secuencial; cancelación cooperativa y alcance exclusivamente local. Ver `docs/mcp-v2.md`. **ZL-018 permanece abierto por decisión de terminar el software antes de conectar y probar una cuenta ChatGPT real.** No atribuir al test local independencia de subagentes o certificación de anfitrión.
 
-**Gate:** un cliente MCP compatible completa una misión real end-to-end, con comportamiento comprobado en modo individual y modo nativo si está disponible.
+- [x] **ZL-016. SDK MCP oficial.** Reemplazar o encapsular el parser `stdio` manual; validar negociación de versiones, esquema, notificaciones, cancelación y errores recuperables `isError`.
+- [x] **ZL-017. Contrato de capacidades.** Distinguir `REQUESTED`, `HOST_REPORTED` y `VERIFIED`; nunca permitir que un informe del modelo cambie permisos efectivos.
+- [ ] **ZL-018. Prueba con una cuenta GPT real.** Verificar, con recibos observables, qué controles de modelo/esfuerzo y qué lanzadores nativos existen en esa superficie; medir cuántos subagentes funcionan de verdad.
+- [x] **ZL-019. Sin subagentes.** Completar una misión y su 4R en un solo contexto, sin fingir paralelismo ni independencia.
+- [x] **ZL-020. Límite de exposición.** Mantener `stdio` local por defecto. Cualquier interfaz remota requiere diseño explícito de autenticación, autorización, transporte seguro, cuotas y pruebas negativas antes de habilitarla.
+
+**Gate local superado:** cliente oficial SDK en `stdio` y misión READ+4R completa sin subagentes. **Gate real pendiente:** validar conexión a ChatGPT, configuración efectiva, permisos del ejecutor y lanzamiento de contextos nativos cuando la aplicación los exponga. Nada de esto ha sido simulado como aprobación.
 
 ### Fase 4. Rendimiento y planificación (P2; depende de fases 0 y 1)
 

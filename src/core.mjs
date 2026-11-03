@@ -126,6 +126,8 @@ export function nextBatch(mission, report = {}, grant = null) {
   if((mission.status||'ACTIVE')!=='ACTIVE')return blocked('Mission not active');
   if(!host.allowed)return blocked('The reported model/effort differs from the required host request.');
   if(budgetExpired(mission))return blocked('Mission deadline expired; cancel or reconcile before further work');
+  if(mission.budget?.deadlineAt && Date.parse(mission.budget.deadlineAt)-Date.now()<5000)
+    return blocked('Mission deadline too close to reserve a safe minimum lease');
   if(mission.units.some(u=>u.status==='OUTCOME_UNKNOWN'))
     return blocked('Uncertain write outcome requires signed operator reconciliation');
 
@@ -181,7 +183,8 @@ export function startBatch(mission, report = {}, grant = null, leaseSeconds = Ma
     unit.status = 'RUNNING';
     const startedAt=stamp();
     unit.run = { token, leaseGeneration: (unit.run?.leaseGeneration ?? 0) + 1, startedAt,
-      heartbeatAt:startedAt,expiresAt:new Date(Date.now()+leaseSeconds*1000).toISOString(),
+      heartbeatAt:startedAt,expiresAt:new Date(Math.min(Date.now()+leaseSeconds*1000,
+        budgetOf(mission).deadlineAt?Date.parse(budgetOf(mission).deadlineAt):Infinity)).toISOString(),
       mode: plan.host.executionMode, evidence: plan.host.capabilityEvidence };
     return { missionId: mission.id, unitId: unit.id, token,
       leaseGeneration:unit.run.leaseGeneration,expiresAt:unit.run.expiresAt,

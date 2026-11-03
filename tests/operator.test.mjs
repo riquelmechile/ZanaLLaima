@@ -7,7 +7,7 @@ import { mkdtemp, mkdir, symlink, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMission, startBatch, completeUnit } from '../src/core.mjs';
-import { closeMission } from '../src/lifecycle.mjs';
+import { closeMission, cancelMission } from '../src/lifecycle.mjs';
 import { verifyWorkspacePaths } from '../src/paths.mjs';
 import { transact, readState, applyOperatorAction, authorizationStatus,
   archiveMission, readMissionArchive, storageStatus } from '../src/store.mjs';
@@ -159,5 +159,28 @@ test('an expired signed approval cannot open a WRITE claim',async()=>{
     expired.payload.expiresAt=new Date(Date.now()-10).toISOString();
     await assert.rejects(applyOperatorAction(expired,f.file),/expired/);
     assert.equal((await authorizationStatus(f.file)).valid,false);
+  }finally{await f.cleanup();}
+});
+
+test('cancel revokes active authorization and requires signed reconciliation',async()=>{
+  const f=await setup();
+  try{
+    const m=await transact(()=>createMission(proposal()),f.file);
+    await applyOperatorAction(f.signed('GRANT_WRITE',m.id,{paths:['docs']}),f.file);
+    let packet;
+    await transact((state,ctx)=>{
+      packet=startBatch(state,{},ctx.writeGrant).batch.packets[0];return state;
+    },f.file);
+    await transact(state=>{cancelMission(state);return state;},f.file);
+    assert.equal((await readState(f.file)).status,'CANCELLING');
+    assert.equal((await authorizationStatus(f.file)).valid,false);
+    assert.equal((await readState(f.file)).units[0].status,'OUTCOME_UNKNOWN');
+    await assert.rejects(archiveMission(f.file),/closed or cancelled/);
+    await applyOperatorAction(f.signed('RECONCILE_WRITE',m.id,{unitId:'guide',
+      token:packet.token,leaseGeneration:packet.leaseGeneration,
+      decision:'CONFIRMED_NO_EFFECT',
+      evidence:['Operator checked the disk and no document was created']}),f.file);
+    assert.equal((await readState(f.file)).status,'CANCELLED');
+    assert.equal((await archiveMission(f.file)).archived,true);
   }finally{await f.cleanup();}
 });

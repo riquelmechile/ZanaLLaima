@@ -6,7 +6,7 @@
   "engines": {"node": ">=22.16.0"},
   "scripts": {
     "test": "node --test tests/*.test.mjs",
-    "check": "node --check src/core.mjs && node --check src/review.mjs && node --check src/lifecycle.mjs && node --check src/operator.mjs && node --check src/paths.mjs && node --check src/actions.mjs && node --check src/store.mjs && node --check src/cli.mjs && node --check src/mcp.mjs",
+    "check": "node --check src/core.mjs && node --check src/review.mjs && node --check src/git-evidence.mjs && node --check src/delivery.mjs && node --check src/lifecycle.mjs && node --check src/operator.mjs && node --check src/paths.mjs && node --check src/actions.mjs && node --check src/store.mjs && node --check src/cli.mjs && node --check src/mcp.mjs",
     "start": "node src/mcp.mjs",
     "cli": "node src/cli.mjs"
   },

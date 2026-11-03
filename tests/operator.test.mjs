@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync, randomUUID, sign } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
 import { mkdtemp, mkdir, symlink, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -109,5 +111,53 @@ test('workspace path inspection rejects symbolic links and traversal',async()=>{
     const safe=await verifyWorkspacePaths(['docs/guide.md'],f.dir);
     assert.equal(safe.scopeVerified,true);
     assert.equal(safe.assurance,'PATH_INSPECTED_NOT_ATOMIC_WRITE_ENFORCEMENT');
+  }finally{await f.cleanup();}
+});
+
+test('a crashed write remains uncertain and never replays automatically',async()=>{
+  const f=await setup();
+  try{
+    const m=await transact(()=>createMission(proposal()),f.file);
+    await applyOperatorAction(f.signed('GRANT_WRITE',m.id,{paths:['docs']}),f.file);
+    let claimed;
+    await transact((state,ctx)=>{
+      claimed=startBatch(state,{},ctx.writeGrant,5).batch.packets[0];
+      return state;
+    },f.file);
+    const target=join(f.dir,'docs','guide.md');
+    const child=spawnSync(process.execPath,['-e',
+      "require('node:fs').writeFileSync(process.argv[1],'written once');process.exit(57)",
+      target],{encoding:'utf8'});
+    assert.equal(child.status,57,child.stderr);
+    await transact(state=>{
+      state.units[0].run.expiresAt=new Date(Date.now()-1000).toISOString();
+      state.revision++;return state;
+    },f.file);
+    const recovery=spawnSync(process.execPath,['src/cli.mjs','recover-expired'],
+      {cwd:process.cwd(),encoding:'utf8',
+        env:{...process.env,ZANA_STATE_FILE:f.file}});
+    assert.equal(recovery.status,0,recovery.stderr);
+    assert.equal(JSON.parse(recovery.stdout).changed[0].status,'OUTCOME_UNKNOWN');
+    assert.equal(await readFile(target,'utf8'),'written once');
+    await assert.rejects(transact((state,ctx)=>{
+      startBatch(state,{},ctx.writeGrant);return state;
+    },f.file),/No runnable batch/);
+    await applyOperatorAction(f.signed('RECONCILE_WRITE',m.id,{
+      unitId:'guide',token:claimed.token,leaseGeneration:claimed.leaseGeneration,
+      decision:'CONFIRMED_DONE',
+      evidence:['Operator inspected guide.md on disk and confirmed its final content']}),f.file);
+    assert.equal((await readState(f.file)).units[0].status,'DONE');
+    assert.equal(await readFile(target,'utf8'),'written once');
+  }finally{await f.cleanup();}
+});
+
+test('an expired signed approval cannot open a WRITE claim',async()=>{
+  const f=await setup();
+  try{
+    const m=await transact(()=>createMission(proposal()),f.file);
+    const expired=f.signed('GRANT_WRITE',m.id,{paths:['docs']});
+    expired.payload.expiresAt=new Date(Date.now()-10).toISOString();
+    await assert.rejects(applyOperatorAction(expired,f.file),/expired/);
+    assert.equal((await authorizationStatus(f.file)).valid,false);
   }finally{await f.cleanup();}
 });

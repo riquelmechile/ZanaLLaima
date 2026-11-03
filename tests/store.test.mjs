@@ -203,3 +203,36 @@ test('review receipts retain packet identities privately and public queries reda
     assert.equal(archive.items[0].review.lenses[0].result.packetToken,undefined);
   }finally{await f.cleanup();}
 });
+
+test('filesystem errors do not damage the durable mission',async()=>{
+  const f=await fixture();
+  try {
+    const old=await transact(()=>createMission(input()),f.file);
+    const obstruction=join(f.dir,'not-a-directory');
+    await writeFile(obstruction,'regular file');
+    await assert.rejects(backupState(join(obstruction,'backup.sqlite'),f.file),/ENOTDIR/);
+    assert.equal((await storageStatus(f.file)).integrity,'ok');
+    assert.equal((await readState(f.file)).revision,old.revision);
+  }finally{await f.cleanup();}
+});
+
+test('archived review retention never exceeds 200 records',async()=>{
+  const f=await fixture();
+  try{
+    await transact(()=>createMission(input()),f.file);
+    await transact(s=>{
+      const p=startBatch(s).batch.packets[0];
+      completeUnit(s,p.unitId,p.token,{success:true,summary:'Mission validated',
+        evidence:['Actual source validation']});
+      return s;
+    },f.file);
+    for(let i=0;i<204;i++)await transact(s=>{
+      openReview(s,{candidateSha:i.toString(16).padStart(40,'0')});
+      return s;
+    },f.file);
+    assert.equal((await storageStatus(f.file)).archivedReviews,200);
+    const page=await readReviewArchive({limit:100},f.file);
+    const second=await readReviewArchive({limit:100,before:page.nextCursor},f.file);
+    assert.equal(page.items.length+second.items.length,200);
+  }finally{await f.cleanup();}
+});

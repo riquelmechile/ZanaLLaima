@@ -20,6 +20,30 @@ const pathSafe = (p) => typeof p === 'string' && p.length > 0 && p.length <= 240
   !p.startsWith('/') && !p.includes('\\') && p.split('/').every(x => x && x !== '.' && x !== '..');
 const intersects = (a, b) => a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
 const overlaps = (a, b) => a.some(x => b.some(y => intersects(x, y)));
+const MAX_ATTEMPTS=3;
+const LEASE_SECONDS=300;
+export function grantPermits(unit,grant,at=Date.now()){
+  return unit.effect==='READ'||(grant?.valid===true&&
+    Number.isFinite(Date.parse(grant.expiresAt))&&Date.parse(grant.expiresAt)>at&&
+    unit.paths.every(path=>grant.paths?.some(root=>path===root||path.startsWith(root+'/'))));
+}
+function live(mission,unit,token,generation){
+  assert((mission.status||'ACTIVE')==='ACTIVE','Mission not active');
+  assert(unit?.status==='RUNNING'&&unit.run?.token===token,'Invalid or stale run token');
+  assert(generation===undefined||generation===unit.run.leaseGeneration,'Invalid or stale lease generation');
+  assert(unit.run.expiresAt&&Date.parse(unit.run.expiresAt)>Date.now(),
+    'Lease expired; reconciliation required');
+}
+function markUnknown(unit,reason){
+  unit.status='OUTCOME_UNKNOWN';
+  unit.run.uncertainty={reason,since:stamp()};
+}
+export function missionSummary(mission){
+  return {id:mission.id,status:mission.status||'ACTIVE',revision:mission.revision,
+    finished:mission.units.filter(u=>u.status==='DONE').length,
+    uncertain:mission.units.filter(u=>u.status==='OUTCOME_UNKNOWN').length};
+}
+
 
 export function createMission(input) {
   assert(input && typeof input === 'object' && !Array.isArray(input), 'Mission input must be an object');
@@ -53,7 +77,7 @@ export function createMission(input) {
         `Write path outside authorization: ${u.id}`);
     }
     return { id: u.id, instruction: u.instruction, effect: u.effect,
-      dependsOn, paths: unique(paths), status: 'PENDING', run: null, result: null };
+      dependsOn, paths: unique(paths), status: 'PENDING', attempts: 0, run: null, result: null };
   });
   const byId = new Map(units.map(u => [u.id, u]));
   const visited = new Set();
@@ -67,7 +91,7 @@ export function createMission(input) {
     visiting.delete(id); visited.add(id);
   }
   units.forEach(u => walk(u.id));
-  return { schema: 1, id: randomUUID(), objective: input.objective.trim(),
+  return { schema: 1, status:'ACTIVE', id: randomUUID(), objective: input.objective.trim(),
     revision: 0, createdAt: stamp(), authorization: { writesAllowed: authorization.writesAllowed,
       allowedPaths }, units };
 }
@@ -93,8 +117,9 @@ function readyUnits(mission) {
   return mission.units.filter(u => u.status === 'PENDING' && u.dependsOn.every(x => done.has(x)));
 }
 
-export function nextBatch(mission, report = {}) {
+export function nextBatch(mission, report = {}, grant = null) {
   const host = evaluateHost(report);
+  if ((mission.status||'ACTIVE')!=='ACTIVE') return {host,mode:'BLOCKED',units:[],reason:'Mission not active'};
   const running = mission.units.filter(u => u.status === 'RUNNING');
   const ready = readyUnits(mission);
   if (!host.allowed) return { host, mode: 'BLOCKED', units: [], reason: 'The reported model/effort differs from the required host request.' };
@@ -106,27 +131,33 @@ export function nextBatch(mission, report = {}) {
     // not admit concurrent writers, even when their declared paths differ.
     if (unit.effect === 'WRITE' && selected.length > 0) continue;
     if (selected.some(x => x.effect === 'WRITE')) continue;
+    if(!grantPermits(unit,grant))continue;
     selected.push(unit);
   }
   if (!selected.length) return { host, mode: ready.length ? 'BLOCKED' : 'IDLE',
-    units: [], reason: ready.length ? 'No safe batch.' : 'No runnable units.' };
+    units: [], reason: ready.length ? 'No safe or authorized batch.' : 'No runnable units.' };
   return { host, mode: selected.length > 1 ? 'PARALLEL_PLAN' : 'SERIAL_PLAN',
     units: selected.map(x => ({ id: x.id, instruction: x.instruction, effect: x.effect, paths: x.paths })),
     reason: selected.length > 1 ? 'Independent read-only native work, if host supports actual fanout.' :
       'Execute in the currently connected GPT host.' };
 }
 
-export function startBatch(mission, report = {}) {
-  const plan = nextBatch(mission, report);
+export function startBatch(mission, report = {}, grant = null, leaseSeconds = LEASE_SECONDS) {
+  assert(Number.isInteger(leaseSeconds)&&leaseSeconds>=5&&leaseSeconds<=3600,'Lease must be 5-3600 seconds');
+  const plan = nextBatch(mission, report, grant);
   assert(plan.host.allowed, 'Requested model/effort mismatch');
   assert(plan.units.length, `No runnable batch: ${plan.reason}`);
   const packets = plan.units.map(u => {
     const unit = mission.units.find(x => x.id === u.id);
     const token = randomUUID();
+    unit.attempts=(unit.attempts||0)+1;
     unit.status = 'RUNNING';
-    unit.run = { token, leaseGeneration: (unit.run?.leaseGeneration ?? 0) + 1, startedAt: stamp(),
+    const startedAt=stamp();
+    unit.run = { token, leaseGeneration: (unit.run?.leaseGeneration ?? 0) + 1, startedAt,
+      heartbeatAt:startedAt,expiresAt:new Date(Date.now()+leaseSeconds*1000).toISOString(),
       mode: plan.host.executionMode, evidence: plan.host.capabilityEvidence };
     return { missionId: mission.id, unitId: unit.id, token,
+      leaseGeneration:unit.run.leaseGeneration,expiresAt:unit.run.expiresAt,
       instruction: unit.instruction, effect: unit.effect, paths: unit.paths,
       hostRequest: HOST_REQUEST, hostEvidence: plan.host };
   });
@@ -135,16 +166,18 @@ export function startBatch(mission, report = {}) {
     actualSubagentLaunches: 'NOT_OBSERVED', reason: plan.reason } };
 }
 
-export function completeUnit(mission, unitId, token, outcome) {
+export function completeUnit(mission, unitId, token, outcome, generation, grant = null) {
   const unit = mission.units.find(u => u.id === unitId);
-  assert(unit?.status === 'RUNNING' && unit.run?.token === token, 'Invalid or stale run token');
+  live(mission,unit,token,generation);
+  assert(grantPermits(unit,grant),'Effective write permission missing or revoked');
   assert(outcome && typeof outcome === 'object' && typeof outcome.success === 'boolean', 'Invalid outcome');
   assert(typeof outcome.summary === 'string' && outcome.summary.trim().length >= 5 &&
     outcome.summary.length <= 10000, 'Outcome requires a factual summary');
   assert(Array.isArray(outcome.evidence) && outcome.evidence.length > 0 &&
     outcome.evidence.length <= 20 && outcome.evidence.every(x => typeof x === 'string' && x.trim() && x.length <= 2000),
     'Outcome requires bounded evidence items');
-  unit.status = outcome.success ? 'DONE' : 'FAILED';
+  unit.status = outcome.success ? 'DONE' : unit.effect==='WRITE' ? 'OUTCOME_UNKNOWN':'FAILED';
+  if(unit.status==='OUTCOME_UNKNOWN')unit.run.uncertainty={reason:'WRITE_REPORTED_FAILURE',since:stamp()};
   unit.result = { success: outcome.success, summary: outcome.summary,
     evidence: outcome.evidence, recordedAt: stamp(), assurance: 'HOST_REPORTED_UNVERIFIED' };
   mission.revision++;
@@ -152,7 +185,10 @@ export function completeUnit(mission, unitId, token, outcome) {
 }
 
 export function publicStatus(mission) {
-  return { id: mission.id, objective: mission.objective, revision: mission.revision,
-    units: mission.units.map(u => ({ id: u.id, effect: u.effect, status: u.status,
-      dependsOn: u.dependsOn, result: u.result })) };
+  return {id:mission.id,objective:mission.objective,revision:mission.revision,
+    state:mission.status||'ACTIVE',
+    units:mission.units.map(u=>({id:u.id,effect:u.effect,status:u.status,
+      attempts:u.attempts||0,leaseGeneration:u.run?.leaseGeneration||0,
+      expiresAt:u.status==='RUNNING'?u.run?.expiresAt:null,
+      dependsOn:u.dependsOn,result:u.result}))};
 }

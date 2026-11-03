@@ -11,6 +11,7 @@ const spec = () => ({ objective: 'Implement and verify an isolated task runner',
     { id: 'verify', effect: 'READ', instruction: 'Check the new docs', dependsOn: ['write'] },
   ] });
 const host = { model: 'gpt-6-astra', reasoningEffort: 'max', nativeSubagents: { available: true, maxConcurrent: 20 } };
+const grant={valid:true,paths:['docs'],expiresAt:new Date(Date.now()+3600000).toISOString()};
 const evidence = { success: true, summary: 'Verified the required task with actual checks', evidence: ['Read files and checked the expected behavior'] };
 
 test('maximum policy requests, never claims actual model or fanout', () => {
@@ -36,9 +37,9 @@ test('local native batch plans two independent read units and no fake launches',
   completeUnit(m, batch.packets[0].unitId, batch.packets[0].token, evidence);
   assert.equal(nextBatch(m, host).mode, 'WAITING');
   completeUnit(m, batch.packets[1].unitId, batch.packets[1].token, evidence);
-  const next = startBatch(m, host).batch;
+  const next = startBatch(m, host,grant).batch;
   assert.deepEqual(next.packets.map(x => x.unitId), ['write']);
-  completeUnit(m, 'write', next.packets[0].token, evidence);
+  completeUnit(m, 'write', next.packets[0].token, evidence, next.packets[0].leaseGeneration,grant);
   assert.deepEqual(startBatch(m, host).batch.packets.map(x => x.unitId), ['verify']);
 });
 
@@ -47,8 +48,9 @@ test('never run concurrent writers or exceed inline capability', () => {
     authorization: { writesAllowed: true, allowedPaths: ['docs'] },
     units: [ { id: 'a', effect: 'WRITE', instruction: 'Write document A', paths: ['docs/a'] },
       { id: 'b', effect: 'WRITE', instruction: 'Write document B', paths: ['docs/b'] } ] });
-  assert.equal(nextBatch(m, host).units.length, 1);
-  assert.equal(nextBatch(m, {}).units.length, 1);
+  assert.equal(nextBatch(m, host).units.length, 0);
+  assert.equal(nextBatch(m, host,grant).units.length, 1);
+  assert.equal(nextBatch(m, {},grant).units.length, 1);
 });
 
 test('reject dependency cycles, escaping paths, unauthorized writes and stale completion', () => {

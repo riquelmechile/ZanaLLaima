@@ -54,3 +54,13 @@ test('candidate cannot be replaced silently', () => {
   openReview(m, { candidateSha: shaB });
   assert.equal(m.reviewHistory.length, 1);
 });
+
+test('stale review packets cannot complete', () => {
+  const m = prepared();
+  openReview(m, { candidateSha: shaA });
+  const packet = startReviewBatch(m).packets[0];
+  assert.throws(() => submitReview(m, { ...outcome(packet), token: 'wrong' }), /stale/);
+  assert.throws(() => submitReview(m, { ...outcome(packet), evidence: [] }), /evidence/);
+  submitReview(m, outcome(packet));
+  assert.throws(() => submitReview(m, outcome(packet)), /stale/);
+});

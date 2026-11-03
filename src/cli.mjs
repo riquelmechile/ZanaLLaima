@@ -4,7 +4,7 @@ import { operations } from './actions.mjs';
 import { applyOperatorAction } from './store.mjs';
 
 const [command, ...args] = process.argv.slice(2);
-const usage = 'Commands: operator-import, heartbeat, recover-expired, retry, cancel, close, archive, mission-history, authorization-status, storage-status, storage-history, storage-reviews, storage-migrate, storage-backup, storage-restore, profile, init, status, next, start, complete, review-open, review-next, review-start, review-submit, review-check, review-status';
+const usage = 'Commands: operator-import, heartbeat, recover-expired, retry, cancel, close, archive, mission-history, authorization-status, storage-status, storage-history, storage-reviews, storage-migrate, storage-backup, storage-restore, profile, init, status, next, start, complete, review-open, review-next, review-start, review-submit, review-check, review-status, delivery-check';
 const readJson = async path => JSON.parse(await readFile(path, 'utf8'));
 try {
   let input = {};
@@ -18,9 +18,14 @@ try {
   else if (command === 'operator-import') input = {envelope:await readJson(args[0])};
   else if (command === 'review-open') input = { candidateSha: args[0],
     hostReport: args[1] ? await readJson(args[1]) : {}, risk: args[2] || 'MEDIUM' };
+  else if (command === 'review-next' || command === 'review-start') input = {hostReport: args[0] ? await readJson(args[0]) : undefined};
+  else if (command === 'delivery-check') input = {
+    ciEnvelope:args[0] ? await readJson(args[0]) : null,
+    operatorEnvelope:args[1] ? await readJson(args[1]) : null,
+  };
   else if (command === 'review-submit') input = { ...(await readJson(args[3])),
     lensId: args[0], token: args[1], candidateSha: args[2] };
-  else if (command === 'review-check') input = { observedSha: args[0] };
+  else if (command === 'review-check') input = {};
   else if (command === 'storage-history' || command === 'storage-reviews') input = {
     limit: args[0] ? Number(args[0]) : 25, before: args[1] ? Number(args[1]) : null,
     ...(command === 'storage-history' && args[2] ? { category: args[2] } : {})
@@ -28,7 +33,7 @@ try {
   else if (command === 'mission-history') input = {limit:args[0]?Number(args[0]):25,before:args[1]?Number(args[1]):null};
   else if (command === 'storage-backup') input = { destination: args[0] };
   else if (command === 'storage-restore') input = { source: args[0], offline: true };
-  else if (!['status', 'profile', 'review-status', 'review-next', 'review-start', 'storage-status', 'storage-migrate', 'authorization-status',
+  else if (!['status', 'profile', 'review-status', 'review-next', 'review-start', 'delivery-check', 'storage-status', 'storage-migrate', 'authorization-status',
     'recover-expired', 'cancel', 'close', 'archive'].includes(command)) throw Error(usage);
   const aliases = { 'review-open': 'reviewOpen', 'review-submit': 'reviewSubmit',
     'review-check': 'reviewCheckCandidate', 'review-status': 'reviewStatus',
@@ -37,7 +42,7 @@ try {
     'storage-reviews': 'storageReviews', 'storage-migrate': 'storageMigrate',
     'storage-backup': 'storageBackup', 'storage-restore': 'storageRestore',
     'recover-expired':'recoverExpired','authorization-status':'authorizationStatus',
-    'mission-history':'missionHistory' };
+    'mission-history':'missionHistory', 'delivery-check':'deliveryCheck' };
   if(command==='operator-import'){
     process.stdout.write(JSON.stringify(await applyOperatorAction(input.envelope),null,2)+'\n');
     process.exit(0);

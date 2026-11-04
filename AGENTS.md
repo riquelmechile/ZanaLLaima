@@ -23,7 +23,7 @@ Si el efecto queda \`OUTCOME_UNKNOWN\`, **jamás repetirlo automáticamente**. U
 
 ## Recuperación, cuotas y SQLite
 
-- SQLite WAL v5 guarda misiones, estados, recibos, historial, rondas RDD y límites inmutables. Revisar \`zana_storage_status\`, \`zana_storage_history\` y el archivo de misión.
+- SQLite WAL v6 guarda misiones, estados, recibos, historial, rondas RDD y límites inmutables. Revisar \`zana_storage_status\`, \`zana_storage_history\` y el archivo de misión.
 - \`zana_unit_heartbeat\` solo puede extender un lease válido. Tras interrupción, usar \`zana_recover_expired\`; reintentar tareas READ agotadas solo cuando el presupuesto lo permite.
 - Las escrituras siguen serializadas, nunca simultáneas ni mezcladas con READ. Un escritor autorizado que espera drena los READ activos.
 - Ni la restauración de respaldos ni \`operator-import\` están expuestos como herramientas MCP: son acciones administrativas del CLI. No pedir llaves privadas al usuario ni exponerlas en respuestas.
@@ -41,6 +41,6 @@ La rama \`main\` tiene checks y revisión externa obligatorios. No hacer merge, 
 
 ## Integración y límites
 
-Seguir \`docs/host-codex.md\` para configurar MCP stdio y \`docs/host-e2e.md\` para el E2E real. **PASO HUMANO:** Zana ejecuta y commitea el reporte; no afirmar capacidades observadas desde tests locales. El transporte HTTP OAuth para ChatGPT web es otra iniciativa (ZL-020), fuera de la versión 0.3.0.
+Seguir \`docs/host-codex.md\` para configurar MCP stdio y \`docs/host-e2e.md\` para el E2E real. **PASO HUMANO:** Zana ejecuta y commitea el reporte; no afirmar capacidades observadas desde tests locales. El transporte HTTP OAuth para ChatGPT web es otra iniciativa (ZL-020), fuera de la versión 0.3.1.
 
 Mantener secretos, datos y artefactos dentro del repositorio/workspace autorizado. No introducir referencias a otros sistemas de coordinación en código o documentación. Ante incertidumbre de permisos o estado, bloquear y reportar en vez de simular cumplimiento.

@@ -136,7 +136,7 @@ export async function dispatchTool(action,args={}, {signal,implementation=operat
 }
 
 export function createServer(){
-  const server=new McpServer({name:'zana-llaima',version:'0.3.0'},
+  const server=new McpServer({name:'zana-llaima',version:'0.3.1'},
     {maxToolInputElements:1000});
   for(const [name,[action,description,readOnly]] of Object.entries(TOOL_DESCRIPTIONS)){
     server.registerTool(name,{

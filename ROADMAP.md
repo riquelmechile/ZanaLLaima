@@ -134,3 +134,19 @@ Se incorporó `zana_apply_write` como herramienta MCP 24, con intentos durables,
 - **Cobertura:** global 92/85/90 y bloqueo automático si cualquier módulo de `src/` cae bajo 80 % de ramas.
 - **ZL-018 permanece abierto:** guías `docs/host-codex.md` / `docs/host-e2e.md` y plantilla `examples/host-e2e-report.json`; sin ejecución con Codex real ni informe verificado.
 - **Revisión independiente abierta:** el ciclo 4R solo puede etiquetarse como self-check; se requiere otra cuenta Github y evaluación humana sobre SHA exacto.
+
+
+### Ronda 2: cuatro hallazgos corregidos, candidata 0.3.1
+
+Auditoría inicial: commit `a36120b4d0a03f61445dbfcff32e382390e95e14`. Se publicaron cuatro correcciones separadas, sin cambiar `main`:
+
+| Severidad | Hallazgo | Commit corrector | Verificación |
+| --- | --- | --- | --- |
+| P1 | Deadlock de dos `transact()` del mismo proceso | `0dfbc8d8553d8189735cc3d8ec8c744b4c15d7a9` | Cola asíncrona de SQLite; 200 ms de espera, rollback, 8 mutaciones MCP concurrentes y estrés entre procesos |
+| P2 | Reemplazo atómico perdía permisos POSIX | `931921a41109a665e0dbffcf4b73c400ff3991aa` | Conservación `0755`/`0644`, descarte de setuid, nuevo archivo `0600`, recibos de modos y migración SQLite v5→v6 |
+| P2 | Heartbeat CLI forzaba 300 segundos | `44d9a441d198e15d8e64081e450b4ec84529f2ec` | CLI y MCP stdio sin default fijo con presupuesto de 60 s; rechazo de 61 s |
+| P2 | Review invalidada no reabría el mismo SHA tras cambiar base | `2b91918bd478271b1869c7fadd3b5ccdc3d605eb` | Git real: cambia `main`, feature HEAD idéntico, nueva ronda y archivo; rechaza revisión viva, snapshot idéntico y presupuesto agotado |
+
+**Versión candidata:** `0.3.1` sin tag, release ni deploy. Los umbrales de cobertura global 92/85/90 y por módulo (mínimo 80 % de ramas) siguen activos. Los hilos del revisor no se resuelven artificialmente: cada respuesta apunta al SHA corrector y queda sujeta a otra pasada.
+
+**Gates que no se cierran con estos cuatro fixes:** CI firmado con secretos humanos y llaves públicas verificables; aislamiento real del anfitrión por permisos del SO; ZL-018 (E2E Codex ejecutado y registrado por Zana); revisión independiente y aprobación de GitHub distinta del autor. `releaseAuthorized:false` sigue siendo obligatorio.

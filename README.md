@@ -113,4 +113,4 @@ Ver [auditoría de seguridad](docs/release-security.md) y [registro de cambios](
 - [Plantilla de observaciones](examples/host-e2e-report.json)
 - [Estado y criterios pendientes](ROADMAP.md)
 
-**ChatGPT web no puede ejecutar directamente el proceso stdio local.** Una conexión web necesita un servicio HTTP MCP autenticado mediante OAuth y controles de aislamiento adicionales. Ese transporte queda fuera de la versión 0.3.0.
+**ChatGPT web no puede ejecutar directamente el proceso stdio local.** Una conexión web necesita un servicio HTTP MCP autenticado mediante OAuth y controles de aislamiento adicionales. Ese transporte queda fuera de la versión 0.3.1.

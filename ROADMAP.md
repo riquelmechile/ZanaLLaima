@@ -1,7 +1,7 @@
 # Roadmap técnico de ZanaLLaima
 
 **Estado:** seguimiento vivo de fases implementadas localmente y gates pendientes de integración.
-**Corte de auditoría:** 2026-11-03, commit `df9535a41f774daa547b28812b5125765ce78238`, PR #1.
+**Corte de auditoría:** 2026-11-04. Base confirmada del cierre: `79ef90260768da3a606060a2213fb1e8db3599a6`; para el SHA final ver el HEAD del PR #1, pues escribirlo dentro de su propio commit cambiaría ese hash.
 **Objetivo:** un único anfitrión GPT que planifique, ejecute con sus capacidades nativas, se recupere de interrupciones y revise resultados con evidencia verificable, sin delegación entre cuentas ni llamadas a APIs de inferencia.
 
 ## Principios que no deben perderse
@@ -32,10 +32,10 @@
 - [x] **ZL-001. Recuperación de tareas `RUNNING`.** Añadir lease, heartbeat, expiración, estado `OUTCOME_UNKNOWN` para escrituras y reconciliación explícita. Una pérdida de sesión no debe bloquear para siempre la misión ni provocar repetición ciega de efectos.
 - [x] **ZL-002. Misiones reutilizables.** Permitir cerrar, cancelar, archivar y crear una misión posterior sin borrar manualmente el archivo de estado. Conservar historial y controles de versión.
 - [x] **ZL-003. Fallos y reintentos.** Distinguir fallo reintentable, bloqueo, cancelación y efecto incierto. Añadir límites de reintento y replanificación de dependencias. Nunca marcar `DONE` una tarea dependiente de otra fallida.
-- [ ] **ZL-004. Autorización auténtica de escrituras.** Separar la propuesta de la misión del consentimiento del operador; permisos efímeros, por ruta y operación, verificados también donde ocurren las escrituras. Prevenir traversal por rutas reales, enlaces simbólicos y cambios posteriores.
+- [x] **ZL-004. Autorización auténtica de escrituras.** Separar la propuesta de la misión del consentimiento del operador; permisos efímeros, por ruta y operación, verificados también donde ocurren las escrituras. Prevenir traversal por rutas reales, enlaces simbólicos y cambios posteriores.
 - [x] **ZL-005. Pruebas adversariales.** Cubrir caída tras reservar tarea, caída después de escritura antes del recibo, doble finalización, reintentos obsoletos, permisos revocados y misión cancelada.
 
-**ZL-004: implementación parcial verificable.** Firma Ed25519 del operador, comprobación de vigencia, revocación y alcance se aplican al reservar y completar trabajos dentro del MCP local. La inspección de rutas rechaza symlinks antes de reservar. **Pendiente bloqueante:** conectar estas comprobaciones al propio ejecutor que modifica archivos/repositorios, con aislamiento resistente a carreras; la infraestructura actual no puede impedir acciones realizadas por herramientas externas que ignoren el plano de control.
+**ZL-004: implementado localmente.** `zana_apply_write` revalida grant Ed25519, lease, scope y bytes en el efecto, usa descriptores Linux, intención durable y recibos SHA. Una caída deja `OUTCOME_UNKNOWN` y bloquea repetición automática. **Gate operacional pendiente:** demostrar que las herramientas del host sin MCP no pueden escribir en el workspace por permisos del SO.
 
 **Gate local verificado:** las transiciones conservan estado y exigen reconciliación antes de cualquier reintento WRITE. **Gate operativo pendiente:** un ejecutor anfitrión real debe demostrar que ninguna herramienta puede escribir saltándose los permisos y que la autorización se revalida al aplicar cada efecto.
 
@@ -93,13 +93,13 @@
 
 **ZL-026 resuelto y verificado:** el token de la integración de archivos no administra reglas, pero una sesión GitHub CLI autorizada de `riquelmechile` con `permissions.admin=true` aplicó protección a `main`. Se comprobó por GET administrativo que están activos tres checks obligatorios, revisión independiente, invalidación de aprobaciones obsoletas, aprobación posterior al último push, resolución de conversaciones, reglas para administradores y prohibición de force-push/eliminación. Una segunda lectura de GitHub confirmó `main.protected=true`. Se utilizó **branch protection**, no un ruleset; el listado de rulesets puede seguir vacío sin invalidar la protección.
 
-**Bloqueo de release ZL-029:** auditoría local escrita, pero la autorización efectiva de escrituras del anfitrión (ZL-004), las pruebas reales ChatGPT (ZL-018), el E2E de rendimiento nativo de la Fase 4, atestaciones CI independientes y una revisión independiente siguen pendientes. Esto impide producción.
+**Bloqueo de release ZL-029:** frontera WRITE del MCP implementada; faltan aislamiento del host por SO (ZL-004 operacional), prueba real de Codex (ZL-018), rendimiento nativo, atestación CI firmada por emisor real y revisión de GitHub independiente. Esto impide producción.
 
 
 - [x] **ZL-025. CI robusto.** Tests de integración, estrés, fallos de proceso, cobertura e incompatibilidades MCP; fijar versiones de acciones por SHA, permisos mínimos y timeout.
 - [x] **ZL-026. Seguridad del repositorio.** Proteger `main` y exigir CI del SHA exacto y revisión independiente antes de merge. Auditar rulesets/branch protection con una credencial administrativa autorizada.
 - [x] **ZL-027. Reducir trabajo duplicado.** Revisar la duplicación de CI para `push` y `pull_request` y adoptar concurrency/cancel-in-progress cuando sea seguro.
-- [x] **ZL-028. Documentación.** Sincronizar README con el inventario real de 23 herramientas MCP y añadir guía de recuperación, operación local y límites de evidencia.
+- [x] **ZL-028. Documentación.** Sincronizar README con el inventario real de 24 herramientas MCP y añadir guía de recuperación, operación local y límites de evidencia.
 - [x] **ZL-029. Revisión de seguridad de release.** Evaluar rutas, bloqueo de estado, secretos, errores y superficies expuestas; no desplegar sin superar los gates anteriores.
 
 **Gate:** CI verde, revisión real y reproducible, controles de rama comprobados, E2E documentado y aprobación humana para cualquier entrega.
@@ -118,6 +118,19 @@ Los puntos siguientes fueron constatados sobre el commit de auditoría original 
 
 ## Prioridad de implementación
 
-ZL-001 a ZL-003 y ZL-005 a ZL-009 tienen implementación local y pruebas; ZL-004 mantiene pendiente el enforcement del ejecutor real. Debe validarse la aplicación efectiva de permisos en el anfitrión antes de operar autónomamente. La implementación local de RDD, SDK MCP y gates CI/release ya está desarrollada. Las fases de implementación local 1, 2, 4 y 5 están desarrolladas; faltan enforcement del ejecutor (ZL-004), atestaciones externas, revisión independiente, conexión y E2E real de GPT (ZL-018) antes de liberar software.
+ZL-001 a ZL-003 y ZL-005 a ZL-009 tienen implementación local y pruebas; ZL-004 cuenta con enforcement local en el MCP; permanece pendiente demostrar que el host no puede escribir por herramientas externas. Debe validarse la aplicación efectiva de permisos en el anfitrión antes de operar autónomamente. La implementación local de RDD, SDK MCP y gates CI/release ya está desarrollada. Las fases de implementación local 1, 2, 4 y 5 están desarrolladas; faltan aislamiento SO del host (ZL-004 operacional), atestaciones externas, revisión independiente, conexión y E2E real de GPT (ZL-018) antes de liberar software.
 
 **Criterio de versión lista:** una única cuenta GPT puede iniciar más de una misión en momentos distintos, completar trabajo, recuperarse de interrupciones, ejecutar las cuatro perspectivas con procedencia honesta y presentar una decisión verificable sobre un candidato Git sin declarar aprobaciones o capacidades inexistentes.
+
+
+### Cierre de ZL-004, frontera local de efectos
+
+Se incorporó `zana_apply_write` como herramienta MCP 24, con intentos durables, validación de grants Ed25519 y lease, anclaje Linux de directorios, rechazo de symlink/hardlink, recibos SHA y tests de caída real tras el efecto. El preflight puede reportar `MCP_EFFECT_BOUNDARY_ENFORCED`, **no `VERIFIED`**, porque un modelo con otras herramientas del SO podría saltarse el MCP. El gate real sigue abierto hasta probar la separación de permisos del host.
+
+### Cierre candidato 0.3.0 (sin release)
+
+- **ZL-004 local:** herramienta MCP 24 con efecto atómico de archivo, firma Ed25519, lease, rutas, recibo SHA, prueba de caída posterior al efecto y pruebas negativas. **Host y aislamiento SO no verificados**.
+- **Emisor CI preparado, sin activación:** `scripts/ci-attest.mjs` y job de Actions `attest` bajo `ci-attestation`. El archivo `keys/ci-verifier.pub` es un marcador, no una llave real. **PASO HUMANO:** generar dos llaves distintas (CI y operador), cargar secret, environment protegido y variable de activación, y validar un run firmado. El gate `trustedCIAttribution` queda `NOT_CONNECTED` hasta entonces.
+- **Cobertura:** global 92/85/90 y bloqueo automático si cualquier módulo de `src/` cae bajo 80 % de ramas.
+- **ZL-018 permanece abierto:** guías `docs/host-codex.md` / `docs/host-e2e.md` y plantilla `examples/host-e2e-report.json`; sin ejecución con Codex real ni informe verificado.
+- **Revisión independiente abierta:** el ciclo 4R solo puede etiquetarse como self-check; se requiere otra cuenta Github y evaluación humana sobre SHA exacto.

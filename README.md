@@ -1,147 +1,116 @@
 # ZanaLLaima
 
-A standalone, GPT-native engineering workspace. One GPT host coordinates an objective, performs its own reasoning and can use **native parallel subagents only when its application actually offers them**. There is no external worker mesh, inference-provider API, shared credentials or required cloud backend.
+Motor local de misiones para un único anfitrión GPT, con estado durable, revisión RDD vinculada a Git y transporte **MCP stdio**. No llama directamente a APIs de modelos ni envía tareas a cuentas externas.
 
-## Core contract
+## Estado del proyecto
 
-- **Requested model:** `gpt-6-astra`, reasoning effort `max`, with **no deliberate model fallback**. This is a request; a local process cannot select the ChatGPT model or verify its effective effort.
-- **Processing:** standard root tier; prefer fast native branches when available without reducing reasoning effort.
-- **Parallel work:** request maximum native capacity, cap each independent batch at four, and process work inline if native subagents are absent. Parallel batches in this initial release are **read-only**. Writes run singly, with explicit authorized paths.
-- **Execution:** the GPT application performs all reasoning, file edits, native subagent launches and checks using its real tools. This code **does not** start models or subagents.
-- **Truthfulness:** planned parallel work is not evidence that workers launched. Host-reported capabilities, model settings, reviews and results remain unverified until separately attested.
-- **Scope:** no remote task sending, no impersonation, no hidden agents, no automatic release actions. PR merges and deployments require separate permission.
+| Componente | Estado |
+| --- | --- |
+| SQLite WAL, leases, reintentos READ y recuperación de interrupciones | Implementado y probado localmente |
+| Planificación incremental READ y presupuestos por misión | Implementado; ejecución nativa de subagentes no verificada |
+| Cuatro lentes RDD sobre un SHA Git exacto | Implementado; autocomprobación no equivale a revisión independiente |
+| Herramienta de escrituras \`zana_apply_write\` con recibos SHA y permiso Ed25519 | Implementado localmente; aislamiento efectivo del anfitrión pendiente |
+| MCP SDK oficial v2 por stdio | Implementado y probado con cliente oficial |
+| CI reproducible en Node 22 y 24, auditoría y cobertura | Implementado; ver checks del SHA actual |
+| Emisor de atestación CI Ed25519 | Código y workflow preparados; llave y environment pendientes de Zana |
+| Integración real Codex, reporte de modelo/esfuerzo y subagentes | **PASO HUMANO**, sin pruebas reales todavía |
+| Revisión independiente y merge | Pendiente de otra identidad autorizada y decisión humana |
 
-## Project roadmap
+**El PR #1 no autoriza merge ni despliegue.** Los resultados de prueba locales no prueban capacidades que solo puede mostrar el anfitrión.
 
-The prioritized audit backlog, acceptance gates and delivery milestones are in [ROADMAP.md](ROADMAP.md). It tracks planned work only; unchecked items are not implemented.
+## Requisitos y estructura
 
-## Safe mission lifecycle (Phase 0)
+Node.js ≥22.16, Linux para efectos de escritura anclados a descriptores, Git, y dependencias fijadas en \`package-lock.json\`.
 
-A write request inside a mission is **not** permission to modify files. Reserving a `WRITE` requires a valid, unexpired Ed25519 operator-signed approval, a configured local workspace root and a scoped path inspection. The operator's **private key must never be placed in this repository or provided to the model**. Only local CLI can import signed operator decisions. A cancelled mission revokes active grants.
-
-Read-only work can be recovered from expired leases and retried deliberately with fresh fencing tokens. An interrupted write transitions to `OUTCOME_UNKNOWN` and **cannot be replayed without a separate signed reconciliation based on actual evidence**. Close and archive completed or cancelled missions before starting the next mission. See [the recovery and security contract](docs/safety-lifecycle.md).
-
-The local planner cannot enforce file mutations by external host tools; host integration must apply the same controls at the actual effect boundary before production use.
-
-## Phase 2: Git-bound four-lens review
-
-After all mission tasks are DONE, configure the local worktree with `ZANA_REVIEW_REPO=/absolute/path/to/repo` and an optional `ZANA_REVIEW_TARGET_REF=refs/heads/main`. The local controller independently checks the actual Git commit, tree, branch, target-base and clean worktree. Client-supplied SHA values are rejected if they differ from Git. Dirty or changed candidates invalidate outstanding review packets.
-
-```sh
-node src/cli.mjs review-open "$(git rev-parse HEAD)"
-node src/cli.mjs review-next [host.json]
-node src/cli.mjs review-start [host.json]
-node src/cli.mjs review-status
-node src/cli.mjs review-check
-node src/cli.mjs delivery-check ci-attestation.json operator-approval.json
-```
-
-Native 4R uses at most the host-reported context capacity, capped at four; if it disappears, remaining reviews fall back to a single context and are labeled self-checks. No mode claims independently verified subagents. Up to five verified candidate rounds are permitted per mission.
-
-The **delivery gate** requires both a separately signed CI attestation and a separately signed operator decision in addition to a clean, unchanged Git candidate and passing review lenses. Its highest result is `READY_FOR_MANUAL_RELEASE`: it **never** authorizes or performs merge/deploy. CI signatures are tested locally with temporary keys; authentic CI receipt production and GPT-host integration remain scheduled for later. See [the RDD security contract](docs/solo-rdd.md).
-
-## Phase 4: incremental scheduling and bounded resources
-
-The scheduler now **refills available READ slots immediately**, without waiting for every member of the previous batch. Capacity is bounded by the minimum of the host-reported concurrency, mission budget and hard ceiling of four. Host reports remain unverified; this planner does not itself launch native subagents.
-
-A WRITE is always exclusive, even if another WRITE uses a different path. An authorized waiting WRITE drains active readers; unresolved write outcomes block fresh scheduling. SQLite refuses forged simultaneous read/write or two-writer snapshots. Real host-side write enforcement still requires ZL-004.
-
-Mission budgets are immutable and persisted in SQLite v4. A mission may set `budget.maxActiveReads`, `maxUnitAttempts`, `maxWorkStarts`, `maxLeaseSeconds`, `maxResultBytes`, `maxReviewRounds` and `maxMissionSeconds`. `zana_mission_status` returns remaining attempts, activity and the deadline.
-
-```sh
-npm run benchmark:phase4
-node src/cli.mjs start examples/host-report.json 120
-```
-
-The benchmark reports actual SQLite p50/p95 read/write/history/recovery timings and a **deterministic logical throughput comparison** against barrier scheduling. The latter is not a claim of measured GPT speedup. See [Phase 4 performance and resource limits](docs/phase4-performance.md).
-
-## Durable storage
-
-The state backend uses SQLite WAL (schema v4), with conservative JSON migration, fenced concurrent writes, persistent review correction rounds, bounded histories, backup and offline restore. See [storage operations](docs/sqlite-storage.md). Expired READ work has controlled retries; uncertain WRITE work still requires separate operator reconciliation.
-
-## Components
-
-- `src/core.mjs`: isolated mission DAG, permission gates, capability-aware batch planning, fenced per-unit completion.
-- `src/store.mjs`: transactional SQLite WAL state, migration, receipts, audit history and archival.
-- `src/git-evidence.mjs`: trusted local Git HEAD/tree/branch/cleanliness observation.
-- `src/review.mjs`: adaptive, candidate-bound four-lens review engine.
-- `src/delivery.mjs`: separately signed CI/operator attestation gate, without release actions.
-- `src/actions.mjs`: tiny stateful action layer.
-- `src/mcp.mjs`: local Model Context Protocol server over standard input/output.
-- `src/cli.mjs`: command-line interface for development and inspection.
-- `AGENTS.md`: instructions for a host using this project.
-
-This is an initial **local development release**, not a public remote ChatGPT app or an autonomous background agent. Remote connectivity would need its own security and OAuth design. Node.js 22.16+ is required; runtime dependencies are pinned to `@modelcontextprotocol/server` and `zod`; install with `npm ci --ignore-scripts --no-audit --no-fund`.
-
-## Try it locally
-
-```bash
+\`\`\`sh
+git checkout feat/gpt-native-solo-engine
 npm ci --ignore-scripts --no-audit --no-fund
 npm run check
 npm test
-npm run cli -- profile
-npm run cli -- init examples/mission.json
-npm run cli -- next examples/host-report.json
-npm run cli -- start examples/host-report.json
-npm run cli -- status
-```
+npm run release:preflight
+\`\`\`
 
-`start` reserves all units in the planned safe batch in a **single local state transaction**, returning a distinct token and instruction packet for each. A compatible GPT host may run independent packets concurrently with its native subagent tools. To finish a unit after actually doing the work:
+Los módulos principales:
 
-```bash
-node src/cli.mjs complete <unit-id> <run-token> actual-outcome.json
-```
+- \`src/core.mjs\` y \`src/lifecycle.mjs\`: DAG de unidades, claims, heartbeat, vencimiento y recuperación.
+- \`src/store.mjs\`: SQLite WAL, estado, intentos, historial y recibos.
+- \`src/budget.mjs\`: límites de tiempo, intentos, concurrencia y resultados.
+- \`src/write-effect.mjs\` y \`src/write-operations.mjs\`: efectos de archivo y permisos de WRITE al momento de ejecutarlos.
+- \`src/review.mjs\`, \`src/git-evidence.mjs\` y \`src/delivery.mjs\`: RDD y gate manual de entrega.
+- \`src/mcp.mjs\`: servidor MCP oficial, local y sin HTTP.
+- \`scripts/ci-attest.mjs\`: emisor de sobre CI firmado, solo con llave privada provista por Zana.
 
-Each result must contain `success` (boolean), a factual `summary` and a nonempty list of `evidence`. The JSON in `examples/outcome.json` is **illustrative only**, not a valid substitute for actual checks. Use `ZANA_STATE_FILE=/safe/path/state.json` to select a separate state file. The default is `.zana/state.json`, which is ignored by Git. Only one active mission per state file is supported; close/archive the prior mission before starting the next.
+## Configuración local
 
-## Phase 3: official MCP SDK and capability provenance
+\`\`\`sh
+export ZANA_STATE_FILE=/ruta/segura/zana/state.json
+export ZANA_WORKSPACE_ROOT=/ruta/absoluta/al/workspace
+export ZANA_REVIEW_REPO=/ruta/absoluta/al/repo
+export ZANA_REVIEW_TARGET_REF=refs/heads/main
+node src/mcp.mjs
+\`\`\`
 
-The MCP server is implemented using [the official TypeScript SDK v2](docs/mcp-v2.md), with protocol 2026-07-28 support and a verified local legacy handshake for 2025-11-25. The client-side automated test launches a genuine SDK stdio server process and completes a READ mission followed by sequential four-lens review. The test **does not involve a model**.
+El servidor dispone de **24 herramientas MCP**. El catálogo se comprueba automáticamente contra esta cifra en \`tests/sdk-mcp.test.mjs\`. Las herramientas MCP no administran claves privadas, no importan firmas del operador, no restauran respaldos ni hacen merge.
 
-Call `zana_capability_status` to distinguish `requested`, `hostReported`, and `verified`. The latter is intentionally `NOT_OBSERVED` until a real host provides independent authenticated evidence. Never pass a claimed verification flag through a host report and treat it as proof.
+Las acciones administrativas siguen en el CLI local:
 
-Remote transport, OAuth, actual host model verification, and native subagents remain deferred. Local stdio has no public URL or bearer token. SDK cancellation is cooperative: inspect persisted state after lost calls before attempting any retry.
+\`\`\`sh
+node src/cli.mjs profile
+node src/cli.mjs storage-status
+node src/cli.mjs status
+node src/cli.mjs storage-history 25
+node src/cli.mjs operator-import /ruta/al/grant-firmado.json
+\`\`\`
 
-## Connect to a local MCP-compatible host
+## Ciclo de misión y permiso WRITE
 
-Start the local transport with `npm start` or configure the client command `node /absolute/path/to/ZanaLLaima/src/mcp.mjs`. The MCP now exposes **23 local tools** through the official TypeScript SDK v2 over stdio, including `zana_capability_status`. The SDK validates requests, negotiates the protocol and returns recoverable `isError` tool results. The server still does not connect to ChatGPT or launch real subagents. Signed operator actions, backup, restore and archival remain CLI-only operations. Storage migration, backup and restore are operator-only CLI commands, not MCP tools. All use local files and the authenticated capabilities of the *calling application*, not an API key stored here.
+Una misión define \`objective\`, \`authorization\`, \`budget\` y unidades \`READ\`/\`WRITE\`. Los permisos declarados en el JSON **no** sustituyen el grant Ed25519 separado del operador.
 
-The MCP transport is **stdio-only** and assumes a trusted local operator. Do not expose it as an unauthenticated HTTP endpoint. ChatGPT web app integration and real subagent launch must be tested separately on a host that supports those features.
+El controlador reserva unidades con \`zana_next_batch\` y \`zana_start_batch\`, devuelve un \`token\` y \`leaseGeneration\`, y admite \`zana_complete_unit\` solo con evidencia factual. Las lecturas independientes pueden rellenar cupos mientras siguen ejecutándose otras; los escritores son exclusivos. La planificación de subagentes no demuestra que realmente se lanzaran.
 
-## Storage operator commands
+Para modificar un archivo, una unidad WRITE debe pasar **obligatoriamente** por \`zana_apply_write\`: \`unitId\`, \`token\`, \`leaseGeneration\`, \`path\` relativo y \`content\` UTF-8 o \`deleteFile:true\`; opcionalmente \`expectedPreSha256\`. Revalida el grant, lease y ruta, persiste intención antes del efecto, aplica un cambio atómico anclado a descriptores Linux y registra SHA anterior/posterior.
 
-Use `node src/cli.mjs storage-status` for integrity and schema status; `storage-history 25` and `storage-reviews 25` for paginated data. To migrate a legacy JSON state, stop other clients and execute `storage-migrate`. For an SQLite-consistent backup run `storage-backup /new/backup.sqlite`. Restoring a backup requires all clients stopped and `ZANA_RESTORE_OFFLINE=1 node src/cli.mjs storage-restore /backup.sqlite`. Review [the operational precautions](docs/sqlite-storage.md) first.
+Si el proceso muere después del efecto y antes del recibo, la unidad queda \`OUTCOME_UNKNOWN\`. **Nunca repetir el efecto automáticamente.** La reconciliación necesita evidencia y firma del operador.
 
-## Phase 5: CI and release security
+**Límite crítico:** el MCP no puede deshabilitar herramientas externas del host. La producción requiere separar permisos del SO: usuario del host sin escritura sobre el workspace, proceso MCP ejecutado por usuario independiente autorizado o contenedor con el volumen del host en solo lectura. Ver [seguridad y ciclo de vida](docs/safety-lifecycle.md).
 
-Dependencies are locked in `package-lock.json` and installed with `npm ci --ignore-scripts`. GitHub Actions tests the exact pull-request HEAD on Node 22.16.0, 22.23.4 and 24, using SHA-pinned actions, read-only permissions, non-persisted checkout credentials and a bounded job timeout. PR updates use one `pull_request` trigger; `push` runs only on `main`. Coverage is measured on `src/*.mjs` separately from the test files; multi-process contention, security preflight and a production dependency audit run in CI.
+## Revisión RDD sobre Git
 
-```sh
-npm ci --ignore-scripts --no-audit --no-fund
+Con todas las unidades de la misión terminadas y el árbol de trabajo limpio, el RDD congela commit, árbol, rama y base. Ejecuta cuatro lentes: riesgo, fiabilidad, resiliencia y claridad.
+
+\`\`\`sh
+node src/cli.mjs review-open "$(git rev-parse HEAD)"
+node src/cli.mjs review-next
+node src/cli.mjs review-start
+node src/cli.mjs review-status
+node src/cli.mjs review-check
+\`\`\`
+
+Cada resultado lleva token y evidencia real. Si cambia el SHA o la base, se invalida el ciclo. Sin contextos nativos realmente observados, se usa revisión secuencial etiquetada \`SELF_CHECK_COMPLETE_UNVERIFIED\`. Ningún resultado concede aprobación de PR. Ver [contrato RDD](docs/solo-rdd.md).
+
+## Atenciones de CI y entrega
+
+El CI verifica el HEAD exacto, ejecuta pruebas en Node 22.16.0 / 22.23.4 / 24, estrés multiproceso, cobertura y auditoría de dependencias. Un job opcional \`attest\` firma \`CI_RESULT\` solo si Zana habilitó el environment protegido \`ci-attestation\` con su secreto \`ZANA_CI_SIGNING_KEY\`. Mientras no exista la configuración, no hay atestación auténtica y \`trustedCIAttribution\` permanece sin conectar.
+
+El gate \`delivery-check\` requiere dos firmantes Ed25519 distintos: CI y operador. Incluso con ambos devuelve como máximo \`READY_FOR_MANUAL_RELEASE\`, nunca \`mergeAuthorized:true\`.
+
+\`\`\`sh
 npm run check
 npm run release:preflight
 npm test
 npm run test:stress
 npm run test:coverage
+npm run benchmark:phase4
 npm audit --omit=dev --audit-level=high
-```
+\`\`\`
 
-The static preflight reports `releaseAuthorized:false` even when all local checks pass. GitHub branch protection, independent review, trusted CI attestations and real host-enforced permissions are separate release requirements. Details, open blockers and recommended administrator settings: [release security assessment](docs/release-security.md).
+Ver [auditoría de seguridad](docs/release-security.md) y [registro de cambios](CHANGELOG.md).
 
-## Verification
+## Conexión y E2E con anfitrión
 
-`npm run check` validates Node module syntax. `npm test` covers core state, adversarial permissions, Git-bound reviews and official MCP integration; `npm run test:stress` checks concurrent process fencing; `npm run test:coverage` measures production-source coverage with mandatory thresholds. None of these checks attests real native subagent execution or authorizes release.
+- [Guía de Codex CLI y MCP stdio](docs/host-codex.md)
+- [Procedimiento y evidencia E2E que ejecuta Zana](docs/host-e2e.md)
+- [Plantilla de observaciones](examples/host-e2e-report.json)
+- [Estado y criterios pendientes](ROADMAP.md)
 
-
-## Single-account RDD
-
-After all mission units are complete, freeze the exact Git candidate and run a four-lens review. The same GPT can handle all lenses sequentially, or the host may launch up to four genuinely available native contexts. The local control plane prepares packets but never launches agents itself.
-
-```sh
-node src/cli.mjs review-open $(git rev-parse HEAD)
-node src/cli.mjs review-next
-node src/cli.mjs review-start
-node src/cli.mjs review-status
-```
-
-Use `review-submit` with exact lens ID, packet token, candidate SHA and actual evidence. Check for candidate changes using `review-check`. A complete self-review is **not an independent approval**; host-reported native review is also unverified. Both always report `approved: false`. See [the local review contract](docs/solo-rdd.md).
+**ChatGPT web no puede ejecutar directamente el proceso stdio local.** Una conexión web necesita un servicio HTTP MCP autenticado mediante OAuth y controles de aislamiento adicionales. Ese transporte queda fuera de la versión 0.3.0.

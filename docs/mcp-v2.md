@@ -4,7 +4,7 @@
 
 Esta implementación reemplaza el transporte MCP `stdio` construido manualmente por el **SDK oficial TypeScript v2**, fijado en `@modelcontextprotocol/server@2.4.0`. Usa `@modelcontextprotocol/client@2.4.0` en las pruebas y `zod@4.6.7` para definir y validar los argumentos. La interfaz sigue siendo **local, sin HTTP, sin servidor remoto y sin llamadas a proveedores de inferencia**.
 
-El SDK soporta la especificación MCP 2026-07-28 y negociación con clientes compatibles con versiones anteriores. El programa expone un catálogo de **23 herramientas**, incluyendo `zana_capability_status`. La instalación real en ChatGPT y los lanzamientos de subagentes **NO** forman parte de esta fase de desarrollo.
+El SDK soporta la especificación MCP 2026-07-28 y negociación con clientes compatibles con versiones anteriores. El programa expone un catálogo de **24 herramientas**, incluyendo `zana_capability_status`. La instalación real en ChatGPT y los lanzamientos de subagentes **NO** forman parte de esta fase de desarrollo.
 
 Fuentes normativas del SDK:
 - https://ts.sdk.modelcontextprotocol.io/v2/
@@ -16,7 +16,7 @@ Fuentes normativas del SDK:
 Instalar dependencias en un entorno controlado:
 
 ```sh
-npm install --ignore-scripts --no-audit --no-fund
+npm ci --ignore-scripts --no-audit --no-fund
 npm run check
 npm test
 node src/mcp.mjs
@@ -62,3 +62,15 @@ No hay listener TCP, HTTP, SSE ni URL de callback. La exposición remota no es u
 - El SDK y sus dependencias transitivas están fijados en `package-lock.json` v3; CI utiliza `npm ci --ignore-scripts`, un preflight estático y auditoría de dependencias de producción. El estado de release sigue bloqueado por requisitos externos de GitHub y del anfitrión.
 - La interfaz local no puede impedir ediciones directas realizadas por herramientas externas que no pasen por el controlador.
 - Sin merge, deploy o habilitación HTTP hasta pasar gates de seguridad y revisión independiente.
+
+## Herramienta `zana_apply_write` (ZL-004)
+
+Entradas: `unitId`, `token`, `leaseGeneration`, `path` relativo y uno de `content` (texto UTF-8) o `deleteFile:true`. `expectedPreSha256` permite rechazar preimágenes inesperadas. La ejecución revalida el permiso Ed25519, lease, paths autorizados y cuota. Primero persiste una intención `OUTCOME_UNKNOWN`, luego aplica el efecto anclado a directorios Linux y confirma un recibo `preSha256/postSha256` en SQLite. Un fallo posterior a intención requiere conciliación firmada; **nunca volver a llamar automáticamente**.
+
+La herramienta no garantiza que otras capacidades del host hayan sido deshabilitadas. Hay que ejecutar el agente con workspace read-only y otorgar escritura exclusivamente al proceso MCP, mediante SO o contenedor. Ver [seguridad y ciclo de vida](safety-lifecycle.md).
+
+## Emisor de atestación CI (preparado, no conectado)
+
+El script `scripts/ci-attest.mjs` produce un sobre Ed25519 `CI_RESULT` para el SHA exacto, con rama/base, runId y vigencia máxima de 24 horas. El job de Actions `attest` depende de los tres jobs `test`, exige el environment `ci-attestation` y únicamente se considera para PR del mismo repositorio o pushes a `main` cuando la variable `ZANA_CI_ATTESTATION_READY` vale `true`. Sin secreto, falla cerrado; mientras no se active, queda omitido. La llave privada nunca pasa por el modelo.
+
+El archivo `keys/ci-verifier.pub` sigue siendo un **marcador de configuración**, no una llave PEM válida. **PASO HUMANO:** Zana genera la pareja Ed25519 y sustituye el marcador por la llave pública real. Luego se configura `ZANA_CI_PUBLIC_KEY_PATH` para el comando `delivery-check`. El resultado de la firma sigue separado de la aprobación del operador. Ver [auditoría de seguridad](release-security.md).

@@ -39,6 +39,12 @@ export function observeGit({
   const treeSha=call('rev-parse','--verify','HEAD^{tree}').trim();
   const baseSha=call('rev-parse','--verify',targetRef+'^{commit}').trim();
   if(!SHA.test(sha)||!SHA.test(treeSha)||!SHA.test(baseSha))deny('Invalid Git object');
+  // git status may suppress content changes with assume-unchanged or
+  // skip-worktree index bits. Require ordinary tracked entries before trusting
+  // any clean snapshot. The -z format safely preserves strange filenames.
+  const indexEntries=call('ls-files','-v','-z').split('\0').filter(Boolean);
+  if(indexEntries.some(entry=>!entry.startsWith('H ')))
+    deny('Git index contains hidden/unsupported tracked-file flags');
   const dirty=call('status','--porcelain=v1','--untracked-files=all');
   return Object.freeze({assurance:'LOCAL_GIT_OBSERVED',repoRoot:root,
     candidateSha:sha,treeSha,branchRef:branch,targetRef,baseSha,

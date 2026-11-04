@@ -75,3 +75,32 @@ test('invalid target refs and detached HEAD are rejected',()=>{
     assert.throws(()=>observeGit({repoPath:f.repo}),/Git command failed: symbolic-ref/);
   }finally{f.cleanup();}
 });
+
+
+test('assume-unchanged cannot conceal modified tracked content from RDD',()=>{
+  const f=fixture();
+  try{
+    const frozen=observeGit({repoPath:f.repo});
+    f.git('update-index','--assume-unchanged','README.md');
+    writeFileSync(join(f.repo,'README.md'),'silently changed candidate');
+    assert.throws(()=>observeGit({repoPath:f.repo}),/hidden\/unsupported tracked-file flags/);
+    f.git('update-index','--no-assume-unchanged','README.md');
+    const observed=observeGit({repoPath:f.repo});
+    assert.equal(observed.clean,false);
+    assert.equal(matchesReviewCandidate({candidateSha:frozen.candidateSha,gitEvidence:frozen},observed),false);
+  }finally{f.cleanup();}
+});
+
+test('skip-worktree cannot conceal modified tracked content from RDD',()=>{
+  const f=fixture();
+  try{
+    const frozen=observeGit({repoPath:f.repo});
+    f.git('update-index','--skip-worktree','README.md');
+    writeFileSync(join(f.repo,'README.md'),'silently changed via sparse checkout hint');
+    assert.throws(()=>observeGit({repoPath:f.repo}),/hidden\/unsupported tracked-file flags/);
+    f.git('update-index','--no-skip-worktree','README.md');
+    const observed=observeGit({repoPath:f.repo});
+    assert.equal(observed.clean,false);
+    assert.equal(matchesReviewCandidate({candidateSha:frozen.candidateSha,gitEvidence:frozen},observed),false);
+  }finally{f.cleanup();}
+});

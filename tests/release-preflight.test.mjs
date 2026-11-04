@@ -5,7 +5,12 @@ import {assessBuildPolicy} from '../scripts/release-preflight.mjs';
 const pkg=JSON.parse(readFileSync('package.json','utf8'));
 const lock=JSON.parse(readFileSync('package-lock.json','utf8'));
 const workflow=readFileSync('.github/workflows/ci.yml','utf8');
-const assess=(extras={})=>assessBuildPolicy({pkg,lock,workflow,trackedFiles:[],...extras});
+const coverage=readFileSync('scripts/check-source-coverage.mjs','utf8');
+const assess=(extras={})=>assessBuildPolicy({
+  pkg,lock,workflow,trackedFiles:[],
+  sourceFiles:{coverage},
+  ...extras
+});
 
 test('reproducible CI passes static checks without granting release',()=>{
   const result=assess();
@@ -47,4 +52,24 @@ test('coverage thresholds and production audit cannot be silently removed',()=>{
   assert.ok(assess({pkg:weak}).errors.includes('SOURCE_COVERAGE_THRESHOLD_MISSING'));
   const modified=workflow.replace('npm audit --omit=dev --audit-level=high','echo skipped audit');
   assert.ok(assess({workflow:modified}).errors.includes('STRESS_COVERAGE_OR_AUDIT_STEP_MISSING'));
+});
+
+test('MCP enforcement gate only claims a local effect boundary when wiring and negative crash evidence exist',()=>{
+  const sources={coverage,mcp:'zana_apply_write',actions:'applyWriteEffect',
+    writer:'INTENT_DURABLE OUTCOME_UNKNOWN',tests:'crash between atomic effect'};
+  assert.equal(assess({sourceFiles:sources}).externalGates.hostExecutorEnforcement,
+    'MCP_EFFECT_BOUNDARY_ENFORCED');
+  assert.equal(assess({sourceFiles:{...sources,mcp:''}}).externalGates.hostExecutorEnforcement,
+    'NOT_CONNECTED');
+  assert.equal(assess({sourceFiles:sources}).releaseAuthorized,false);
+});
+
+test('attestation job must depend on successful matrix with scoped secret and pinned upload',()=>{
+  const modified=workflow.replace('environment: ci-attestation','environment: untrusted');
+  assert.ok(assess({workflow:modified}).errors.includes('CI_ATTESTATION_JOB_UNSAFE'));
+  const exposed=workflow.replace('github.event.pull_request.head.repo.full_name == github.repository','true');
+  assert.ok(assess({workflow:exposed}).errors.includes('CI_ATTESTATION_JOB_UNSAFE'));
+  const unsigned=workflow.replace('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02','actions/upload-artifact@v4');
+  assert.ok(assess({workflow:unsigned}).errors.includes('UNPINNED_CI_ACTION'));
+  assert.equal(assess().releaseAuthorized,false);
 });

@@ -9,6 +9,7 @@ import {tmpdir} from 'node:os';
 import {createMission} from '../src/core.mjs';
 import {readState,storageStatus,databasePath,transact,applyOperatorAction} from '../src/store.mjs';
 import {operations} from '../src/actions.mjs';
+import {applyWriteEffect} from '../src/write-operations.mjs';
 const sha=s=>createHash('sha256').update(s).digest('hex');
 const outcome={success:true,summary:'Verified the committed file content',
   evidence:['Confirmed the actual filesystem state and SHA']};
@@ -217,4 +218,30 @@ test('setuid/setgid/sticky bits are never transferred; new files remain private 
       assert.equal(row.post_mode,0o600);
     }finally{db.close();}
   }finally{await fresh.cleanup();}
+});
+
+
+test('revoke-then-regrant cannot revive an old durable WRITE intention',async()=>{
+  const f=await fixture();
+  try{
+    let replacementGrant;
+    await assert.rejects(applyWriteEffect(f.args(),f.file,{
+      afterIntent:async intent=>{
+        assert.equal(intent.grantId,f.grant.payload.nonce);
+        const revocation=f.signed('REVOKE_WRITE',{
+          grantId:f.grant.payload.nonce
+        });
+        await applyOperatorAction(revocation,f.file);
+        replacementGrant=f.signed('GRANT_WRITE',{paths:['docs']});
+        await applyOperatorAction(replacementGrant,f.file);
+      },
+    }),/Original signed operator grant was revoked or replaced/);
+    assert.notEqual(replacementGrant.payload.nonce,f.grant.payload.nonce);
+    await absent(join(f.dir,'docs/guide.txt'));
+    const state=await readState(f.file);
+    assert.equal(state.units[0].status,'OUTCOME_UNKNOWN');
+    assert.equal(state.units[0].run.effectIntent.grantId,f.grant.payload.nonce);
+    assert.equal((await storageStatus(f.file)).writeEffectReceipts,0);
+    await assert.rejects(operations.applyWrite(f.args()),/required state/);
+  }finally{await f.cleanup();}
 });

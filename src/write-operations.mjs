@@ -44,8 +44,11 @@ export async function applyWriteEffect(args,file=statePath(),hooks={}){
     ensure(expectedPreSha256===undefined||expectedPreSha256===existing.hash,
       'expectedPreSha256 differs; no effect attempted');
     ensure(!deleteFile||existing.exists,'Cannot delete missing file');
+    const grantId=ctx.writeGrant?.id;
+    ensure(typeof grantId==='string'&&grantId.length>0,
+      'Signed operator grant identity required');
     const id=randomUUID();
-    intent={effectId:id,path,operation:request.operation,
+    intent={effectId:id,grantId,path,operation:request.operation,
       preSha256:existing.hash,expectedPostSha256:deleteFile?null:hash(Buffer.from(content,'utf8')),
       bytes:request.bytes,claimedAt:new Date().toISOString()};
     u.run.effectIntent={...intent,status:'INTENT_DURABLE'};
@@ -53,6 +56,9 @@ export async function applyWriteEffect(args,file=statePath(),hooks={}){
     u.status='OUTCOME_UNKNOWN';m.revision++;
     return m;
   },file);
+  // Optional internal fault-injection hook. It never runs under the SQLite lock
+  // and is not exposed as an MCP argument.
+  if(hooks?.afterIntent)await hooks.afterIntent({...intent});
 
   // Transaction #2 serializes the actual effect with revocation and receipt.
   // SQLite rolls back the receipt on crash, but the earlier uncertain intent
@@ -61,6 +67,9 @@ export async function applyWriteEffect(args,file=statePath(),hooks={}){
   await transact(async(m,ctx)=>{
     ensure(m,'Mission missing after intent');
     const u=permitted(m,ctx,{unitId,token,leaseGeneration,path},'OUTCOME_UNKNOWN');
+    ensure(ctx.writeGrant?.id===intent.grantId&&
+      u.run.effectIntent?.grantId===intent.grantId,
+      'Original signed operator grant was revoked or replaced after intent');
     ensure(u.run.effectIntent?.effectId===intent.effectId&&
       u.run.effectIntent.status==='INTENT_DURABLE',
       'Write intent changed before effect');

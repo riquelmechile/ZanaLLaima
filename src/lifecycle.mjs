@@ -102,6 +102,19 @@ export function revokeRunningWrites(m){
 
 export function cancelMission(m){
   check((m.status||'ACTIVE')==='ACTIVE','Mission not active');
+  // Abandon review packets as part of cancellation, preserving completed
+  // lens evidence while invalidating tokens that can no longer be submitted.
+  if(m.review?.state==='OPEN'){
+    m.review.state='INVALIDATED';
+    m.review.invalidatedAt=stamp();
+    m.review.invalidatedReason='MISSION_CANCELLED';
+    for(const lens of m.review.lenses??[]){
+      if(lens.state==='RUNNING'){
+        lens.state='INVALIDATED';
+        lens.run=null;
+      }
+    }
+  }
   for(const u of m.units){
     if(u.status==='RUNNING' && u.effect==='WRITE'){
       u.status='OUTCOME_UNKNOWN';

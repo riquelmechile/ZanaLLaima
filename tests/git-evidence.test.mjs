@@ -135,3 +135,41 @@ test('ignore=all cannot conceal modified tracked submodule content',()=>{
       gitEvidence:frozen},observed),false);
   }finally{f.cleanup();}
 });
+
+
+for(const flag of ['assume-unchanged','skip-worktree']){
+  test('nested submodule index '+flag+' cannot conceal a changed tracked file',()=>{
+    const f=fixture();
+    try{
+      const nested=join(f.dir,'nested-index-'+flag);
+      mkdirSync(nested);
+      const gitNested=(...args)=>execFileSync('git',['-C',nested,...args],
+        {encoding:'utf8'}).trim();
+      gitNested('init','-q','-b','main');
+      gitNested('config','user.name','Nested Test');
+      gitNested('config','user.email','tests@example.invalid');
+      writeFileSync(join(nested,'API.md'),'clean nested fixture');
+      gitNested('add','API.md');
+      gitNested('commit','-qm','initialize nested');
+      f.git('-c','protocol.file.allow=always','submodule','add',nested,'lib');
+      f.git('commit','-qam','track nested index');
+      const frozen=observeGit({repoPath:f.repo});
+      assert.equal(frozen.clean,true);
+      const nestedWorktree=join(f.repo,'lib');
+      const nestedCommand=(...args)=>execFileSync('git',['-C',nestedWorktree,...args],
+        {encoding:'utf8'}).trim();
+      nestedCommand('update-index','--'+flag,'API.md');
+      writeFileSync(join(nestedWorktree,'API.md'),'modified under hidden flag');
+      f.git('config','submodule.lib.ignore','all');
+      assert.equal(f.git('status','--porcelain=v1','--ignore-submodules=none'),'',
+        'The fixture must hide the changed nested file even with explicit submodule status');
+      assert.throws(()=>observeGit({repoPath:f.repo}),
+        /hidden\/unsupported tracked-file flags/);
+      nestedCommand('update-index','--no-'+flag,'API.md');
+      const observed=observeGit({repoPath:f.repo});
+      assert.equal(observed.clean,false);
+      assert.equal(matchesReviewCandidate({candidateSha:frozen.candidateSha,
+        gitEvidence:frozen},observed),false);
+    }finally{f.cleanup();}
+  });
+}

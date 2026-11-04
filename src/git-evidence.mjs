@@ -42,9 +42,37 @@ export function observeGit({
   // git status may suppress content changes with assume-unchanged or
   // skip-worktree index bits. Require ordinary tracked entries before trusting
   // any clean snapshot. The -z format safely preserves strange filenames.
-  const indexEntries=call('ls-files','-v','-z').split('\0').filter(Boolean);
-  if(indexEntries.some(entry=>!entry.startsWith('H ')))
-    deny('Git index contains hidden/unsupported tracked-file flags');
+  // Recursively inspect each initialized gitlink's own index. A parent
+  // status --ignore-submodules=none cannot detect assume-unchanged or
+  // skip-worktree flags hidden inside a submodule's index.
+  const inspectIndex=(worktree,depth=0)=>{
+    if(depth>16)deny('Git submodule nesting exceeds inspection limit');
+    const nestedCall=(...args)=>{
+      try{return execFileSync('git',['-C',worktree,...args],{
+        env:gitEnv(),encoding:'utf8',stdio:['ignore','pipe','pipe'],
+        timeout:10000,maxBuffer:1048576
+      }).trimEnd();}catch{deny('Git submodule index inspection failed');}
+    };
+    const indexEntries=nestedCall('ls-files','-v','-z').split('\0').filter(Boolean);
+    if(indexEntries.some(entry=>!entry.startsWith('H ')))
+      deny('Git index contains hidden/unsupported tracked-file flags');
+    const gitlinks=nestedCall('ls-files','--stage','-z').split('\0')
+      .filter(Boolean).filter(entry=>entry.startsWith('160000 '));
+    for(const entry of gitlinks){
+      const tab=entry.indexOf('\t');
+      if(tab<0)deny('Invalid Git submodule index entry');
+      const subpath=entry.slice(tab+1);
+      let nested;
+      try{nested=realpathSync(resolve(worktree,subpath));}
+      catch{deny('Git submodule unavailable for index inspection');}
+      if(!nested.startsWith(worktree+'/'))
+        deny('Git submodule escapes repository root');
+      if(nestedCall('-C',nested,'rev-parse','--show-toplevel')!==nested)
+        deny('Git submodule is not an exact worktree root');
+      inspectIndex(nested,depth+1);
+    }
+  };
+  inspectIndex(root);
   // Explicitly override submodule.<name>.ignore=all. The worktree is not
   // clean if tracked content inside a nested repository was modified.
   const dirty=call('status','--porcelain=v1','--untracked-files=all',

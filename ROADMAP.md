@@ -150,3 +150,9 @@ Auditoría inicial: commit `a36120b4d0a03f61445dbfcff32e382390e95e14`. Se public
 **Versión candidata:** `0.3.1` sin tag, release ni deploy. Los umbrales de cobertura global 92/85/90 y por módulo (mínimo 80 % de ramas) siguen activos. Los hilos del revisor no se resuelven artificialmente: cada respuesta apunta al SHA corrector y queda sujeta a otra pasada.
 
 **Gates que no se cierran con estos cuatro fixes:** CI firmado con secretos humanos y llaves públicas verificables; aislamiento real del anfitrión por permisos del SO; ZL-018 (E2E Codex ejecutado y registrado por Zana); revisión independiente y aprobación de GitHub distinta del autor. `releaseAuthorized:false` sigue siendo obligatorio.
+
+### Seguimiento de revisión Codex sobre 0.3.1 (2026-11-04)
+
+Los cuatro hallazgos originales se corrigieron en commits separados: P1 cola SQLite `0dfbc8d`, P2 modos de archivos `931921a`, P2 lease CLI `44d9a44` y P2 reapertura Git RDD `2b91918`. Los hilos originales recibieron respuesta con SHA y CI por cada cambio, sin simular aprobación independiente.
+
+Una revisión intermedia detectó dos P2 adicionales en `src/lifecycle.mjs`, corregidos en `0fbe62a` (no acortar leases al renovar) y `2603dbf` (cancelación invalida paquetes RDD, permite archivar). Cada corrección incluye pruebas negativas y mantiene el gate de release cerrado. Revalidar el SHA final y CI tras actualizar la documentación; pedir nueva revisión Codex sobre ese SHA. Las conversaciones siguen abiertas hasta verificación de la revisión.

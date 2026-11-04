@@ -9,6 +9,8 @@ Correcciones tras revisión del bot de GitHub sobre `a36120b4d0a03f61445dbfcff32
 - **P1, SQLite (0dfbc8d):** cola asíncrona por ruta absoluta de base de datos antes de abrir y bloquear las transacciones. Comparte la exclusión local con autorizaciones y archivado; libera la cola incluso tras errores. Pruebas de espera de 200 ms, ocho mutaciones por MCP stdio y estrés multiproceso.
 - **P2, permisos de archivos (931921a):** reemplazos atómicos conservan bits seguros `mode & 0o777`, eliminan setuid/setgid/sticky, y archivos nuevos quedan `0600`. Recibos de permisos previos y posteriores en SQLite v6, con migración conservadora desde v5.
 - **P2, heartbeat (44d9a44):** el CLI deja la duración omitida como `undefined`; el controlador aplica el mínimo entre 300 segundos y el presupuesto de la misión. Test CLI y MCP con un límite de 60 segundos.
+- **P2, heartbeat de lease prolongado (0fbe62a):** renovar con duración omitida o menor no recorta una reserva vigente; se conserva el plazo más largo sin superar el deadline de misión. Tests para 600 s, extensiones explícitas, deadline y presupuestos de 60 s.
+- **P2, cancelación de RDD (2603dbf):** al cancelar una misión se invalidan los paquetes RDD en RUNNING y sus tokens, pero se conserva la evidencia de lentes finalizados. Los archivos de misión cancelada pueden archivarse sin exigir completar trabajo abandonado; tests con SQLite y rechazo de tokens obsoletos.
 - **P2, RDD (2b91918):** una revisión invalidada puede reabrirse con el mismo SHA de feature solo si cambió la base, la rama destino o el árbol congelado. La reapertura consume una ronda y archiva la evidencia anterior; no reemplaza revisiones activas.
 
 ### Puertas pendientes

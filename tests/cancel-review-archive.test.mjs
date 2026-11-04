@@ -27,7 +27,7 @@ test('cancel invalidates running review packet and rejects its stale completion'
   const packet=startReviewBatch(m).packets[0];
   assert.equal(m.review.lenses[0].state,'RUNNING');
   const finished=cancelMission(m);
-  assert.equal(finished.state,'CANCELLED');
+  assert.equal(finished.status,'CANCELLED');
   assert.equal(m.review.state,'INVALIDATED');
   assert.equal(m.review.invalidatedReason,'MISSION_CANCELLED');
   assert.equal(m.review.lenses[0].state,'INVALIDATED');

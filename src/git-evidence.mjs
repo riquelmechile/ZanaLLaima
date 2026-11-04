@@ -45,7 +45,10 @@ export function observeGit({
   const indexEntries=call('ls-files','-v','-z').split('\0').filter(Boolean);
   if(indexEntries.some(entry=>!entry.startsWith('H ')))
     deny('Git index contains hidden/unsupported tracked-file flags');
-  const dirty=call('status','--porcelain=v1','--untracked-files=all');
+  // Explicitly override submodule.<name>.ignore=all. The worktree is not
+  // clean if tracked content inside a nested repository was modified.
+  const dirty=call('status','--porcelain=v1','--untracked-files=all',
+    '--ignore-submodules=none');
   return Object.freeze({assurance:'LOCAL_GIT_OBSERVED',repoRoot:root,
     candidateSha:sha,treeSha,branchRef:branch,targetRef,baseSha,
     clean:dirty.length===0,observedAt:new Date().toISOString()});

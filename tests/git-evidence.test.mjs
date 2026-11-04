@@ -104,3 +104,34 @@ test('skip-worktree cannot conceal modified tracked content from RDD',()=>{
     assert.equal(matchesReviewCandidate({candidateSha:frozen.candidateSha,gitEvidence:frozen},observed),false);
   }finally{f.cleanup();}
 });
+
+
+test('ignore=all cannot conceal modified tracked submodule content',()=>{
+  const f=fixture();
+  try{
+    const nested=join(f.dir,'nested-library');
+    mkdirSync(nested);
+    const nestedGit=(...args)=>execFileSync('git',['-C',nested,...args],
+      {encoding:'utf8'}).trim();
+    nestedGit('init','-q','-b','main');
+    nestedGit('config','user.name','Nested Test');
+    nestedGit('config','user.email','tests@example.invalid');
+    writeFileSync(join(nested,'API.md'),'original library content');
+    nestedGit('add','API.md');
+    nestedGit('commit','-qm','initialize nested fixture');
+    f.git('-c','protocol.file.allow=always','submodule','add',nested,'lib');
+    f.git('commit','-qam','track submodule');
+    const frozen=observeGit({repoPath:f.repo});
+    assert.equal(frozen.clean,true);
+    f.git('config','submodule.lib.ignore','all');
+    writeFileSync(join(f.repo,'lib','API.md'),'changed without commit');
+    assert.equal(f.git('status','--porcelain=v1','--untracked-files=all'),'',
+      'Fixture must demonstrate the submodule ignore bypass');
+    assert.match(f.git('status','--porcelain=v1','--untracked-files=all',
+      '--ignore-submodules=none'),/lib/);
+    const observed=observeGit({repoPath:f.repo});
+    assert.equal(observed.clean,false);
+    assert.equal(matchesReviewCandidate({candidateSha:frozen.candidateSha,
+      gitEvidence:frozen},observed),false);
+  }finally{f.cleanup();}
+});

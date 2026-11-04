@@ -39,7 +39,7 @@ export async function parseCliCommand(command,args=[],{json=readJson,text=readTe
     ...(args[5]?{expectedPreSha256:args[5]}:{})
   };
   else if(command==='heartbeat')input={unitId:args[0],token:args[1],
-    leaseGeneration:Number(args[2]),leaseSeconds:args[3]?Number(args[3]):300};
+    leaseGeneration:Number(args[2]),leaseSeconds:args[3]!==undefined?Number(args[3]):undefined};
   else if(command==='retry')input={unitId:args[0]};
   else if(command==='operator-import')input={envelope:await json(args[0])};
   else if(command==='review-open')input={candidateSha:args[0],

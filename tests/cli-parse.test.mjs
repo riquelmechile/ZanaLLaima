@@ -31,7 +31,7 @@ test('CLI parses every file-backed, optional and numeric command',async()=>{
   assert.equal((await parse('apply-write',['u','t','4','docs/guide','--delete','a'.repeat(64)])).input.deleteFile,true);
   assert.equal((await parse('apply-write',['u','t','4','docs/guide','--delete','a'.repeat(64)])).input.expectedPreSha256,'a'.repeat(64));
   assert.equal((await parse('heartbeat',['u','t','5','30'])).input.leaseSeconds,30);
-  assert.equal((await parse('heartbeat',['u','t','5'])).input.leaseSeconds,300);
+  assert.equal((await parse('heartbeat',['u','t','5'])).input.leaseSeconds,undefined);
   assert.equal((await parse('retry',['u'])).input.unitId,'u');
   assert.equal((await parse('operator-import',['signed.json'])).input.envelope.file,'signed.json');
   assert.equal((await parse('review-open',['a'.repeat(40),'host.json','HIGH'])).input.risk,'HIGH');

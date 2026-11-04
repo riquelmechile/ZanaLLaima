@@ -18,9 +18,13 @@ export function heartbeatUnit(m,{unitId,token,leaseGeneration,leaseSeconds},gran
   check(u.run.expiresAt && Date.parse(u.run.expiresAt)>Date.now(),
     'Lease expired; reconciliation required');
   check(grantPermits(u,grant),'Effective write permission missing or revoked');
+  // Heartbeats renew leases but never shorten a still-valid reservation.
+  // The immutable mission deadline remains the absolute upper bound.
+  const oldExpiry=Date.parse(u.run.expiresAt);
+  const deadline=limit.deadlineAt?Date.parse(limit.deadlineAt):Infinity;
   u.run.heartbeatAt=stamp();
-  u.run.expiresAt=new Date(Math.min(Date.now()+seconds*1000,
-    limit.deadlineAt?Date.parse(limit.deadlineAt):Infinity)).toISOString();
+  u.run.expiresAt=new Date(Math.min(deadline,
+    Math.max(oldExpiry,Date.now()+seconds*1000))).toISOString();
   m.revision++;
   return {unitId,leaseGeneration,expiresAt:u.run.expiresAt};
 }

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { execFileSync } from 'node:child_process';
+import {readFileSync} from 'node:fs';
 import { mkdtemp,mkdir,writeFile,rm } from 'node:fs/promises';
 import { join,resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -48,7 +49,11 @@ test('official client negotiates SDK protocol and rejects untrusted reports',asy
   try{
     c=await localClient(f);
     const tools=(await c.client.listTools()).tools;
-    assert.equal(tools.length,23);
+    const readme=readFileSync(new URL('../README.md',import.meta.url),'utf8');
+    const declared=readme.match(/\*\*(\d+) herramientas MCP\*\*/);
+    assert.ok(declared,'README must state exact MCP tool count');
+    assert.equal(tools.length,Number(declared[1]),'README/catalog mismatch');
+    assert.equal(tools.length,24);
     assert.ok(tools.some(t=>t.name==='zana_capability_status'));
     const p=await c.call('zana_profile');
     assert.equal(p.value.requested.model,'gpt-6-astra');

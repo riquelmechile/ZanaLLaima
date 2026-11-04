@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Static build/release preflight. This is not an authorization for merge or deployment.
 import {readFileSync} from 'node:fs';
+import {createPublicKey} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {resolve,join} from 'node:path';
 import {pathToFileURL} from 'node:url';
@@ -68,6 +69,15 @@ export function assessBuildPolicy({pkg,lock,workflow,trackedFiles=[],sourceFiles
     if(/(?:^|\/)(?:\.env(?:\..+)?|id_rsa|id_ed25519)$|(?:^|\/)[^/]+\.(?:pem|key|p12|pfx|sqlite|db|sqlite-wal|sqlite-shm)$/.test(name))
       fail(errors,'SENSITIVE_FILE_TRACKED');
   }
+  // Only the public key is inspected. Even valid PEM is not a CI attestation.
+  let ciVerifierPublicKey='MISSING_OR_INVALID';
+  try{
+    const verifier=createPublicKey(sourceFiles.ciPublicKey||'');
+    if(verifier.asymmetricKeyType==='ed25519')
+      ciVerifierPublicKey='FORMAT_VALID_NOT_ATTESTED';
+  }catch{
+    ciVerifierPublicKey='MISSING_OR_INVALID';
+  }
   const effectBounded=(
     /zana_apply_write/.test(sourceFiles.mcp||'')&&
     /applyWriteEffect/.test(sourceFiles.actions||'')&&
@@ -81,6 +91,7 @@ export function assessBuildPolicy({pkg,lock,workflow,trackedFiles=[],sourceFiles
       requiredChecks:'NOT_VERIFIED',
       independentReview:'NOT_VERIFIED',
       trustedCIAttribution:'NOT_CONNECTED',
+      ciVerifierPublicKey,
       hostExecutorEnforcement:effectBounded?'MCP_EFFECT_BOUNDARY_ENFORCED':'NOT_CONNECTED',
       nativeSubagents:'NOT_VERIFIED',
     },
@@ -99,6 +110,7 @@ export function inspectRepository(root=process.cwd()){
       writer:read('src/write-operations.mjs'),
       tests:read('tests/write-effect.test.mjs'),
       coverage:read('scripts/check-source-coverage.mjs'),
+      ciPublicKey:read('keys/ci-verifier.pub'),
     }
   });
 }

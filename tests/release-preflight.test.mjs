@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
+import {createPublicKey} from 'node:crypto';
 import {assessBuildPolicy} from '../scripts/release-preflight.mjs';
 const pkg=JSON.parse(readFileSync('package.json','utf8'));
 const lock=JSON.parse(readFileSync('package-lock.json','utf8'));
@@ -72,4 +73,24 @@ test('attestation job must depend on successful matrix with scoped secret and pi
   const unsigned=workflow.replace('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02','actions/upload-artifact@v4');
   assert.ok(assess({workflow:unsigned}).errors.includes('UNPINNED_CI_ACTION'));
   assert.equal(assess().releaseAuthorized,false);
+});
+
+
+test('placeholder CI public key cannot masquerade as configured attestation',()=>{
+  const placeholder=readFileSync('keys/ci-verifier.pub','utf8');
+  assert.match(placeholder,/PENDIENTE DE ZANA/);
+  const result=assess({sourceFiles:{coverage,ciPublicKey:placeholder}});
+  assert.equal(result.externalGates.ciVerifierPublicKey,'MISSING_OR_INVALID');
+  assert.equal(result.externalGates.trustedCIAttribution,'NOT_CONNECTED');
+  assert.equal(result.releaseAuthorized,false);
+  // Known RFC 8032 test-vector PUBLIC key only: no private material is loaded.
+  const spkiHex='302a300506032b6570032100'+
+    'd75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a';
+  const validPublic=createPublicKey({
+    key:Buffer.from(spkiHex,'hex'),format:'der',type:'spki',
+  }).export({type:'spki',format:'pem'});
+  const publicOnly=assess({sourceFiles:{coverage,ciPublicKey:validPublic}});
+  assert.equal(publicOnly.externalGates.ciVerifierPublicKey,'FORMAT_VALID_NOT_ATTESTED');
+  assert.equal(publicOnly.externalGates.trustedCIAttribution,'NOT_CONNECTED');
+  assert.equal(publicOnly.releaseAuthorized,false);
 });

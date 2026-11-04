@@ -19,6 +19,21 @@ const parse = x => x == null ? null : JSON.parse(x);
 export const statePath = () => resolve(process.env.ZANA_STATE_FILE || '.zana/state.json');
 export const databasePath = (file = statePath()) =>
   resolve(file).replace(/\.json$/i, '.sqlite');
+// Serialize SQLite write entry before synchronous connect/BEGIN IMMEDIATE.
+// SQLite WAL and busy_timeout continue to guard other processes.
+const localWriteTails=new Map();
+async function queueLocalWrite(path,action){
+  const preceding=localWriteTails.get(path);
+  let release;
+  const ownTurn=new Promise(resolve=>{release=resolve;});
+  localWriteTails.set(path,ownTurn);
+  if(preceding)await preceding;
+  try{return await action();}
+  finally{
+    release(); // Failed transactions must never poison later callers.
+    if(localWriteTails.get(path)===ownTurn)localWriteTails.delete(path);
+  }
+}
 export const legacyPath = (file = statePath()) => {
   const absolute = resolve(file);
   return absolute.endsWith('.json') ? absolute : absolute + '.json';
@@ -255,10 +270,11 @@ export async function readState(file = statePath()) {
 
 export async function transact(change, file = statePath()) {
   if (typeof change !== 'function') fail('Transaction needs a state transformation');
-  await refuseInterruptedRestore(file);
   const path = databasePath(file);
-  await ensureFile(path);
-  const db = connect(path);
+  return queueLocalWrite(path,async()=>{
+    await refuseInterruptedRestore(file);
+    await ensureFile(path);
+    const db = connect(path);
   try {
     db.exec('BEGIN IMMEDIATE');
     try {
@@ -281,6 +297,7 @@ export async function transact(change, file = statePath()) {
       return updated;
     } catch (e) { db.exec('ROLLBACK'); throw e; }
   } finally { db.close(); }
+  });
 }
 
 export async function migrateLegacy(file = statePath()) {
@@ -449,10 +466,11 @@ export async function authorizationStatus(file=statePath()){
 }
 
 export async function applyOperatorAction(envelope,file=statePath()){
-  await refuseInterruptedRestore(file);
   const path=databasePath(file);
-  if(!await exists(path))fail('No database to authorize');
-  const db=connect(path);
+  return queueLocalWrite(path,async()=>{
+    await refuseInterruptedRestore(file);
+    if(!await exists(path))fail('No database to authorize');
+    const db=connect(path);
   try{
     db.exec('BEGIN IMMEDIATE');
     try{
@@ -488,13 +506,15 @@ export async function applyOperatorAction(envelope,file=statePath()){
         actionId:p.nonce,writeGrant:await readEffectiveGrant(db,next)};
     }catch(e){db.exec('ROLLBACK');throw e;}
   }finally{db.close();}
+  });
 }
 
 export async function archiveMission(file=statePath()){
-  await refuseInterruptedRestore(file);
   const path=databasePath(file);
-  if(!await exists(path))fail('No database to archive');
-  const db=connect(path);
+  return queueLocalWrite(path,async()=>{
+    await refuseInterruptedRestore(file);
+    if(!await exists(path))fail('No database to archive');
+    const db=connect(path);
   try{
     db.exec('BEGIN IMMEDIATE');
     try{
@@ -517,6 +537,7 @@ export async function archiveMission(file=statePath()){
       return {archived:true,missionId:m.id};
     }catch(e){db.exec('ROLLBACK');throw e;}
   }finally{db.close();}
+  });
 }
 
 export async function readMissionArchive({limit=25,before=null}={},file=statePath()){

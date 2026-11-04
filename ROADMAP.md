@@ -156,3 +156,7 @@ Auditoría inicial: commit `a36120b4d0a03f61445dbfcff32e382390e95e14`. Se public
 Los cuatro hallazgos originales se corrigieron en commits separados: P1 cola SQLite `0dfbc8d`, P2 modos de archivos `931921a`, P2 lease CLI `44d9a44` y P2 reapertura Git RDD `2b91918`. Los hilos originales recibieron respuesta con SHA y CI por cada cambio, sin simular aprobación independiente.
 
 Una revisión intermedia detectó dos P2 adicionales en `src/lifecycle.mjs`, corregidos en `0fbe62a` (no acortar leases al renovar) y `2603dbf` (cancelación invalida paquetes RDD, permite archivar). Cada corrección incluye pruebas negativas y mantiene el gate de release cerrado. Revalidar el SHA final y CI tras actualizar la documentación; pedir nueva revisión Codex sobre ese SHA. Las conversaciones siguen abiertas hasta verificación de la revisión.
+
+### Ronda 3 de seguridad, candidata 0.3.2
+
+Codex identificó un P1 de regrant después de intención WRITE y un P2 de flags Git que ocultaban modificaciones. Se añadieron pruebas negativas: la segunda fase conserva el grant original y Git RDD rechaza assume-unchanged/skip-worktree. Se preparó un script idempotente de configuración humana de CI con simulación sin efectos y un checklist de operador. El preflight conserva releaseAuthorized:false y trustedCIAttribution:NOT_CONNECTED hasta evidencia real. Los hilos solo se resuelven si la última revisión Codex finaliza sin hallazgos, y no hay merge, release, tag ni deploy.

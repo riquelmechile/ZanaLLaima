@@ -1,5 +1,15 @@
 # Registro de cambios
 
+## [0.3.2] - No publicado
+
+- P1 seguridad: intención WRITE vinculada al grant original y test negativo de revocación más regrant.
+- P2 seguridad: rechazo de flags ocultos Git assume-unchanged y skip-worktree en RDD.
+- Script humano idempotente para firma CI con --dry-run; atestación desactivada hasta revisión.
+- Preflight distingue llave pública válida de placeholder sin dar autorización de release.
+- Checklist humano para invitación, atestación, E2E y merge manual.
+
+No hubo merge, tag ni despliegue.
+
 ## [0.3.1] - No publicado
 
 Correcciones tras revisión del bot de GitHub sobre `a36120b4d0a03f61445dbfcff32e382390e95e14`. Cuatro commits independientes, sin merge, tag, release ni deploy.

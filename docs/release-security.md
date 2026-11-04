@@ -81,44 +81,25 @@ El planificador local ya admite reposición incremental READ mientras otros toke
 
 ## Activación CI Ed25519: PASO HUMANO (Zana)
 
-El job `attest` y el script `scripts/ci-attest.mjs` están preparados, pero todavía **no existe una atestación auténtica**. `keys/ci-verifier.pub` contiene texto de configuración, no una llave pública verificable. Zana debe generar la pareja de llaves localmente, sin mostrar al modelo la privada:
+La configuración completa se ejecuta exclusivamente en la máquina del operador mediante:
 
 ```sh
-umask 077
-mkdir -p "$HOME/.config/zana-llaima"
-openssl genpkey -algorithm Ed25519 \
-  -out "$HOME/.config/zana-llaima/ci-attest-private.pem"
-cd /home/zana/ZanaLLaima
-openssl pkey -in "$HOME/.config/zana-llaima/ci-attest-private.pem" \
-  -pubout > keys/ci-verifier.pub
-
-gh api --method PUT \
-  repos/riquelmechile/ZanaLLaima/environments/ci-attestation
-
-gh secret set ZANA_CI_SIGNING_KEY \
-  --repo riquelmechile/ZanaLLaima \
-  --env ci-attestation \
-  < "$HOME/.config/zana-llaima/ci-attest-private.pem"
+bash scripts/setup-ci-signing.sh
 ```
 
-**Antes de activarlo:** agregar al environment protección de ramas autorizadas y aprobador humano independiente. Un PR del mismo repositorio podría editar el workflow: no exponer la llave de CI sin una revisión previa del código que va a ejecutar. Cuando estén activas las protecciones y commiteada **solo** la llave pública real:
+La simulación que no modifica archivos ni recursos remotos es:
 
 ```sh
-gh variable set ZANA_CI_ATTESTATION_READY \
-  --repo riquelmechile/ZanaLLaima --body true
+bash scripts/setup-ci-signing.sh --dry-run
 ```
 
-La llave de CI debe ser diferente de la privada del operador. El cambio de llave pública altera el SHA del PR y exige repetir CI y revisión. El job, si se ejecuta con secreto válido después de la matriz verde, carga el artifact `ci-attestation-<SHA>` con vigencia limitada. Sin secreto válido, falla cerrado; si aún no está habilitado, queda omitido.
+El script conserva una llave existente sin sobrescribirla, exige el modo 0600 y compara huellas de llaves **públicas** CI/operador para impedir reutilizar el mismo firmante. El secreto se transmite por entrada estándar de GitHub CLI y nunca se muestra en la salida.
 
-Validar el sobre de CI y la aprobación separada del operador:
+La política de environment permite solo `main`, la rama feature y `refs/pull/1/merge`, porque GitHub evalúa las ejecuciones `pull_request` con esa referencia. No se habilita automáticamente `ZANA_CI_ATTESTATION_READY`: Zana debe comprobar primero la revisión humana exigida por el environment.
 
-```sh
-export ZANA_CI_PUBLIC_KEY_PATH=/home/zana/ZanaLLaima/keys/ci-verifier.pub
-export ZANA_OPERATOR_PUBLIC_KEY_PATH="$HOME/.config/zana-llaima/operator-public.pem"
-node src/cli.mjs delivery-check /ruta/ci-attestation.json /ruta/aprobacion-operador.json
-```
+El archivo `keys/ci-verifier.pub` sigue siendo un marcador hasta que Zana ejecute el script. `trustedCIAttribution` continúa `NOT_CONNECTED` y `releaseAuthorized:false` aunque la llave pública tenga formato correcto; hace falta un artifact CI firmado real y una aprobación separada del operador.
 
-El gate podrá informar como máximo `READY_FOR_MANUAL_RELEASE`; `releaseAuthorized:false`, la necesidad de revisión independiente y la prohibición de merge/deploy automático se mantienen. El host aún debe ejecutar y documentar las pruebas de aislamiento real de SO (ZL-004 operacional) y Codex (ZL-018).
+Para el orden humano completo, ver [operator-checklist.md](operator-checklist.md).
 
 ## PASO HUMANO: segunda cuenta para la revisión del PR
 
@@ -126,7 +107,7 @@ La protección de `main` requiere una aprobación de GitHub distinta del autor y
 
 ```sh
 gh api --method PUT \
-  repos/riquelmechile/ZanaLLaima/collaborators/SEGUNDA_CUENTA \
+  repos/riquelmechile/ZanaLLaima/collaborators/sebastianriquelme95-max \
   -f permission=push
 ```
 

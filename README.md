@@ -114,3 +114,5 @@ Ver [auditoría de seguridad](docs/release-security.md) y [registro de cambios](
 - [Estado y criterios pendientes](ROADMAP.md)
 
 **ChatGPT web no puede ejecutar directamente el proceso stdio local.** Una conexión web necesita un servicio HTTP MCP autenticado mediante OAuth y controles de aislamiento adicionales. Ese transporte queda fuera de la versión 0.3.1.
+
+La guía breve para completar los pasos humanos de la versión 0.3.2 es [docs/operator-checklist.md](docs/operator-checklist.md). La configuración de firma CI se realiza desde la máquina de Zana con `bash scripts/setup-ci-signing.sh`.

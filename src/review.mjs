@@ -41,8 +41,15 @@ export function openReview(mission,{candidateSha,hostReport={},risk='MEDIUM',git
   }
   const old=mission.review;
   if(old){
-    insist(old.candidateSha!==candidateSha,
-      'Review already exists for this candidate; resume instead of silently replacing its evidence');
+    if(old.candidateSha===candidateSha){
+      const frozen=old.gitEvidence;
+      const changedGitBoundary=old.state==='INVALIDATED' &&
+        frozen?.assurance==='LOCAL_GIT_OBSERVED' &&
+        gitEvidence?.assurance==='LOCAL_GIT_OBSERVED' &&
+        ['baseSha','targetRef','treeSha'].some(field=>frozen[field]!==gitEvidence[field]);
+      insist(changedGitBoundary,
+        'Review already exists for this candidate; only an invalidated and changed Git snapshot may reopen it');
+    }
     insist(!old.lenses.some(x=>x.state==='RUNNING'),'Resolve active packets before a new candidate');
     if(gitEvidence)insist(old.state==='INVALIDATED'||
       ['CHANGES_REQUIRED','SELF_CHECK_COMPLETE_UNVERIFIED','NATIVE_4R_REPORTED_UNVERIFIED',

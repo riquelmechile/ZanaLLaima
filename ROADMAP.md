@@ -162,3 +162,7 @@ Una revisión intermedia detectó dos P2 adicionales en `src/lifecycle.mjs`, cor
 Codex identificó un P1 de regrant después de intención WRITE y un P2 de flags Git que ocultaban modificaciones. Se añadieron pruebas negativas: la segunda fase conserva el grant original y Git RDD rechaza assume-unchanged/skip-worktree. Se preparó un script idempotente de configuración humana de CI con simulación sin efectos y un checklist de operador. El preflight conserva releaseAuthorized:false y trustedCIAttribution:NOT_CONNECTED hasta evidencia real. Los hilos solo se resuelven si la última revisión Codex finaliza sin hallazgos, y no hay merge, release, tag ni deploy.
 
 - P2 adicional: inspección de submódulos pese a submodule.ignore=all, corregida en 7094de824757c4abafb96441dd34dd553cb172be; test Git con cambios internos.
+
+### Corrección adicional de revisión Codex · 0.3.2
+
+`ebd8c9b`: `observeGit()` inspecciona recursivamente los índices de los submódulos para impedir que flags `assume-unchanged` o `skip-worktree` oculten cambios rastreados. Dos regresiones con repositorios reales añadidas a `tests/git-evidence.test.mjs`. Requiere nueva revisión Codex y security review sobre el HEAD posterior a este commit; no implica aprobación independiente.

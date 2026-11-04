@@ -6,7 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { operatorPublicKey, verifySignedAction, verifyStoredGrant } from './operator.mjs';
 import { reconcileWrite, revokeRunningWrites } from './lifecycle.mjs';
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 const MAX_EVENTS = 2000;
 const MAX_ARCHIVES = 200;
 const BUSY_MS = 10000;
@@ -70,7 +70,7 @@ function connect(path, readonly = false) {
           'CREATE INDEX IF NOT EXISTS events_recent ON state_events(mission_id,seq DESC)',
           'CREATE TABLE IF NOT EXISTS work_receipts (mission_id TEXT NOT NULL, unit_id TEXT NOT NULL, token TEXT NOT NULL, generation INTEGER NOT NULL, status TEXT NOT NULL, result TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(mission_id,unit_id,token))',
           'CREATE TABLE IF NOT EXISTS review_receipts (review_id TEXT NOT NULL, lens_id TEXT NOT NULL, token TEXT NOT NULL, result TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(review_id,lens_id,token))',
-          'CREATE TABLE IF NOT EXISTS write_effect_receipts (mission_id TEXT NOT NULL, unit_id TEXT NOT NULL, token TEXT NOT NULL, generation INTEGER NOT NULL, effect_id TEXT NOT NULL UNIQUE, path TEXT NOT NULL, pre_sha TEXT, post_sha TEXT, bytes INTEGER NOT NULL, operation TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(mission_id,unit_id,token,generation))',
+          'CREATE TABLE IF NOT EXISTS write_effect_receipts (mission_id TEXT NOT NULL, unit_id TEXT NOT NULL, token TEXT NOT NULL, generation INTEGER NOT NULL, effect_id TEXT NOT NULL UNIQUE, path TEXT NOT NULL, pre_sha TEXT, post_sha TEXT, bytes INTEGER NOT NULL, operation TEXT NOT NULL, pre_mode INTEGER, post_mode INTEGER, created_at TEXT NOT NULL, PRIMARY KEY(mission_id,unit_id,token,generation))',
           'CREATE TABLE IF NOT EXISTS mission_archive (seq INTEGER PRIMARY KEY AUTOINCREMENT, mission_id TEXT NOT NULL UNIQUE, snapshot TEXT NOT NULL, archived_at TEXT NOT NULL)',
           'CREATE TABLE IF NOT EXISTS operator_grants (grant_id TEXT PRIMARY KEY, mission_id TEXT NOT NULL, payload TEXT NOT NULL, signature TEXT NOT NULL, fingerprint TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)',
           'CREATE TABLE IF NOT EXISTS operator_actions (nonce TEXT PRIMARY KEY, mission_id TEXT NOT NULL, kind TEXT NOT NULL, created_at TEXT NOT NULL)',
@@ -81,6 +81,9 @@ function connect(path, readonly = false) {
         if(!columns.includes('closed_at')) db.exec('ALTER TABLE active_mission ADD COLUMN closed_at TEXT');
         if(!columns.includes('review_count')) db.exec('ALTER TABLE active_mission ADD COLUMN review_count INTEGER NOT NULL DEFAULT 0');
         if(!columns.includes('budget')) db.exec('ALTER TABLE active_mission ADD COLUMN budget TEXT');
+        const effectColumns=db.prepare('PRAGMA table_info(write_effect_receipts)').all().map(x=>x.name);
+        if(!effectColumns.includes('pre_mode'))db.exec('ALTER TABLE write_effect_receipts ADD COLUMN pre_mode INTEGER');
+        if(!effectColumns.includes('post_mode'))db.exec('ALTER TABLE write_effect_receipts ADD COLUMN post_mode INTEGER');
         const unitColumns=db.prepare('PRAGMA table_info(units)').all().map(x=>x.name);
         if(!unitColumns.includes('attempts')) db.exec('ALTER TABLE units ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0');
         db.exec('PRAGMA user_version = ' + SCHEMA_VERSION + '; COMMIT');
@@ -186,12 +189,14 @@ function persist(db, previous, next, kind = 'STATE_CHANGED') {
     }
     if(u.run?.effectReceipt && !old?.run?.effectReceipt){
       const effect=u.run.effectReceipt;
-      const inserted=db.prepare('INSERT INTO write_effect_receipts(mission_id,unit_id,token,generation,effect_id,path,pre_sha,post_sha,bytes,operation,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
+      const inserted=db.prepare('INSERT INTO write_effect_receipts(mission_id,unit_id,token,generation,effect_id,path,pre_sha,post_sha,bytes,operation,pre_mode,post_mode,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)')
         .run(next.id,u.id,u.run.token,u.run.leaseGeneration,effect.effectId,effect.path,
-          effect.preSha256,effect.postSha256,effect.bytes,effect.operation,effect.appliedAt);
+          effect.preSha256,effect.postSha256,effect.bytes,effect.operation,
+          effect.preMode??null,effect.postMode??null,effect.appliedAt);
       if(inserted.changes!==1)fail('Write receipt was not unique');
       addEvent(db,next,'WRITE_EFFECT_COMMITTED',{unitId:u.id,effectId:effect.effectId,
-        path:effect.path,preSha256:effect.preSha256,postSha256:effect.postSha256,bytes:effect.bytes});
+        path:effect.path,preSha256:effect.preSha256,postSha256:effect.postSha256,
+        preMode:effect.preMode??null,postMode:effect.postMode??null,bytes:effect.bytes});
     }
     if ((!old || old.status !== u.status) && (u.status === 'DONE' || u.status === 'FAILED')) {
       if (!u.run?.token || !u.result) fail('Completed unit lacks a real run token or result');

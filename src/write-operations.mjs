@@ -79,7 +79,8 @@ export async function applyWriteEffect(args,file=statePath(),hooks={}){
       'Postimage hash does not match reserved intention');
     if(hooks?.afterEffect)await hooks.afterEffect(effect);
     receipt={effectId:intent.effectId,path,preSha256:effect.preSha256,
-      postSha256:effect.postSha256,bytes:effect.bytes,
+      postSha256:effect.postSha256,preMode:effect.preMode,postMode:effect.postMode,
+      bytes:effect.bytes,
       appliedAt:effect.appliedAt,operation:effect.operation,
       assurance:effect.assurance};
     u.run.effectReceipt=receipt;

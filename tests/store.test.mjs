@@ -25,7 +25,7 @@ test('SQLite WAL keeps normalized units and durable receipts across reopen',asyn
     const info=await storageStatus(f.file);
     assert.equal(info.backend,'SQLITE_WAL');
     assert.equal(info.journalMode,'wal');
-    assert.equal(info.schemaVersion,5);
+    assert.equal(info.schemaVersion,6);
     assert.equal(info.integrity,'ok');
     const unit=await transact(s=>{
       const packet=startBatch(s).batch.packets[0];
@@ -273,6 +273,6 @@ test('verified review correction count survives process reopen',async()=>{
     const restarted=await readState(f.file);
     assert.equal(restarted.reviewCount,2);
     assert.equal(restarted.review.round,2);
-    assert.equal((await storageStatus(f.file)).schemaVersion,5);
+    assert.equal((await storageStatus(f.file)).schemaVersion,6);
   }finally{await f.cleanup();}
 });

@@ -114,7 +114,7 @@ async function inspectTarget(parent,baseName){
   const target=fdPath(parent,baseName);
   let stat;
   try{stat=await lstat(target);}
-  catch(e){if(e.code==='ENOENT')return {exists:false,hash:null,bytes:0};throw e;}
+  catch(e){if(e.code==='ENOENT')return {exists:false,hash:null,bytes:0,mode:null};throw e;}
   if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1)
     fail('Destination is symlink, hardlink, or non-regular file');
   const handle=await open(target,readFlags);
@@ -124,7 +124,7 @@ async function inspectTarget(parent,baseName){
       fail('Destination changed during inspection');
     if(actual.size>32*1024*1024)fail('Existing file exceeds 32 MiB inspection limit');
     const contents=await handle.readFile();
-    return {exists:true,hash:hash(contents),bytes:contents.length};
+    return {exists:true,hash:hash(contents),bytes:contents.length,mode:actual.mode&0o7777};
   }finally{await handle.close();}
 }
 
@@ -148,6 +148,8 @@ export async function atomicWorkspaceEffect({path,content,deleteFile=false,expec
     if(deleteFile&&!pre.exists)fail('Cannot delete absent file');
     const target=fdPath(fd.current,basename);
     let postHash=null,bytes=0;
+    const preMode=pre.mode;
+    let postMode=deleteFile?null:(pre.exists?(pre.mode&0o777):0o600);
     if(deleteFile){
       await beforeEffect();
       // unlinkat equivalent over an anchored procfd. Directory fd stays open.
@@ -159,12 +161,15 @@ export async function atomicWorkspaceEffect({path,content,deleteFile=false,expec
       const writer=await open(fdPath(fd.current,temp),writeFlags,0o600);
       try{
         await writer.writeFile(buffer);
+        // Content-only replacement keeps regular-file access permissions.
+        // Never copy setuid, setgid or sticky bits from the old inode.
+        await writer.chmod(postMode);
         await writer.sync();
       }finally{await writer.close();}
       // Re-validate before replacement. rename() never follows a destination
       // symlink; it replaces the directory entry itself.
       const recheck=await inspectTarget(fd.current,basename);
-      if(recheck.hash!==pre.hash||recheck.exists!==pre.exists)
+      if(recheck.hash!==pre.hash||recheck.exists!==pre.exists||recheck.mode!==pre.mode)
         fail('Target preimage changed before rename');
       if(!inside(home,await realpath(fdPath(fd.current))))
         fail('Directory moved outside workspace before rename');
@@ -173,7 +178,7 @@ export async function atomicWorkspaceEffect({path,content,deleteFile=false,expec
       temp=null;
     }
     await fd.current.sync();
-    return {preSha256:pre.hash,postSha256:postHash,bytes,
+    return {preSha256:pre.hash,postSha256:postHash,preMode,postMode,bytes,
       appliedAt:new Date().toISOString(),operation:deleteFile?'DELETE':'REPLACE',
       assurance:'LINUX_ANCHORED_ATOMIC_EFFECT_NO_OS_SANDBOX'};
   }finally{

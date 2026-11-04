@@ -69,3 +69,10 @@ Detalles y verificación reproducible en [Fase 4](phase4-performance.md).
 ## SQLite v5: registro durable de efectos WRITE
 
 La nueva tabla `write_effect_receipts` conserva, de manera única por intento, el identificador de efecto, SHA pre/post, bytes y timestamp del archivo. Las intenciones quedan también en el `run.effectIntent` de la unidad. Un proceso que se detiene luego del efecto pero antes de confirmar la transacción del recibo deja `OUTCOME_UNKNOWN` persistido y no repetible. Las bases v4 se migran transaccionalmente a v5 antes de admitir nuevas escrituras. Ver [ZL-004](safety-lifecycle.md).
+
+
+## SQLite v6: modos POSIX en recibos WRITE
+
+La migración conservadora v5→v6 añade \`pre_mode INTEGER\` y \`post_mode INTEGER\` a \`write_effect_receipts\`, sin reescribir los recibos anteriores. En filas históricas estos campos permanecen **NULL**, porque no sería correcto inferir los permisos originales a partir del hash del archivo. En cada recibo nuevo, \`pre_mode\` registra los permisos completos del destino anterior (\`st.mode & 0o7777\`) y \`post_mode\` los permisos efectivamente aplicados; para borrados, el modo posterior es \`NULL\`.
+
+El almacenamiento sigue preservando el hash, token, generación y evidencia del efecto; el esquema objetivo actual es **\`user_version=6\`**. Una base v5 requiere su migración mediante una transacción de escritura autorizada antes de lecturas nuevas. Ver \`tests/schema-v6-migration.test.mjs\` y \`tests/write-effect.test.mjs\`.

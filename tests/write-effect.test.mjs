@@ -1,12 +1,13 @@
+import {DatabaseSync} from 'node:sqlite';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID,generateKeyPairSync,sign,createHash} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
-import {mkdtemp,mkdir,writeFile,readFile,rm,rename,symlink,link} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,readFile,rm,rename,symlink,link,chmod,stat} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createMission} from '../src/core.mjs';
-import {readState,storageStatus,transact,applyOperatorAction} from '../src/store.mjs';
+import {readState,storageStatus,databasePath,transact,applyOperatorAction} from '../src/store.mjs';
 import {operations} from '../src/actions.mjs';
 const sha=s=>createHash('sha256').update(s).digest('hex');
 const outcome={success:true,summary:'Verified the committed file content',
@@ -162,4 +163,58 @@ test('crash between atomic effect and SQLite receipt remains uncertain; no repla
       evidence:['Operator inspected the actual file and verified its content hash']}),f.file);
     assert.equal((await readState(f.file)).units[0].status,'DONE');
   }finally{await f.cleanup();}
+});
+
+test('existing 0755/0644 access bits survive atomic replacement and are persisted in the receipt',async()=>{
+  for(const mode of [0o755,0o644]){
+    const f=await fixture();
+    try{
+      const target=join(f.dir,'docs','guide.txt');
+      await writeFile(target,'original');await chmod(target,mode);
+      const receipt=await operations.applyWrite(f.args({content:'replacement'}));
+      assert.equal(receipt.preMode,mode);
+      assert.equal(receipt.postMode,mode);
+      assert.equal((await stat(target)).mode&0o7777,mode);
+      assert.equal(await readFile(target,'utf8'),'replacement');
+      const db=new DatabaseSync(databasePath(f.file),{readOnly:true});
+      try{
+        const row=db.prepare('SELECT pre_mode,post_mode FROM write_effect_receipts WHERE effect_id=?')
+          .get(receipt.effectId);
+        assert.equal(row.pre_mode,mode);
+        assert.equal(row.post_mode,mode);
+      }finally{db.close();}
+      const m=await readState(f.file);
+      assert.equal(m.units[0].run.effectReceipt.preMode,mode);
+      assert.equal(m.units[0].run.effectReceipt.postMode,mode);
+    }finally{await f.cleanup();}
+  }
+});
+
+test('setuid/setgid/sticky bits are never transferred; new files remain private 0600',async()=>{
+  const existed=await fixture();
+  try{
+    const target=join(existed.dir,'docs','guide.txt');
+    await writeFile(target,'privileged origin');
+    await chmod(target,0o4755);
+    const observed=(await stat(target)).mode&0o7777;
+    assert.equal(observed,0o4755,'Fixture must demonstrate setuid bit before replacement');
+    const receipt=await operations.applyWrite(existed.args({content:'unprivileged replacement'}));
+    assert.equal(receipt.preMode,0o4755,'Receipt records original privileged bits without copying them');
+    assert.equal(receipt.postMode,0o755);
+    assert.equal((await stat(target)).mode&0o7777,0o755);
+  }finally{await existed.cleanup();}
+  const fresh=await fixture();
+  try{
+    const receipt=await operations.applyWrite(fresh.args());
+    assert.equal(receipt.preMode,null);
+    assert.equal(receipt.postMode,0o600);
+    assert.equal((await stat(join(fresh.dir,'docs','guide.txt'))).mode&0o7777,0o600);
+    const db=new DatabaseSync(databasePath(fresh.file),{readOnly:true});
+    try{
+      const row=db.prepare('SELECT pre_mode,post_mode FROM write_effect_receipts WHERE effect_id=?')
+        .get(receipt.effectId);
+      assert.equal(row.pre_mode,null);
+      assert.equal(row.post_mode,0o600);
+    }finally{db.close();}
+  }finally{await fresh.cleanup();}
 });

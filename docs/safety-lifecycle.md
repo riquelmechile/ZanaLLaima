@@ -101,3 +101,12 @@ Para evitar perder certeza en una caída, se persisten **dos transacciones**: (1
 En Linux la escritura abre los directorios desde `/proc/self/fd` con `O_DIRECTORY|O_NOFOLLOW`, contrasta identidades `dev/ino` capturadas al reservar, y rechaza destino symlink, hardlink o no regular. Un archivo nuevo se escribe en temporal 0600, se sincroniza, se renombra atómicamente y se sincroniza el directorio. Los borrados usan `unlink` y `fsync` del directorio. No se permite crear directorios implícitos.
 
 **Límite:** el MCP no puede impedir que el host use un shell, Git u otra herramienta con permisos propios. Tampoco sustituye una operación CAS de filesystem provista por el kernel frente a escritores externos hostiles. Para aislamiento efectivo, se recomienda usuario del SO exclusivo para el MCP con permisos de escritura en el workspace, y usuario del agente con workspace de solo lectura; alternativamente, contenedor del host con el volumen de workspace montado `:ro` y un servicio MCP privilegiado únicamente para efectos autorizados. Probar esa separación antes de afirmar seguridad operacional. No exponer la herramienta por HTTP ni compartir la llave privada del operador.
+
+
+## Conservación de permisos POSIX en reemplazos (corrección de revisión 0.3.1)
+
+En Linux, un reemplazo de archivo regular conserva sus permisos de lectura, escritura y ejecución: el modo anterior se obtiene del mismo \`fstat\` que valida el descriptor del destino. El recibo de SQLite v6 registra **\`pre_mode\`** con los bits reales \`mode & 0o7777\` y **\`post_mode\`** con los permisos efectivos del archivo nuevo.
+
+No se heredan los bits privilegiados \`setuid\`, \`setgid\` ni \`sticky\`: antes del renombrado atómico se aplica \`fchmod(pre_mode & 0o777)\` al temporal. Por ejemplo, un original \`04755\` queda como \`0755\`, y el recibo deja constancia de ambos valores. Para archivos nuevos se mantiene explícitamente **\`0600\`** (solo usuario propietario), sin depender del \`umask\` del host. El archivo temporal se sincroniza luego de aplicar permisos y antes del \`rename\`.
+
+Si los permisos del destino cambian entre su inspección y la última validación, se rechaza el reemplazo. Esta garantía sigue siendo local al proceso MCP: no sustituye un aislamiento de permisos del sistema operativo frente a herramientas externas del anfitrión.

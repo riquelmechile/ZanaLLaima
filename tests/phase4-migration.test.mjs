@@ -7,7 +7,7 @@ import {tmpdir} from 'node:os';
 import {createMission} from '../src/core.mjs';
 import {transact,readState,databasePath,storageStatus} from '../src/store.mjs';
 
-test('SQLite v3 snapshot upgrades to v4 without fabricating a retroactive deadline',async()=>{
+test('SQLite v3 snapshot upgrades to v6 without fabricating a retroactive deadline',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'zana-v3-v4-'));
   const file=join(dir,'state.json');
   try{
@@ -25,7 +25,7 @@ test('SQLite v3 snapshot upgrades to v4 without fabricating a retroactive deadli
     assert.equal(converted.id,before.id);
     assert.equal(converted.budget,null);
     assert.equal(converted.units[0].status,'PENDING');
-    assert.equal((await storageStatus(file)).schemaVersion,5);
+    assert.equal((await storageStatus(file)).schemaVersion,6);
     assert.equal((await readState(file)).id,before.id);
   }finally{await rm(dir,{recursive:true,force:true});}
 });

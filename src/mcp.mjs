@@ -49,6 +49,7 @@ const TOOL_DESCRIPTIONS = Object.freeze({
   zana_next_batch: ['next','Plan a safe batch without reserving work',true],
   zana_start_batch: ['start','Reserve work tokens transactionally',false],
   zana_complete_unit: ['complete','Record an outcome from an exact lease token',false],
+  zana_apply_write: ['applyWrite','Execute an operator-approved WRITE via an anchored atomic local effect',false],
   zana_unit_heartbeat: ['heartbeat','Extend a live lease using its attempt generation',false],
   zana_recover_expired: ['recoverExpired','Mark expired reads and uncertain writes without replaying effects',false],
   zana_unit_retry: ['retry','Reset an explicitly eligible failed read to PENDING',false],
@@ -78,6 +79,15 @@ const schemas = {
   zana_complete_unit: z.object({
     unitId:s(),token:uuid(),leaseGeneration:z.number().int().positive().optional(),outcome,
   }).strict(),
+  zana_apply_write: z.object({
+    unitId:s(),token:uuid(),leaseGeneration:z.number().int().positive(),
+    path:z.string().min(1).max(240),
+    content:z.string().max(65536).optional(),
+    deleteFile:z.boolean().optional(),
+    expectedPreSha256:z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  }).strict().refine(v=>(v.deleteFile===true&&v.content===undefined)||
+    (v.deleteFile!==true&&typeof v.content==='string'),
+    'Provide UTF-8 content or deleteFile true, never both'),
   zana_unit_heartbeat: z.object({
     unitId:s(),token:uuid(),leaseGeneration:z.number().int().positive(),
     leaseSeconds:z.number().int().min(5).max(3600).optional(),
@@ -126,7 +136,7 @@ export async function dispatchTool(action,args={}, {signal,implementation=operat
 }
 
 export function createServer(){
-  const server=new McpServer({name:'zana-llaima',version:'0.2.0'},
+  const server=new McpServer({name:'zana-llaima',version:'0.3.0'},
     {maxToolInputElements:1000});
   for(const [name,[action,description,readOnly]] of Object.entries(TOOL_DESCRIPTIONS)){
     server.registerTool(name,{

@@ -33,7 +33,7 @@ test('MCP stdio handshake and native workflow tools are available', async () => 
     assert.equal(negotiated.result.protocolVersion,'2025-11-25');
     send({jsonrpc:'2.0',method:'notifications/initialized'});
     send({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
-    assert.equal((await response(2)).result.tools.length, 23);
+    assert.equal((await response(2)).result.tools.length, 24);
     send({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'zana_profile', arguments: {} } });
     assert.equal((await response(3)).result.structuredContent.requested.reasoningEffort, 'max');
     send({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'zana_storage_status', arguments: {} } });

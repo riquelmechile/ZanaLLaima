@@ -91,3 +91,13 @@ Un anfitrión GPT que disponga de acceso directo a otros editores o APIs podría
 Las pruebas automatizadas cubren expiración y heartbeat, doble token y generación, reintento limitado, permisos sin firma, firma inválida, grant revocado, escritura fallida o interrumpida, reconciliación explícita, symlink, cierre/archivo y reinicio. El sistema no reintenta silenciosamente un `WRITE` incierto.
 
 Las pruebas no demuestran la selección efectiva del modelo ni la creación real de subagentes ni auditan editores externos. Tampoco autorizan merge o despliegue. Conserva los resultados exactos de CI y la aprobación humana para cualquier entrega.
+
+## Control de escrituras en el punto del efecto (ZL-004, implementación local)
+
+La operación `zana_apply_write` es la única vía documentada para modificar archivos desde un WRITE. Se comprueban el token, la generación, el estado del intento, el lease, el grant Ed25519 vigente, la ruta relativa, las rutas de la unidad y el presupuesto de bytes UTF-8. El cliente puede pedir un `expectedPreSha256` que se compara antes de reservar intención y otra vez al aplicar.
+
+Para evitar perder certeza en una caída, se persisten **dos transacciones**: (1) intención durable y estado `OUTCOME_UNKNOWN`; (2) efecto de archivo dentro de `BEGIN IMMEDIATE` y recibo durable de SHA pre/post. Una caída entre ambos deja la unidad incierta, sin permitir reintento automático. La reconciliación exige una acción firmada del operador. El recibo no equivale a independencia de revisión.
+
+En Linux la escritura abre los directorios desde `/proc/self/fd` con `O_DIRECTORY|O_NOFOLLOW`, contrasta identidades `dev/ino` capturadas al reservar, y rechaza destino symlink, hardlink o no regular. Un archivo nuevo se escribe en temporal 0600, se sincroniza, se renombra atómicamente y se sincroniza el directorio. Los borrados usan `unlink` y `fsync` del directorio. No se permite crear directorios implícitos.
+
+**Límite:** el MCP no puede impedir que el host use un shell, Git u otra herramienta con permisos propios. Tampoco sustituye una operación CAS de filesystem provista por el kernel frente a escritores externos hostiles. Para aislamiento efectivo, se recomienda usuario del SO exclusivo para el MCP con permisos de escritura en el workspace, y usuario del agente con workspace de solo lectura; alternativamente, contenedor del host con el volumen de workspace montado `:ro` y un servicio MCP privilegiado únicamente para efectos autorizados. Probar esa separación antes de afirmar seguridad operacional. No exponer la herramienta por HTTP ni compartir la llave privada del operador.

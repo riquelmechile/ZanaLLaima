@@ -25,7 +25,7 @@ test('SQLite v3 snapshot upgrades to v4 without fabricating a retroactive deadli
     assert.equal(converted.id,before.id);
     assert.equal(converted.budget,null);
     assert.equal(converted.units[0].status,'PENDING');
-    assert.equal((await storageStatus(file)).schemaVersion,4);
+    assert.equal((await storageStatus(file)).schemaVersion,5);
     assert.equal((await readState(file)).id,before.id);
   }finally{await rm(dir,{recursive:true,force:true});}
 });

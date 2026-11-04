@@ -6,7 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { operatorPublicKey, verifySignedAction, verifyStoredGrant } from './operator.mjs';
 import { reconcileWrite, revokeRunningWrites } from './lifecycle.mjs';
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 const MAX_EVENTS = 2000;
 const MAX_ARCHIVES = 200;
 const BUSY_MS = 10000;
@@ -55,6 +55,7 @@ function connect(path, readonly = false) {
           'CREATE INDEX IF NOT EXISTS events_recent ON state_events(mission_id,seq DESC)',
           'CREATE TABLE IF NOT EXISTS work_receipts (mission_id TEXT NOT NULL, unit_id TEXT NOT NULL, token TEXT NOT NULL, generation INTEGER NOT NULL, status TEXT NOT NULL, result TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(mission_id,unit_id,token))',
           'CREATE TABLE IF NOT EXISTS review_receipts (review_id TEXT NOT NULL, lens_id TEXT NOT NULL, token TEXT NOT NULL, result TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(review_id,lens_id,token))',
+          'CREATE TABLE IF NOT EXISTS write_effect_receipts (mission_id TEXT NOT NULL, unit_id TEXT NOT NULL, token TEXT NOT NULL, generation INTEGER NOT NULL, effect_id TEXT NOT NULL UNIQUE, path TEXT NOT NULL, pre_sha TEXT, post_sha TEXT, bytes INTEGER NOT NULL, operation TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(mission_id,unit_id,token,generation))',
           'CREATE TABLE IF NOT EXISTS mission_archive (seq INTEGER PRIMARY KEY AUTOINCREMENT, mission_id TEXT NOT NULL UNIQUE, snapshot TEXT NOT NULL, archived_at TEXT NOT NULL)',
           'CREATE TABLE IF NOT EXISTS operator_grants (grant_id TEXT PRIMARY KEY, mission_id TEXT NOT NULL, payload TEXT NOT NULL, signature TEXT NOT NULL, fingerprint TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)',
           'CREATE TABLE IF NOT EXISTS operator_actions (nonce TEXT PRIMARY KEY, mission_id TEXT NOT NULL, kind TEXT NOT NULL, created_at TEXT NOT NULL)',
@@ -165,8 +166,17 @@ function persist(db, previous, next, kind = 'STATE_CHANGED') {
         .run(i,u.instruction,u.effect,json(u.dependsOn),json(u.paths),u.status,
           json(u.run),json(u.result),u.attempts||0,next.id,u.id);
     }
-    if ((!old || old.status !== u.status) && u.status === 'RUNNING') {
+    if ((!old || old.status !== u.status) && u.status === 'RUNNING' && !u.run?.effectReceipt) {
       addEvent(db,next,'UNIT_STARTED',{unitId:u.id,tokenHash:tokenHash(u.run.token),generation:u.run?.leaseGeneration});
+    }
+    if(u.run?.effectReceipt && !old?.run?.effectReceipt){
+      const effect=u.run.effectReceipt;
+      const inserted=db.prepare('INSERT INTO write_effect_receipts(mission_id,unit_id,token,generation,effect_id,path,pre_sha,post_sha,bytes,operation,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
+        .run(next.id,u.id,u.run.token,u.run.leaseGeneration,effect.effectId,effect.path,
+          effect.preSha256,effect.postSha256,effect.bytes,effect.operation,effect.appliedAt);
+      if(inserted.changes!==1)fail('Write receipt was not unique');
+      addEvent(db,next,'WRITE_EFFECT_COMMITTED',{unitId:u.id,effectId:effect.effectId,
+        path:effect.path,preSha256:effect.preSha256,postSha256:effect.postSha256,bytes:effect.bytes});
     }
     if ((!old || old.status !== u.status) && (u.status === 'DONE' || u.status === 'FAILED')) {
       if (!u.run?.token || !u.result) fail('Completed unit lacks a real run token or result');
@@ -342,7 +352,8 @@ export async function storageStatus(file=statePath()) {
       events:db.prepare('SELECT COUNT(*) AS n FROM state_events').get().n,
       archivedReviews:db.prepare('SELECT COUNT(*) AS n FROM review_archive').get().n,
       workReceipts:db.prepare('SELECT COUNT(*) AS n FROM work_receipts').get().n,
-      reviewReceipts:db.prepare('SELECT COUNT(*) AS n FROM review_receipts').get().n};
+      reviewReceipts:db.prepare('SELECT COUNT(*) AS n FROM review_receipts').get().n,
+      writeEffectReceipts:db.prepare('SELECT COUNT(*) AS n FROM write_effect_receipts').get().n};
   } finally {db.close();}
 }
 

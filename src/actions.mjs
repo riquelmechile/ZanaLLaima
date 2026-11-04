@@ -4,11 +4,14 @@ import { readState, transact, readHistory, readReviewArchive, storageStatus, mig
 import { openReview, reviewStatus, nextReviewBatch, startReviewBatch, submitReview, checkCandidate } from './review.mjs';
 import { heartbeatUnit, expireUnits, retryRead, cancelMission, closeMission } from './lifecycle.mjs';
 import { verifyWorkspacePaths } from './paths.mjs';
+import {capturePathAnchors} from './write-effect.mjs';
+import {applyWriteEffect} from './write-operations.mjs';
 import { observeGit, matchesReviewCandidate } from './git-evidence.mjs';
 import { deliveryGate, readVerifierKey } from './delivery.mjs';
 
 export const operations = {
   profile: async () => ({ requested: HOST_REQUEST, assurance: 'REQUESTED_ONLY' }),
+  applyWrite: async args => applyWriteEffect(args),
   storageStatus: async () => storageStatus(),
   authorizationStatus: async () => authorizationStatus(),
   missionHistory: async (args={}) => readMissionArchive(args),
@@ -42,9 +45,16 @@ export const operations = {
     await transact(async (existing,context) => {
       if (!existing) throw Error('No mission initialized');
       const preview=nextBatch(existing,hostReport,context.writeGrant);
-      for(const unit of preview.units.filter(x=>x.effect==='WRITE'))
+      const anchors=new Map();
+      for(const unit of preview.units.filter(x=>x.effect==='WRITE')){
         await verifyWorkspacePaths(unit.paths);
+        anchors.set(unit.id,await capturePathAnchors(unit.paths));
+      }
       const changed = startBatch(existing, hostReport,context.writeGrant,leaseSeconds);
+      for(const packet of changed.batch.packets.filter(x=>x.effect==='WRITE')){
+        const unit=existing.units.find(x=>x.id===packet.unitId);
+        unit.run.pathAnchors=anchors.get(packet.unitId);
+      }
       batch = changed.batch;
       return changed.mission;
     });
@@ -190,6 +200,9 @@ export const operations = {
   complete: async ({ unitId, token, leaseGeneration, outcome }) => {
     const state = await transact((existing,context) => {
       if (!existing) throw Error('No mission initialized');
+      const u=existing.units.find(x=>x.id===unitId);
+      if(u?.effect==='WRITE'&&!u.run?.effectReceipt)
+        throw Error('WRITE must use zana_apply_write before recording successful completion');
       return completeUnit(existing, unitId, token, outcome, leaseGeneration, context.writeGrant);
     });
     return publicStatus(state);

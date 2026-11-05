@@ -96,8 +96,8 @@ test('workflow_run trusted signer independently validates green CI evidence and 
       repo:{full_name:'riquelmechile/ZanaLLaima'}}};
   const ciObject={encoding:'base64',content:ci.toString('base64')};
   const responses=[
-    ['/actions/runs/',run],
     ['/jobs?per_page=100',jobs],
+    ['/actions/runs/',run],
     ['/contents/.github/workflows/ci.yml',ciObject],
     ['/git/commits/',{tree:{sha:tree}}],
     ['/pulls/1',pr]

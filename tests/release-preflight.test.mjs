@@ -12,7 +12,7 @@ const coverage=readFileSync('scripts/check-source-coverage.mjs','utf8');
 const mcp=readFileSync('src/mcp.mjs','utf8');
 const assess=(extras={})=>assessBuildPolicy({
   pkg,lock,workflow,attestationWorkflow,trackedFiles:[],
-  sourceFiles:{coverage,setup},
+  sourceFiles:{coverage,setup,mcp},
   ...extras
 });
 

@@ -5,11 +5,11 @@ ZanaLLaima usa almacenamiento transaccional local basado en el módulo `node:sql
 ## Estructura e invariantes
 
 - Ruta por defecto: `.zana/state.sqlite`; la variable heredada `ZANA_STATE_FILE=.zana/state.json` sigue aceptada y se traduce a la ruta SQLite.
-- `PRAGMA journal_mode=WAL`, `synchronous=FULL`, `busy_timeout=10000`, `foreign_keys=ON`, `user_version=5`.
+- `PRAGMA journal_mode=WAL`, `synchronous=FULL`, `busy_timeout=10000`, `foreign_keys=ON`, `user_version=6`.
 - Una misión activa, unidades normalizadas por fila, revisión activa separada, recibos de trabajo y revisión con unicidad por token, eventos y revisiones históricas.
 - `BEGIN IMMEDIATE` serializa las transiciones entre procesos y obliga a leer el estado después de adquirir el bloqueo. El token de cada ejecución protege de completados duplicados. La generación de intento y el contador de correcciones RDD se conservan en el estado; los reintentos de trabajo siguen las reglas de seguridad de la Fase 0.
 - Los eventos recientes están limitados a 2000 registros y las revisiones archivadas a 200; los lectores acceden mediante paginación por cursor descendente.
-- Los recibos de resultados se almacenan por separado. No existe limpieza automática de recibos, para evitar perder el registro de una ejecución.
+- Los recibos de trabajo y WRITE se retienen como evidencia durable. Los recibos de revisión se conservan mientras su revisión esté activa o dentro de las últimas 200 archivadas; `trimHistory()` purga recibos de revisión huérfanos que salen de esta retención.
 
 ## Migración desde JSON
 

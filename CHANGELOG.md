@@ -1,5 +1,20 @@
 # Registro de cambios
 
+## [0.4.0] - No publicado
+
+Revisión independiente 4R del PR #1; candidato sin autorización de release.
+
+- **CRITICAL C1:** firma CI separada con `workflow_run` desde el código protegido de `main` (opción B). Nunca se instala ni ejecuta código del PR con `ZANA_CI_SIGNING_KEY`; GitHub API verifica run, matriz, SHA, árbol, base y workflow CI confiable. El environment `ci-attestation` exige configuración humana del reviewer independiente y permite solo `main`.
+- **CRITICAL C2:** desactivar Git `core.fsmonitor`, caché no rastreados, hooks y protocolos; rechazo conservador de filtros ejecutables locales. Pruebas negativas de hooks root/submódulo y filtro.
+- **Rutas:** política `validateRelativePath`/`inScope` compartida, rechazo `.git`/`.zana` y estado fuera del workspace de efectos.
+- **Evidencia y filesystem:** reconciliación con predicado `trim` único, cierre de file descriptors en errores y rechazo de PEM privado como clave pública.
+- **SQLite:** rollback condicional preserva error original; prueba `RAISE(ROLLBACK)`.
+- **WARNING W6:** efecto y recibo permanecen bajo `BEGIN IMMEDIATE` para preservar fencing de grant; timeout cooperativo de 5 s antes del `rename`, sin garantía de cancelación del kernel.
+- **WARNING W7:** nombres temporales persistidos en intención; storage-status enumera huérfanos, recover-expired/reconciliación limpian; regresión SIGKILL antes de rename.
+- **WARNING W8:** restores offline sobre temporal con migración a esquema actual; rechazan recibos nuevos o intents inciertos salvo flag `--force-data-loss`; pruebas de rollback.
+- **WARNING W9-W10:** versión MCP desde package.json, docs de v6 y recibos corregidas; heartbeat prueba el reloj después del retorno.
+- Candidato no liberado. Llave CI placeholder, aislamiento de host y revisión humana del último SHA pendientes. Sin merge, tag ni deploy.
+
 ## [0.3.3] - No publicado
 
 - **P2, evidencia RDD Git de submódulos anidados:** además de inspeccionar los flags de índice de cada gitlink, \`observeGit()\` consulta el estado de cada worktree con \`--ignore-submodules=none\`, propagando cualquier cambio hasta la raíz. Corrige ocultación de contenido en un segundo nivel con \`submodule.inner.ignore=all\`.

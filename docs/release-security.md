@@ -8,7 +8,7 @@
 - El checkout usa el SHA explícito `github.event.pull_request.head.sha || github.sha` y comprueba `git rev-parse HEAD` antes de ejecutar código. El runner opera con permisos `contents: read`, `persist-credentials: false`, sin secretos de despliegue.
 - Acciones oficiales fijadas a commits: checkout v4.2.2 `11bd71901bbe5b1630ceea73d27597364c9af683` y setup-node v4.4.0 `49933ea5288caeca8642d1e84afbd3f7d6820020`, verificados contra sus tags de GitHub.
 - Instalación reproducible: `npm ci --ignore-scripts --no-audit --no-fund` con `package-lock.json` v3, resoluciones del registry npm y hashes de integridad de las dependencias. Sin instalación dinámica `npm install` en CI.
-- Matriz: Node **22.16.0**, **22.23.4** y **24**, cada uno con sintaxis, preflight, suite de integración y estrés. Cobertura de `src/*.mjs` medida en Node 22.23.4; umbrales mínimos **90 % líneas, 80 % ramas y 85 % funciones** (no se cuentan los tests para aprobar los umbrales).
+- Matriz: Node **22.16.0**, **22.23.4** y **24**, cada uno con sintaxis, preflight, suite de integración y estrés. Cobertura de `src/*.mjs` medida en Node 22.23.4; umbrales mínimos **92 % líneas, 85 % ramas y 90 % funciones** (no se cuentan los tests para aprobar los umbrales).
 - Auditoría de producción: `npm audit --omit=dev --audit-level=high`, con fallo ante vulnerabilidades altas o críticas. Los resultados son específicos del commit y de la fecha del análisis, no una garantía perpetua.
 - `timeout-minutes: 20`, `cancel-in-progress: true`, `strategy.fail-fast: false`. No se publican artefactos de release ni se hace merge o deploy.
 
@@ -68,6 +68,7 @@ npm run release:preflight
 npm test
 npm run test:stress
 npm run test:coverage
+npm run benchmark:phase4
 npm audit --omit=dev --audit-level=high
 ```
 
@@ -76,7 +77,7 @@ Verificar el estado del PR y la rama de destino desde una cuenta autorizada ante
 
 ## Seguimiento de Fase 4
 
-El planificador local ya admite reposición incremental READ mientras otros tokens están en RUNNING y SQLite impide guardar escritores simultáneos. Los presupuestos se conservan en SQLite v5 (tabla de recibos WRITE incluida); los tests negativos cubren snapshots falsificados y contadores agotados. El benchmark produce métricas p50/p95 locales y un modelo determinista de throughput, **no** una validación de capacidad de subagentes ni una ganancia medida de la cuenta GPT. La conexión real, los recibos CI firmados y el control del ejecutor siguen abiertos. Ver [phase4-performance.md](phase4-performance.md).
+El planificador local ya admite reposición incremental READ mientras otros tokens están en RUNNING y SQLite impide guardar escritores simultáneos. Los presupuestos se conservan en SQLite v6 (tabla de recibos WRITE incluida); los tests negativos cubren snapshots falsificados y contadores agotados. El benchmark produce métricas p50/p95 locales y un modelo determinista de throughput, **no** una validación de capacidad de subagentes ni una ganancia medida de la cuenta GPT. La conexión real, los recibos CI firmados y el control del ejecutor siguen abiertos. Ver [phase4-performance.md](phase4-performance.md).
 
 
 ## Activación CI Ed25519: PASO HUMANO (Zana)
@@ -121,3 +122,7 @@ gh pr review 1 --repo riquelmechile/ZanaLLaima --approve \
 ```
 
 No se genera esa aprobación durante este cierre ni se invita ninguna cuenta sin un identificador aportado por Zana.
+
+### Seguridad del restore offline 0.4.0
+
+La restauración se prepara sobre una copia temporal con migración de esquema y comprobación de integridad antes de mover la DB viva a cuarentena. No sobrescribe una DB con `OUTCOME_UNKNOWN`, intenciones de efecto aún sin recibo o recibos durables ausentes en el backup, salvo autorización manual explícita `--force-data-loss` con el modo offline. Cuando la base viva no se puede inspeccionar se exige el mismo flag. Ante fallo tras cuarentena, se restituye la base anterior.

@@ -11,6 +11,8 @@ export function assessBuildPolicy({pkg,lock,workflow,attestationWorkflow='',trac
   const errors=[];
   if(!pkg || !lock || !workflow) return {passed:false,errors:['Missing build manifest, lockfile, or CI workflow'],releaseAuthorized:false};
   if(lock.lockfileVersion!==3)fail(errors,'LOCKFILE_VERSION_UNSUPPORTED');
+  if(lock.version!==pkg.version||lock.packages?.['']?.version!==pkg.version)
+    fail(errors,'LOCKFILE_VERSION_MISMATCH');
   const root=lock.packages?.[''];
   if(!root||root.name!==pkg.name||root.version!==pkg.version)fail(errors,'LOCKFILE_ROOT_MISMATCH');
   for(const key of ['dependencies','devDependencies']){
@@ -66,6 +68,11 @@ export function assessBuildPolicy({pkg,lock,workflow,attestationWorkflow='',trac
     fail(errors,'EXACT_SHA_GATE_MISSING');
   if(!/timeout-minutes:/.test(workflow)||!/cancel-in-progress:\s*true/.test(workflow))
     fail(errors,'NO_TIMEOUT_OR_CANCEL_POLICY');
+  const mcpSource=sourceFiles.mcp??'';
+  if(!/import\s+\{readFileSync\}\s+from\s+'node:fs'/.test(mcpSource)||
+    !/const packageVersion=JSON\.parse\(readFileSync\(new URL\('\.\.\/package\.json',import\.meta\.url\),'utf8'\)\)\.version;/.test(mcpSource)||
+    !/new McpServer\(\{name:'zana-llaima',version:packageVersion\}/.test(mcpSource))
+    fail(errors,'MCP_VERSION_MISMATCH');
   const coverageScript=sourceFiles.coverage??'';
   if(pkg.scripts?.['test:coverage']!=='node scripts/check-source-coverage.mjs' ||
      !/--test-coverage-include=src\/\*\.mjs/.test(coverageScript) ||

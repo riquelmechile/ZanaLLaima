@@ -13,7 +13,7 @@ El sistema conserva:
 - `branchRef`: rama de trabajo real; no se permite HEAD desacoplado.
 - `targetRef` y `baseSha`: destino y su posición en la apertura.
 - `repoRoot`: ruta real de la raíz del worktree.
-- `clean`: resultado de `git status --porcelain=v1 --untracked-files=all`.
+- `clean`: combinación de `git status --porcelain=v1 --untracked-files=all --ignore-submodules=none` en el repositorio y cada submódulo inicializado, más rechazo de flags ocultos del índice (`assume-unchanged`/`skip-worktree`). Cada invocación Git neutraliza `core.fsmonitor`, caché, hooks, protocolos y comandos externos; filtros de `clean`, `smudge` o `process` del repositorio se rechazan, sin ejecutarlos.
 - `observedAt`: momento de lectura local.
 
 Se rechaza abrir revisión si existen modificaciones sin confirmar o archivos no rastreados. Las operaciones de revisar, iniciar, enviar y comprobar vuelven a contrastar Git. Si cambia el commit, el árbol, el destino, la rama o la limpieza del worktree, el ciclo se **invalida durablemente**. No se reutilizan sus paquetes ni sus recibos.

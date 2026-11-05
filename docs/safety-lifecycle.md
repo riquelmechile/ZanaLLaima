@@ -1,6 +1,6 @@
 # Fase 0: seguridad funcional y recuperación
 
-Este módulo controla un único GPT y **no ejecuta por sí solo sus cambios de archivos**. Los efectos deben ocurrir mediante herramientas reales del anfitrión. La autorización aquí implementada protege reservas, heartbeats y recibos dentro del plano de control; **no puede impedir escrituras realizadas por herramientas externas que ignoren esta política**.
+El controlador no ejecuta automáticamente modificaciones del anfitrión, pero la herramienta MCP local `zana_apply_write` **sí ejecuta** efectos de archivo usando autorización firmada, leases, rutas seguras, intención durable y recibos. No puede impedir escrituras de herramientas externas que ignoren esta política: el aislamiento del ejecutor sigue siendo obligatorio.
 
 ## Estados y recuperación
 
@@ -102,6 +102,14 @@ En Linux la escritura abre los directorios desde `/proc/self/fd` con `O_DIRECTOR
 
 **Límite:** el MCP no puede impedir que el host use un shell, Git u otra herramienta con permisos propios. Tampoco sustituye una operación CAS de filesystem provista por el kernel frente a escritores externos hostiles. Para aislamiento efectivo, se recomienda usuario del SO exclusivo para el MCP con permisos de escritura en el workspace, y usuario del agente con workspace de solo lectura; alternativamente, contenedor del host con el volumen de workspace montado `:ro` y un servicio MCP privilegiado únicamente para efectos autorizados. Probar esa separación antes de afirmar seguridad operacional. No exponer la herramienta por HTTP ni compartir la llave privada del operador.
 
+
+### Contención de SQLite durante el efecto (WARNING W6)
+
+No se movió `writeFile`/`fsync` fuera de `BEGIN IMMEDIATE`: hacerlo permitiría revocar o sustituir el grant entre la autorización final y el `rename`. Se mantiene la transacción para preservar el orden intención → efecto → recibo y se añade **timeout cooperativo de 5.000 ms** comprobado antes del cambio irreversible. No cancela un `fsync` bloqueado por el kernel, que puede retener el lock más tiempo. Si vence el plazo, no se renombra, persiste `OUTCOME_UNKNOWN` y exige reconciliación firmada. Un límite duro futuro requiere aislamiento de worker I/O con fencing y protocolo de commit.
+
+### Temporales durables tras SIGKILL (WARNING W7)
+
+Cada intención WRITE persiste el nombre de su temporal `.zana-effect-<UUID>` antes de crearlo. `storage-status` lista únicamente temporales de intenciones conocidas; `recover-expired` y la reconciliación firmada borran esos temporales mediante descriptores de directorio anclados. No se eliminan indiscriminadamente archivos por prefijo. La regresión SIGKILL mata el proceso tras sincronizar el temporal y antes del `rename`, prueba limpieza y conserva el estado incierto.
 
 ## Conservación de permisos POSIX en reemplazos (corrección de revisión 0.3.1)
 

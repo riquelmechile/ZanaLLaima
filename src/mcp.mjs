@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 // Official MCP SDK v2. Local stdio only: no HTTP listener or model-provider calls.
+import {readFileSync} from 'node:fs';
 import { McpServer } from '@modelcontextprotocol/server';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import * as z from 'zod/v4';
 import { operations } from './actions.mjs';
 import { capabilityContract } from './capabilities.mjs';
 
+const packageVersion=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8')).version;
 const s = () => z.string().min(1).max(500);
 const uuid = () => z.string().min(8).max(128);
 const object = z.record(z.string(),z.unknown());
@@ -136,7 +138,7 @@ export async function dispatchTool(action,args={}, {signal,implementation=operat
 }
 
 export function createServer(){
-  const server=new McpServer({name:'zana-llaima',version:'0.3.1'},
+  const server=new McpServer({name:'zana-llaima',version:packageVersion},
     {maxToolInputElements:1000});
   for(const [name,[action,description,readOnly]] of Object.entries(TOOL_DESCRIPTIONS)){
     server.registerTool(name,{

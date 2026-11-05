@@ -9,6 +9,14 @@
 - **RDD / ZL-010:** inspeccionar recursivamente los índices **y el estado de cada worktree** de los submódulos, aun cuando las configuraciones de ignorado de un segundo nivel oculten archivos modificados al repositorio raíz. Regresión \`root/lib/inner\` para \`submodule.inner.ignore=all\`; ningún snapshot RDD debe declararse limpio si un submódulo rastreado cambió.
 - La revisión Codex del SHA exacto, los checks CI, la atestación real y la aprobación independiente siguen siendo puertas separadas. No confundir código corregido con revisión completa ni con release autorizado.
 
+## Candidato 0.4.0: seguridad CI y rutas
+
+- **CRITICAL C1:** `workflow_run` sobre `main`, código del firmante confiable y checks de GitHub API; `ci-attestation` con required reviewer y política main-only deberá configurarlo y comprobarlo el operador.
+- **CRITICAL C2:** Git fail-closed con `fsmonitor`/hooks/filters deshabilitados o rechazados, también en submódulos.
+- **WARNING:** frontera única de rutas, evidencia de reconciliación, FD y rollback seguros, temporales WRITE con intención durable y restore con consentimiento explícito ante posible pérdida de datos.
+- **W6:** conservar `BEGIN IMMEDIATE` durante efecto para impedir revocación concurrente; timeout cooperativo de 5 s antes del `rename`. El kernel puede bloquear `fsync` más tiempo; sigue pendiente una solución con I/O aislado si se exige un deadline duro.
+- **Gate:** CI y Codex sobre SHA final, y nueva revisión independiente de `sebastianriquelme95-max`; `releaseAuthorized:false` hasta atestación firmada, aislamiento del host y aprobación humana. Sin merge ni deploy.
+
 ## Principios que no deben perderse
 
 - La solicitud de modelo `gpt-6-astra` y esfuerzo `max` no verifica la configuración real del anfitrión; nunca fingir esa verificación ni degradar deliberadamente el modelo.

@@ -956,7 +956,9 @@ async function restoreBackupUnlocked(source,file=statePath(),
       candidate.exec('BEGIN IMMEDIATE');
       try{
         mergeSecurityFacts(candidate,security);
-        mergeBudgetFacts(candidate,security.budget);
+        // Always fuse, blind included: an empty live fact set still makes the
+        // backup's own ledger raise its own units (Codex P1 via GPT-A).
+        mergeBudgetFacts(candidate,security.budget??{revision:null,ledger:Object.create(null)});
         for(const sibling of siblings){
           mergeSecurityFacts(candidate,{...sibling,blind:false});
           mergeBudgetFacts(candidate,sibling.budget);

@@ -173,3 +173,47 @@ for(const flag of ['assume-unchanged','skip-worktree']){
     }finally{f.cleanup();}
   });
 }
+
+
+test('second-level submodule ignore=all cannot hide dirty tracked content from RDD',()=>{
+  const f=fixture();
+  try{
+    const inner=join(f.dir,'grandchild-repo');
+    const lib=join(f.dir,'child-repo');
+    mkdirSync(inner);
+    mkdirSync(lib);
+    const gitAt=(cwd,...args)=>execFileSync('git',['-C',cwd,...args],
+      {encoding:'utf8'}).trim();
+    for(const dir of [inner,lib]){
+      gitAt(dir,'init','-q','-b','main');
+      gitAt(dir,'config','user.name','Nested Test');
+      gitAt(dir,'config','user.email','tests@example.invalid');
+    }
+    writeFileSync(join(inner,'API.md'),'reviewed inner content');
+    gitAt(inner,'add','API.md');
+    gitAt(inner,'commit','-qm','create inner fixture');
+    writeFileSync(join(lib,'README.md'),'reviewed child content');
+    gitAt(lib,'add','README.md');
+    gitAt(lib,'commit','-qm','create child fixture');
+    gitAt(lib,'-c','protocol.file.allow=always','submodule','add',inner,'inner');
+    gitAt(lib,'commit','-qam','track second-level submodule');
+    f.git('-c','protocol.file.allow=always','submodule','add',lib,'lib');
+    f.git('commit','-qam','track nested submodule');
+    const childWorktree=join(f.repo,'lib');
+    gitAt(childWorktree,'-c','protocol.file.allow=always','submodule','update',
+      '--init','--recursive');
+    const frozen=observeGit({repoPath:f.repo});
+    assert.equal(frozen.clean,true);
+    gitAt(childWorktree,'config','submodule.inner.ignore','all');
+    writeFileSync(join(childWorktree,'inner','API.md'),
+      'modified inner file hidden from parent');
+    assert.equal(f.git('status','--porcelain=v1','--untracked-files=all',
+      '--ignore-submodules=none'),'',
+      'Regression fixture must reproduce invisible second-level change');
+    const observed=observeGit({repoPath:f.repo});
+    assert.equal(observed.clean,false,
+      'Each submodule worktree must be checked independently');
+    assert.equal(matchesReviewCandidate({candidateSha:frozen.candidateSha,
+      gitEvidence:frozen},observed),false);
+  }finally{f.cleanup();}
+});

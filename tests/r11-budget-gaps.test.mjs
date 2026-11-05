@@ -101,7 +101,8 @@ test('R11 N5: la CLI imprime el código del error antes del mensaje',async()=>{
     const out=await run(process.execPath,[cli,'storage-adopt-quarantine','no-es-uuid','--confirm'],{env})
       .then(()=>null,error=>error);
     assert.ok(out,'el comando debe fallar');
-    assert.match(out.stderr,/^Error: \[INVALID_UUID\] /);
+    // Node 22.16 prints an ExperimentalWarning line first; match a whole line.
+    assert.match(out.stderr,/^Error: \[INVALID_UUID\] /m);
   }finally{await rm(dir,{recursive:true,force:true});}
 });
 
@@ -154,6 +155,12 @@ test('R11 final: adopt con --force-data-loss repara un snapshot archivado corrup
     await assert.rejects(storageAdoptQuarantine(id,f.file,{confirm:true}),err=>err.code==='INVALID_LEDGER');
     const adopted=await storageAdoptQuarantine(id,f.file,{confirm:true,forceDataLoss:true});
     assert.equal(adopted.ledgerRebuilt,true);
+    const moved=new DatabaseSync(base,{readOnly:true});
+    try{
+      assert.equal(moved.prepare("SELECT COUNT(*) AS n FROM mission_archive_corrupt WHERE mission_id='roto'").get().n,1,
+        'la fila corrupta se conserva para inspección');
+      assert.equal(moved.prepare("SELECT COUNT(*) AS n FROM mission_archive WHERE mission_id='roto'").get().n,0);
+    }finally{moved.close();}
     const result=await restoreBackup(f.backup,f.file,{offline:true});
     assert.equal(result.restored,true,'tras reparar, un restore normal no debe exigir force');
   }finally{await f.close();}
@@ -267,10 +274,34 @@ test('R11 cerco: re-ejecutar el adopt tras un crash antes del link no duplica el
     for(const s of ['-wal','-shm'])await rm(base+s,{force:true});
     const again=await storageAdoptQuarantine(id,f.file,{confirm:true});
     assert.equal(again.ledgerRebuilt,true,'la re-ejecución debe informar lo que hizo la primera');
+    assert.deepEqual(again.skippedSources,first.skippedSources);
     const live=new DatabaseSync(base,{readOnly:true});
     try{
       const n=live.prepare("SELECT COUNT(*) AS n FROM state_events WHERE category='QUARANTINE_ADOPTED'").get().n;
       assert.equal(n,1,'un solo evento de adopción por cuarentena');
     }finally{live.close();}
   }finally{await f.close();}
+});
+
+test('R11 final: con varias unidades, el rebuild omite solo la unidad dañada y conserva el consumo de las válidas',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'r11-multi-'));
+  const file=join(dir,'state.json'),backup=join(dir,'backup.sqlite');
+  const saved={ZANA_STATE_FILE:process.env.ZANA_STATE_FILE,ZANA_RESTORE_OFFLINE:process.env.ZANA_RESTORE_OFFLINE};
+  process.env.ZANA_STATE_FILE=file;process.env.ZANA_RESTORE_OFFLINE='1';
+  try{
+    await transact(()=>createMission({objective:'Dos unidades, una dañada',
+      authorization:{writesAllowed:false,allowedPaths:[]},budget:{maxUnitAttempts:1,maxWorkStarts:2},
+      units:[{id:'a',effect:'READ',paths:['src'],instruction:'Leer a'},{id:'b',effect:'READ',paths:['docs'],instruction:'Leer b'}]}),file);
+    await backupState(backup,file);
+    await transact(m=>{startBatch(m);return m;},file);
+    await transact(m=>{expireUnits(m,Date.now()+3600_000);return m;},file);
+    const live=new DatabaseSync(databasePath(file));
+    try{live.exec("UPDATE units SET attempts=-1 WHERE id='b'");}finally{live.close();}
+    const result=await restoreBackup(backup,file,{offline:true,forceDataLoss:true});
+    assert.equal(result.ledgerRebuilt,true);
+    assert.equal((await readState(file)).units.find(u=>u.id==='a').attempts,1,'la unidad válida conserva su consumo');
+  }finally{
+    for(const [k,v] of Object.entries(saved)){if(v===undefined)delete process.env[k];else process.env[k]=v;}
+    await rm(dir,{recursive:true,force:true});
+  }
 });

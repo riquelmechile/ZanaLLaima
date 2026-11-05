@@ -68,7 +68,7 @@ const gitDirFor=(root,parentGitDir)=>{
     if(error?.message?.startsWith('Git candidate rejected:'))throw error;
     deny(parentGitDir
       ?'Submodule not initialized; inicializa con git submodule update --init'
-      :'Repository .git metadata unavailable');
+      :'Repository must be its exact worktree root');
   }
   if(parentGitDir&&!within(parentGitDir,dir))
     deny('Submodule gitdir escapes its parent repository metadata');
@@ -223,12 +223,27 @@ const entryTree=entries=>{
   for(const [path,entry] of entries)insertTree(tree,path,entry.mode,entry.sha);
   return serializeTree(tree);
 };
-const privateIgnoreDir=()=>{
-  const root=mkdtempSync(join(tmpdir(),'zana-rdd-ignore-'));
-  mkdirSync(join(root,'objects'));mkdirSync(join(root,'refs'));
-  writeFileSync(join(root,'HEAD'),'ref: refs/heads/main\n',{mode:0o600});
-  writeFileSync(join(root,'config'),'[core]\n\trepositoryformatversion = 0\n\tbare = false\n',{mode:0o600});
-  return root;
+// A private ignore-only shadow eliminates uncommitted .gitignore files from
+// Git's own directory walk. Reusing the candidate as --work-tree would let
+// .venv/.gitignore='*' suppress an otherwise untracked parent directory.
+const privateIgnoreDir=(repo,index)=>{
+  const holder=mkdtempSync(join(tmpdir(),'zana-rdd-ignore-'));
+  const gitdir=join(holder,'gitdir'),worktree=join(holder,'worktree');
+  mkdirSync(gitdir);mkdirSync(worktree);
+  mkdirSync(join(gitdir,'objects'));mkdirSync(join(gitdir,'refs'));
+  writeFileSync(join(gitdir,'HEAD'),'ref: refs/heads/main\n',{mode:0o600});
+  writeFileSync(join(gitdir,'config'),'[core]\n\trepositoryformatversion = 0\n\tbare = false\n',{mode:0o600});
+  for(const path of index.keys()){
+    if(path.split('/').at(-1)!=='.gitignore')continue;
+    const source=join(repo,path);
+    let st;
+    try{st=lstatSync(source);}catch{continue;}
+    if(!st.isFile()||st.isSymbolicLink())deny('Tracked .gitignore must be a regular file');
+    const target=join(worktree,path);
+    mkdirSync(dirname(target),{recursive:true});
+    writeFileSync(target,safeFile(source,st),{mode:0o600});
+  }
+  return {holder,gitdir,worktree};
 };
 const ignoredNames=(repo,gitdir,paths)=>{
   if(!paths.length)return new Set();
@@ -264,7 +279,7 @@ function inspect(root,expectedSha,parentGitDir,depth=0){
     const pieces=path.split('/');
     for(let i=1;i<pieces.length;i++)trackedDirs.add(pieces.slice(0,i).join('/'));
   }
-  const ignoreGit=privateIgnoreDir(),observed=new Map(),nestedDirty=[];
+  const ignoreGit=privateIgnoreDir(root,index),observed=new Map(),nestedDirty=[];
   try{
     const walk=(dir,prefix='')=>{
       let listing;
@@ -275,7 +290,7 @@ function inspect(root,expectedSha,parentGitDir,depth=0){
         const p=prefix?prefix+'/'+e.name:e.name;
         return p+(e.isDirectory()?'/':'');
       });
-      const ignored=ignoredNames(root,ignoreGit,paths);
+      const ignored=ignoredNames(ignoreGit.worktree,ignoreGit.gitdir,paths);
       for(const ent of listing){
         if(ent.name==='.git')continue; // metadata is excluded, never trusted
         const path=prefix?prefix+'/'+ent.name:ent.name;
@@ -306,7 +321,7 @@ function inspect(root,expectedSha,parentGitDir,depth=0){
       }
     };
     walk(root);
-  }finally{rmSync(ignoreGit,{recursive:true,force:true});}
+  }finally{rmSync(ignoreGit.holder,{recursive:true,force:true});}
   for(const [path,entry] of index){
     if(entry.mode==='160000'&&!observed.has(path))
       deny('Submodule not initialized; inicializa con git submodule update --init: '+path);

@@ -203,3 +203,20 @@ test('R11 final: contadores dañados en la misión activa viva no bloquean la re
     assert.equal(result.ledgerRebuilt,true);
   }finally{await f.close();}
 });
+
+test('R11 Codex P1: el restore ciego aplica el ledger propio del backup aunque registre más que sus unidades',async()=>{
+  const f=await fixture();
+  try{
+    const missionId=(await readState(f.file)).id;
+    await backupState(f.backup,f.file);
+    const b=new DatabaseSync(f.backup);
+    try{b.prepare("INSERT INTO metadata(key,value) VALUES('consumed_budget',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+      .run(JSON.stringify({[missionId]:{scan:{attempts:1,leaseGeneration:1}}}));}finally{b.close();}
+    const base=databasePath(f.file);
+    await rm(base,{force:true});for(const s of ['-wal','-shm'])await rm(base+s,{force:true});
+    const result=await restoreBackup(f.backup,f.file,{offline:true,forceDataLoss:true});
+    assert.equal(result.blind,true);
+    assert.equal((await readState(f.file)).units[0].attempts,1,'el consumo que el propio backup registra no puede perderse');
+    await assert.rejects(start(f.file),/work-start budget exhausted/);
+  }finally{await f.close();}
+});

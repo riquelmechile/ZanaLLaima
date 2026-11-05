@@ -69,6 +69,8 @@ const read=async path=>{
  if(j?.version!==1||j.path!==path||!UUID.test(j.id)||!['restoring','aborting'].includes(j.phase)||
     j.quarantine!==path+'.quarantine.'+j.id||
     typeof j.temp!=='string'||!j.temp.startsWith(path+'.restoring.')||
+    !UUID.test(j.temp.slice((path+'.restoring.').length))||
+    (j.allowUnreadable!==undefined&&typeof j.allowUnreadable!=='boolean')||
     !Array.isArray(j.restoreOps)||j.restoreOps.length>4)
    refuse('INVALID_JOURNAL','Restore journal invalid format/identity; manual recovery required');
  // The journal is operator state, not an authorization to rename any path.
@@ -144,7 +146,8 @@ export async function beginRestoreMoves({path,temp,quarantine,checkpoint,allowUn
  for(const suffix of ['-wal','-shm',''])
   if(await has(path+suffix))ops.push({from:path+suffix,to:quarantine+suffix,state:'pending'});
  ops.push({from:temp,to:path,state:'pending'});
- const j={version:1,id,path,temp,quarantine,phase:'restoring',restoreOps:ops,abortOps:null};
+ const j={version:1,id,path,temp,quarantine,phase:'restoring',
+  restoreOps:ops,abortOps:null,allowUnreadable:Boolean(allowUnreadable)};
  const marker=journalPath(path);
  await create(marker,j);
  if(afterJournalReady)await afterJournalReady();
@@ -168,6 +171,7 @@ const infer=async (j,op)=>{
  if(op.from===j.temp){
    if(from)return false;
    if(to)return true;
+   if(await has(j.quarantine)&&!await has(j.path))return false;
    refuse('LOST_CANDIDATE','Both candidate and installed database are missing');
  }
  if(!from&&to)return true; // SIGKILL between rename and journal commit
@@ -190,7 +194,8 @@ export async function abortRestoreMoves(path,{checkpoint,afterRename}={}){
    await erase(marker);return {aborted:true,databasePath:path,noMoves:true};
   }
   const qMain=moved.some((yes,i)=>yes&&j.restoreOps[i].from===path);
-  if(qMain)await checkpoint(j.quarantine,{allowMissing:false});
+  if(qMain)await checkpoint(j.quarantine,
+   {allowMissing:false,allowUnreadable:j.allowUnreadable===true});
   const ops=[];
   // Displace a partially installed candidate, if any.
   const installed=moved.some((yes,i)=>yes&&j.restoreOps[i].from===j.temp);

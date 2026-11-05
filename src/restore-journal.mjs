@@ -1,5 +1,5 @@
-import {open,readFile,readdir,rename,rm,stat,mkdir} from 'node:fs/promises';
-import {basename,dirname,join,resolve} from 'node:path';
+import {open,readFile,readdir,rename,rm,stat,link} from 'node:fs/promises';
+import {basename,dirname,join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 
 // Recovery protocol v1. The journal, not mtime or a heuristic search, owns
@@ -29,13 +29,31 @@ const stable=async (marker,journal)=>{
  finally{await rm(tmp,{force:true});}
 };
 const create=async(marker,journal)=>{
- const h=await open(marker,'wx',0o600);
- try{await h.writeFile(JSON.stringify(journal));await h.sync();}
- finally{await h.close();}
- await syncDir(dirname(marker));
+ // SIGKILL/ENOSPC during initial write leaves only a disposable .new.UUID.
+ const tmp=marker+'.new.'+randomUUID();
+ let h;
+ try{
+  h=await open(tmp,'wx',0o600);
+  await h.writeFile(JSON.stringify(journal));
+  await h.sync();
+  await h.close();h=null;
+  await link(tmp,marker); // EEXIST: never replace a previous restore marker.
+  await syncDir(dirname(marker));
+ }finally{
+  if(h)await h.close();
+  await rm(tmp,{force:true});
+  await syncDir(dirname(marker));
+ }
 };
 const erase=async marker=>{
  await rm(marker,{force:true});await syncDir(dirname(marker));
+};
+const safeUnpublishedMarker=async path=>{
+ // A journal cannot reach the first durable rename before creating
+ // a quarantine sidecar. Main present and NO quarantine => no movements.
+ if(!await has(path))return false;
+ const artifacts=await classifyRestoreArtifacts(path);
+ return artifacts.quarantines.length===0;
 };
 const read=async path=>{
  const marker=journalPath(path);
@@ -43,12 +61,18 @@ const read=async path=>{
  try{data=await readFile(marker,'utf8');}
  catch(error){if(error?.code==='ENOENT')return null;throw error;}
  let j;
- try{j=JSON.parse(data);}catch{refuse('INVALID_JOURNAL','Restore journal invalid JSON; manual recovery required');}
+ try{j=JSON.parse(data);}catch{
+  if(await safeUnpublishedMarker(path))return {phase:'unpublished',path};
+  refuse('INVALID_JOURNAL','Restore journal invalid JSON; manual recovery required');
+ }
  if(j?.version!==1||j.path!==path||!UUID.test(j.id)||!['restoring','aborting'].includes(j.phase)||
     j.quarantine!==path+'.quarantine.'+j.id||
     typeof j.temp!=='string'||!j.temp.startsWith(path+'.restoring.')||
     !Array.isArray(j.restoreOps)||j.restoreOps.length>4)
-   refuse('INVALID_JOURNAL','Restore journal invalid format/identity; manual recovery required');
+   {
+    if(await safeUnpublishedMarker(path))return {phase:'unpublished',path};
+    refuse('INVALID_JOURNAL','Restore journal invalid format/identity; manual recovery required');
+   }
  // The journal is operator state, not an authorization to rename any path.
  const allowedFrom=new Set([path,path+'-wal',path+'-shm',j.temp]);
  for(const op of j.restoreOps){
@@ -71,10 +95,11 @@ export async function classifyRestoreArtifacts(path){
  let names;
  try{names=await readdir(dir);}
  catch(error){if(error?.code==='ENOENT')names=[];else throw error;}
- const grouped={restoring:[],quarantines:[],aborted:[],journal:[]};
+ const grouped={restoring:[],quarantines:[],aborted:[],journal:[],journalTemporaries:[]};
  for(const name of names){
   const complete=join(dir,name);
   if(name===prefix+'.restore-pending')grouped.journal.push(complete);
+  else if(name.startsWith(prefix+'.restore-pending.new.'))grouped.journalTemporaries.push(complete);
   else if(name.startsWith(prefix+'.restoring.'))grouped.restoring.push(complete);
   else if(name.startsWith(prefix+'.quarantine.'))grouped.quarantines.push(complete);
   else if(name.startsWith(prefix+'.aborted.'))grouped.aborted.push(complete);
@@ -86,7 +111,7 @@ export async function cleanupRestoreArtifacts(path,{confirm=false}={}){
  if(await has(journalPath(path)))
    refuse('JOURNAL_ACTIVE','Cannot clean restore artifacts while journal exists');
  const groups=await classifyRestoreArtifacts(path);
- const targets=[...groups.restoring,...groups.aborted];
+ const targets=[...groups.restoring,...groups.aborted,...groups.journalTemporaries];
  // Quarantines can contain the ONLY original authorization history.
  // Deliberately exclude them from automatic cleanup even with --confirm.
  for(const file of targets)await rm(file,{force:true});
@@ -154,6 +179,10 @@ const infer=async (j,op)=>{
 export async function abortRestoreMoves(path,{checkpoint,afterRename}={}){
  const marker=journalPath(path),j=await read(path);
  if(!j)refuse('NO_JOURNAL','No interrupted restore journal');
+ if(j.phase==='unpublished'){
+  await erase(marker);
+  return {aborted:true,databasePath:path,noMoves:true,unpublished:true};
+ }
  if(j.phase==='restoring'){
   const moved=[];
   for(const op of j.restoreOps)moved.push(await infer(j,op));

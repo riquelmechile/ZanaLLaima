@@ -598,6 +598,42 @@ function receiptIdentitySet(db){
   return keys;
 }
 
+// The marker is the reader/writer fence around a multi-file SQLite swap.
+// Failure restores the quarantined live files; it never clears the marker
+// until recovery has been completed or rolled back safely.
+async function swapAtomically({path,temp,marker,quarantine,sourceLive,afterQuarantine}){
+  const moved=[];
+  let installed=false;
+  const lock=await open(marker,'wx',0o600);
+  await lock.close();
+  try{
+    for(const suffix of ['','-wal','-shm']){
+      if(await exists(path+suffix)){
+        await rename(path+suffix,quarantine+suffix);
+        moved.push(suffix);
+      }
+    }
+    if(afterQuarantine)await afterQuarantine(); // internal fault injection only
+    await rename(temp,path);installed=true;
+    await rm(marker);
+    return {restored:true,databasePath:path,quarantinePath:moved.length?quarantine:sourceLive.path&&sourceLive.quarantine?sourceLive.path:null,
+      note:'Operator must retain the quarantined database and reconcile historical receipts'};
+  }catch(error){
+    try{
+      if(installed)await rm(path,{force:true});
+      for(const suffix of moved){
+        await rename(quarantine+suffix,path+suffix);
+      }
+      await rm(marker,{force:true});
+    }catch(rollbackError){
+      fail('Restore rollback failed; inspect quarantine and restore marker: '+
+        error.message+'; '+rollbackError.message);
+    }
+    throw error;
+  }
+
+}
+
 export async function restoreBackup(source,file=statePath(),
   {offline=false,forceDataLoss=false,afterQuarantine}={}){
   if(!offline||process.env.ZANA_RESTORE_OFFLINE!=='1')
@@ -610,8 +646,6 @@ export async function restoreBackup(source,file=statePath(),
   await mkdir(dirname(path),{recursive:true,mode:0o700});
   const temp=path+'.restoring.'+randomUUID();
   const marker=path+'.restore-pending',quarantine=path+'.quarantine.'+randomUUID();
-  const moved=[];
-  let installed=false;
   try{
     // Read the source *without* the current-version-only connect(readonly)
     // restriction; never mutate the operator's source backup.
@@ -645,33 +679,7 @@ export async function restoreBackup(source,file=statePath(),
         candidate.exec('COMMIT');
       }catch(error){rollbackIfOpen(candidate);throw error;}
     }finally{candidate.close();}
-    const lock=await open(marker,'wx',0o600);
-    await lock.close();
-    try{
-      for(const suffix of ['','-wal','-shm']){
-        if(await exists(path+suffix)){
-          await rename(path+suffix,quarantine+suffix);
-          moved.push(suffix);
-        }
-      }
-      if(afterQuarantine)await afterQuarantine(); // internal fault injection only
-      await rename(temp,path);installed=true;
-      await rm(marker);
-      return {restored:true,databasePath:path,quarantinePath:moved.length?quarantine:sourceLive.path&&sourceLive.quarantine?sourceLive.path:null,
-        note:'Operator must retain the quarantined database and reconcile historical receipts'};
-    }catch(error){
-      try{
-        if(installed)await rm(path,{force:true});
-        for(const suffix of moved){
-          await rename(quarantine+suffix,path+suffix);
-        }
-        await rm(marker,{force:true});
-      }catch(rollbackError){
-        fail('Restore rollback failed; inspect quarantine and restore marker: '+
-          error.message+'; '+rollbackError.message);
-      }
-      throw error;
-    }
+    return swapAtomically({path,temp,marker,quarantine,sourceLive,afterQuarantine});
   }finally{
     for(const suffix of ['','-wal','-shm'])
       await rm(temp+suffix,{force:true}).catch(()=>{});

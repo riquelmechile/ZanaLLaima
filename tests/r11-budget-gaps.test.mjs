@@ -268,7 +268,11 @@ test('R11 cerco: re-ejecutar el adopt tras un crash antes del link no duplica el
     for(const s of ['-wal','-shm'])await rm(base+s,{force:true});
     const first=await storageAdoptQuarantine(id,f.file,{confirm:true,forceDataLoss:true});
     assert.equal(first.ledgerRebuilt,true);
-    // Simula el crash: el COMMIT quedó en la cuarentena pero el link no se hizo.
+    // Simula el crash entre COMMIT y link: la copia queda con el COMMIT y con
+    // la marca de adopción preparada (se borra recién al publicar).
+    const marked=new DatabaseSync(base);
+    try{marked.prepare("INSERT INTO metadata(key,value) VALUES('adoption_prepared',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(id);}
+    finally{marked.close();}
     checkpoint(base);
     await rename(base,base+'.quarantine.'+id);
     for(const s of ['-wal','-shm'])await rm(base+s,{force:true});
@@ -279,6 +283,8 @@ test('R11 cerco: re-ejecutar el adopt tras un crash antes del link no duplica el
     try{
       const n=live.prepare("SELECT COUNT(*) AS n FROM state_events WHERE category='QUARANTINE_ADOPTED'").get().n;
       assert.equal(n,1,'un solo evento de adopción por cuarentena');
+      assert.equal(live.prepare("SELECT value FROM metadata WHERE key='adoption_prepared'").get(),undefined,
+        'la marca se borra al publicar');
     }finally{live.close();}
   }finally{await f.close();}
 });
@@ -324,4 +330,140 @@ test('R11 Codex P1b: el adopt forzado no publica contadores activos inválidos q
     await backupState(f.backup,f.file);
     assert.equal((await restoreBackup(f.backup,f.file,{offline:true})).restored,true,'la base adoptada debe quedar restaurable sin force');
   }finally{await f.close();}
+});
+
+test('R11 agotada: con el presupuesto por defecto, una unidad PENDING con attempts=maxUnitAttempts no vuelve a arrancar',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'r11-exhaust-'));
+  const file=join(dir,'state.json'),backup=join(dir,'backup.sqlite');
+  const saved={ZANA_STATE_FILE:process.env.ZANA_STATE_FILE,ZANA_RESTORE_OFFLINE:process.env.ZANA_RESTORE_OFFLINE};
+  process.env.ZANA_STATE_FILE=file;process.env.ZANA_RESTORE_OFFLINE='1';
+  try{
+    await transact(()=>createMission({objective:'Presupuesto por defecto agotado por unidad',
+      authorization:{writesAllowed:false,allowedPaths:[]},
+      units:[{id:'scan',effect:'READ',paths:['src'],instruction:'Leer el código fuente'}]}),file);
+    await backupState(backup,file);
+    const {retryRead}=await import('../src/lifecycle.mjs');
+    for(let i=0;i<3;i++){
+      await transact(m=>{startBatch(m);return m;},file);
+      await transact(m=>{expireUnits(m,Date.now()+3600_000);return m;},file);
+      if(i<2)await transact(m=>{retryRead(m,'scan');return m;},file);
+    }
+    assert.equal((await readState(file)).units[0].attempts,3);
+    await restoreBackup(backup,file,{offline:true,forceDataLoss:true});
+    const u=(await readState(file)).units[0];
+    assert.equal(u.status,'PENDING');assert.equal(u.attempts,3);
+    await assert.rejects(transact(m=>{startBatch(m);return m;},file),/No runnable batch: Unit scan exhausted maxUnitAttempts; cancel the mission/,
+      'una unidad agotada no puede consumir un cuarto intento, y el motivo lo dice');
+  }finally{
+    for(const [k,v] of Object.entries(saved)){if(v===undefined)delete process.env[k];else process.env[k]=v;}
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
+test('R11 cerco: reusar el UUID de una cuarentena ya adoptada registra un evento nuevo con lo que de verdad pasó',async()=>{
+  const f=await fixture();
+  try{
+    const base=databasePath(f.file),id=randomUUID();
+    checkpoint(base);
+    await rename(base,base+'.quarantine.'+id);
+    for(const s of ['-wal','-shm'])await rm(base+s,{force:true});
+    await storageAdoptQuarantine(id,f.file,{confirm:true});
+    const copy=join(f.dir,'post-adopt.sqlite');
+    await backupState(copy,f.file);
+    await rm(base,{force:true});for(const s of ['-wal','-shm'])await rm(base+s,{force:true});
+    await copyFile(copy,base+'.quarantine.'+id);
+    const db=new DatabaseSync(base+'.quarantine.'+id);
+    try{db.prepare("INSERT INTO metadata(key,value) VALUES('consumed_budget','[1]') ON CONFLICT(key) DO UPDATE SET value=excluded.value").run();}finally{db.close();}
+    const again=await storageAdoptQuarantine(id,f.file,{confirm:true,forceDataLoss:true});
+    assert.equal(again.ledgerRebuilt,true,'el resultado debe reflejar esta adopción, no la anterior');
+    const live=new DatabaseSync(base,{readOnly:true});
+    try{
+      assert.equal(live.prepare("SELECT COUNT(*) AS n FROM state_events WHERE category='QUARANTINE_ADOPTED'").get().n,2);
+    }finally{live.close();}
+  }finally{await f.close();}
+});
+
+test('R11 marca: la rama recovered (mismo inode) borra la marca y devuelve lo registrado',async()=>{
+  const f=await fixture();
+  try{
+    const base=databasePath(f.file),id=randomUUID();
+    checkpoint(base);
+    const db=new DatabaseSync(base);
+    try{db.prepare("INSERT INTO metadata(key,value) VALUES('consumed_budget','[1]')").run();}finally{db.close();}
+    await rename(base,base+'.quarantine.'+id);
+    for(const s of ['-wal','-shm'])await rm(base+s,{force:true});
+    await storageAdoptQuarantine(id,f.file,{confirm:true,forceDataLoss:true});
+    // Estado tras un kill entre link y rm: mismo inode con dos nombres y marca presente.
+    const live=new DatabaseSync(base);
+    try{live.prepare("INSERT INTO metadata(key,value) VALUES('adoption_prepared',?)").run(id);live.exec('PRAGMA wal_checkpoint(TRUNCATE)');}
+    finally{live.close();}
+    const {link}=await import('node:fs/promises');
+    await link(base,base+'.quarantine.'+id);
+    const again=await storageAdoptQuarantine(id,f.file,{confirm:true});
+    assert.equal(again.recovered,true);
+    assert.equal(again.ledgerRebuilt,true);
+    const check=new DatabaseSync(base,{readOnly:true});
+    try{assert.equal(check.prepare("SELECT value FROM metadata WHERE key='adoption_prepared'").get(),undefined);}
+    finally{check.close();}
+  }finally{await f.close();}
+});
+
+test('R11 Codex P1c: el restore no devuelve rondas de revisión consumidas',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'r11-review-'));
+  const file=join(dir,'state.json'),backup=join(dir,'backup.sqlite');
+  const saved={ZANA_STATE_FILE:process.env.ZANA_STATE_FILE,ZANA_RESTORE_OFFLINE:process.env.ZANA_RESTORE_OFFLINE};
+  process.env.ZANA_STATE_FILE=file;process.env.ZANA_RESTORE_OFFLINE='1';
+  try{
+    const {completeUnit}=await import('../src/core.mjs');
+    const {openReview}=await import('../src/review.mjs');
+    await transact(()=>createMission({objective:'Rondas de revisión monótonas',
+      authorization:{writesAllowed:false,allowedPaths:[]},budget:{maxReviewRounds:1},
+      units:[{id:'scan',effect:'READ',paths:['src'],instruction:'Leer el código fuente'}]}),file);
+    await transact(m=>{const p=startBatch(m).batch.packets[0];
+      completeUnit(m,p.unitId,p.token,{success:true,summary:'Lectura completa',evidence:['ok']},p.leaseGeneration);return m;},file);
+    await backupState(backup,file);
+    await transact(m=>{openReview(m,{candidateSha:'a'.repeat(40)});return m;},file);
+    await assert.rejects(transact(m=>{openReview(m,{candidateSha:'b'.repeat(40)});return m;},file),/review correction limit/);
+    await assert.rejects(restoreBackup(backup,file,{offline:true}),err=>err.code==='CONSUMED_BUDGET',
+      'el backup anterior a la ronda no puede devolverla');
+    await restoreBackup(backup,file,{offline:true,forceDataLoss:true});
+    assert.equal((await readState(file)).reviewCount,1,'con force se conserva el máximo de rondas');
+    await assert.rejects(transact(m=>{openReview(m,{candidateSha:'c'.repeat(40)});return m;},file),/review correction limit/);
+  }finally{
+    for(const [k,v] of Object.entries(saved)){if(v===undefined)delete process.env[k];else process.env[k]=v;}
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
+test('R11 Codex P1d: un reviewCount activo inválido se rechaza en el backup y se agota en el adopt forzado',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'r11-rc-'));
+  const file=join(dir,'state.json'),backup=join(dir,'backup.sqlite');
+  const saved={ZANA_STATE_FILE:process.env.ZANA_STATE_FILE,ZANA_RESTORE_OFFLINE:process.env.ZANA_RESTORE_OFFLINE};
+  process.env.ZANA_STATE_FILE=file;process.env.ZANA_RESTORE_OFFLINE='1';
+  try{
+    const {completeUnit}=await import('../src/core.mjs');
+    const {openReview}=await import('../src/review.mjs');
+    await transact(()=>createMission({objective:'reviewCount dañado',
+      authorization:{writesAllowed:false,allowedPaths:[]},budget:{maxReviewRounds:1},
+      units:[{id:'scan',effect:'READ',paths:['src'],instruction:'Leer el código fuente'}]}),file);
+    await transact(m=>{const p=startBatch(m).batch.packets[0];
+      completeUnit(m,p.unitId,p.token,{success:true,summary:'Lectura completa',evidence:['ok']},p.leaseGeneration);return m;},file);
+    await backupState(backup,file);
+    const damage=path=>{const db=new DatabaseSync(path);try{db.exec('UPDATE active_mission SET review_count=-1');}finally{db.close();}};
+    damage(backup);
+    await assert.rejects(restoreBackup(backup,file,{offline:true}),err=>err.code==='INVALID_LEDGER');
+    await assert.rejects(restoreBackup(backup,file,{offline:true,forceDataLoss:true}),err=>err.code==='INVALID_LEDGER');
+    const base=databasePath(file),id=randomUUID();
+    damage(base);checkpoint(base);
+    await rename(base,base+'.quarantine.'+id);
+    for(const s of ['-wal','-shm'])await rm(base+s,{force:true});
+    await assert.rejects(storageAdoptQuarantine(id,file,{confirm:true}),err=>err.code==='INVALID_LEDGER');
+    const adopted=await storageAdoptQuarantine(id,file,{confirm:true,forceDataLoss:true});
+    assert.equal(adopted.ledgerRebuilt,true);
+    assert.equal((await readState(file)).reviewCount,1,'consumo de rondas desconocido: queda agotado');
+    await assert.rejects(transact(m=>{openReview(m,{candidateSha:'d'.repeat(40)});return m;},file),/review correction limit/);
+  }finally{
+    for(const [k,v] of Object.entries(saved)){if(v===undefined)delete process.env[k];else process.env[k]=v;}
+    await rm(dir,{recursive:true,force:true});
+  }
 });

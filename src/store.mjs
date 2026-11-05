@@ -1,3 +1,4 @@
+import { DEFAULT_BUDGET } from './budget.mjs';
 import { DatabaseSync, backup } from 'node:sqlite';
 import { constants } from 'node:fs';
 import { access, chmod, copyFile, link, mkdir, open, readFile, rename, rm, stat, lstat } from 'node:fs/promises';
@@ -526,7 +527,8 @@ function inspectLive(candidate,source,forceDataLoss){
 // The single active-mission slot is not enough to remember consumption: a
 // restore to another mission would drop it, and a later restore of an old
 // backup would refund it (A -> B -> A, R11-C1b). So every database carries a
-// ledger in metadata (CONSUMED_BUDGET_KEY), keyed by mission and unit, that
+// ledger in metadata (CONSUMED_BUDGET_KEY), keyed by mission and then by unit
+// or a reserved key (FENCE_UNIT, REVIEW_ROUNDS_KEY), that
 // restore and adoption merge like nonces and never shrink.
 const CONSUMED_BUDGET_KEY='consumed_budget';
 // Ledger keys come from database bytes an operator may have been handed, so
@@ -538,6 +540,9 @@ const ledgerKey=k=>typeof k==='string'&&k.length>=1&&k.length<=200&&k!=='__proto
 // Mission-wide fence: its consumption is unknown (a corrupt archived
 // snapshot was set aside). Never a unit id: createMission ids are [a-z]...
 const FENCE_UNIT='*';
+// Consumed review rounds (reviewCount) of a mission, kept in the same ledger
+// under a key no unit id can take (createMission ids start with [a-z]).
+const REVIEW_ROUNDS_KEY='#review-rounds';
 const invalidLedger=()=>guardRestore('INVALID_LEDGER','Consumed-budget ledger is malformed; preserve the database and inspect it');
 const counter=v=>{
   if(v===undefined)return 0;
@@ -578,17 +583,30 @@ function readLedger(db){
 function budgetFacts(db,{rebuild=false}={}){
   let ledger,rebuilt=false;
   const corruptArchive=[],damagedUnits=[];
+  let damagedReview=false;
   try{ledger=readLedger(db);}
   catch(error){
     if(!rebuild||error.code!=='INVALID_LEDGER')throw error;
     ledger=Object.create(null);rebuilt=true;
   }
   const mission=load(db);
-  const consume=m=>{for(const u of m?.units??[])
-    raise(ledger,m.id,u.id,u.attempts||0,u.run?.leaseGeneration||0);};
+  const consume=m=>{
+    for(const u of m?.units??[])raise(ledger,m.id,u.id,u.attempts||0,u.run?.leaseGeneration||0);
+    if(m?.reviewCount!==undefined&&m.reviewCount!==0)raise(ledger,m.id,REVIEW_ROUNDS_KEY,m.reviewCount,0);
+  };
   // Damaged counters on the active mission: under rebuild keep every unit
   // that is still valid and drop only the damaged ones, so recovery under
   // --force-data-loss is always possible.
+  if(mission){
+    const rounds=mission.reviewCount;
+    if(!(Number.isSafeInteger(rounds)&&rounds>=0)){
+      // Damaged review counter: unknown consumption. Never ignore it (a
+      // negative value would hand out rounds); under rebuild fence it.
+      if(!rebuild)invalidLedger();
+      rebuilt=true;damagedReview=true;
+      raise(ledger,mission.id,REVIEW_ROUNDS_KEY,reviewRoundCap(mission.budget),0);
+    }else if(rounds>0)raise(ledger,mission.id,REVIEW_ROUNDS_KEY,rounds,0);
+  }
   if(mission)for(const u of mission.units){
     try{raise(ledger,mission.id,u.id,u.attempts||0,u.run?.leaseGeneration||0);}
     catch(error){if(!rebuild||error.code!=='INVALID_LEDGER')throw error;rebuilt=true;damagedUnits.push(u.id);}
@@ -614,7 +632,7 @@ function budgetFacts(db,{rebuild=false}={}){
     }
   }
   return {revision:mission?.revision??null,running:!!mission?.units.some(u=>u.status==='RUNNING'),
-    ledger,rebuilt,corruptArchive,damagedUnits};
+    ledger,rebuilt,corruptArchive,damagedUnits,damagedReview};
 }
 function refuseConsumedBudget(backupMission,liveBudget){
   if(liveBudget.running)
@@ -623,6 +641,8 @@ function refuseConsumedBudget(backupMission,liveBudget){
   if(!consumed)return;
   if(Object.hasOwn(consumed,FENCE_UNIT))
     guardRestore('CONSUMED_BUDGET','Consumption of mission '+backupMission.id+' is unknown (a corrupt archived snapshot was set aside); restore refused. With --force-data-loss the mission is restored exhausted');
+  if(Object.hasOwn(consumed,REVIEW_ROUNDS_KEY)&&consumed[REVIEW_ROUNDS_KEY].attempts>(backupMission.reviewCount||0))
+    guardRestore('CONSUMED_BUDGET','Mission '+backupMission.id+' consumed review rounds not present in the backup; restore refused. With --force-data-loss they are kept as max(live, backup)');
   for(const u of backupMission.units){
     const used=Object.hasOwn(consumed,u.id)?consumed[u.id]:null;
     if(used&&(used.attempts>(u.attempts||0)||used.leaseGeneration>(u.run?.leaseGeneration||0)))
@@ -645,10 +665,13 @@ function mergeBudgetFacts(db,facts,{ownLedger}={}){
   const own=Object.hasOwn(ledger,m.id)?ledger[m.id]:Object.create(null);
   if(Object.hasOwn(own,FENCE_UNIT)){
     // Unknown consumption: exhaust every unit so nothing can start again.
-    const limits=parse(db.prepare('SELECT budget FROM active_mission WHERE slot=1').get()?.budget??'null');
-    const cap=Number.isSafeInteger(limits?.maxUnitAttempts)?limits.maxUnitAttempts:3;
+    const cap=unitAttemptCap(parse(db.prepare('SELECT budget FROM active_mission WHERE slot=1').get()?.budget??'null'));
     db.prepare('UPDATE units SET attempts=MAX(attempts,?) WHERE mission_id=?').run(cap,m.id);
+    db.prepare('UPDATE active_mission SET review_count=MAX(review_count,?) WHERE slot=1')
+      .run(reviewRoundCap(parse(db.prepare('SELECT budget FROM active_mission WHERE slot=1').get()?.budget??'null')));
   }
+  if(Object.hasOwn(own,REVIEW_ROUNDS_KEY))
+    db.prepare('UPDATE active_mission SET review_count=MAX(review_count,?) WHERE slot=1').run(own[REVIEW_ROUNDS_KEY].attempts);
   const read=db.prepare('SELECT status,attempts,run FROM units WHERE mission_id=? AND id=?');
   const write=db.prepare('UPDATE units SET attempts=?,run=? WHERE mission_id=? AND id=?');
   for(const [unitId,used] of Object.entries(own)){
@@ -671,6 +694,9 @@ function mergeBudgetFacts(db,facts,{ownLedger}={}){
     write.run(attempts,json(generation?{...(run??{}),leaseGeneration:generation}:run),m.id,unitId);
   }
 }
+// Per-unit attempt limit of a stored mission budget (grandfathered default).
+const reviewRoundCap=budget=>Number.isSafeInteger(budget?.maxReviewRounds)?budget.maxReviewRounds:DEFAULT_BUDGET.maxReviewRounds;
+const unitAttemptCap=budget=>Number.isSafeInteger(budget?.maxUnitAttempts)?budget.maxUnitAttempts:DEFAULT_BUDGET.maxUnitAttempts;
 // The monotone facts every restore and adoption source contributes.
 function securityFacts(db,{rebuild=false}={}){
   return {
@@ -895,10 +921,18 @@ async function otherQuarantineSecurity(base,selected){
   }
   return {sources,skipped};
 }
-// The detail recorded by the first QUARANTINE_ADOPTED event for this exact
+// The detail recorded by the latest QUARANTINE_ADOPTED event for this exact
 // quarantine, or null.
+const ADOPTION_PREPARED_KEY='adoption_prepared';
+// Clear the prepared marker once the adopted DB is published, so a later
+// backup of it never looks like an interrupted adoption.
+function clearAdoptionPrepared(path){
+  const db=connect(path);
+  try{db.prepare('DELETE FROM metadata WHERE key=?').run(ADOPTION_PREPARED_KEY);}
+  finally{db.close();}
+}
 function adoptionRecord(db,id){
-  for(const row of db.prepare("SELECT detail FROM state_events WHERE category='QUARANTINE_ADOPTED' ORDER BY seq ASC").all()){
+  for(const row of db.prepare("SELECT detail FROM state_events WHERE category='QUARANTINE_ADOPTED' ORDER BY seq DESC").all()){
     let detail;
     try{detail=JSON.parse(row.detail);}catch{continue;}
     if(detail?.quarantineId===id)return detail;
@@ -928,6 +962,9 @@ export async function storageAdoptQuarantine(id,file=statePath(),{confirm=false,
       if(await exists(quarantine)){
         const live=await stat(path),retained=await stat(quarantine);
         if(live.dev===retained.dev&&live.ino===retained.ino){
+          // Same order as the main path: clear the marker before dropping
+          // the second name, so a failure here can be retried.
+          clearAdoptionPrepared(path);
           await rm(quarantine);
           const fd=await open(dirname(path),'r');
           try{await fd.sync();}finally{await fd.close();}
@@ -976,8 +1013,7 @@ export async function storageAdoptQuarantine(id,file=statePath(),{confirm=false,
         // it exhausted (never with credit such as attempts=-1) and with a
         // sane generation, and record that in the ledger.
         if(own.damagedUnits.length){
-          const limits=mission.budget;
-          const cap=Number.isSafeInteger(limits?.maxUnitAttempts)?limits.maxUnitAttempts:3;
+          const cap=unitAttemptCap(mission.budget);
           const read=db.prepare('SELECT run FROM units WHERE mission_id=? AND id=?');
           const write=db.prepare('UPDATE units SET attempts=?,run=? WHERE mission_id=? AND id=?');
           const ledger=readLedger(db);
@@ -990,6 +1026,10 @@ export async function storageAdoptQuarantine(id,file=statePath(),{confirm=false,
           db.prepare('INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
             .run(CONSUMED_BUDGET_KEY,json(ledger));
         }
+        // A damaged review counter is published exhausted, written explicitly
+        // (MAX() would keep a text value, which sorts above integers).
+        if(own.damagedReview)
+          db.prepare('UPDATE active_mission SET review_count=? WHERE slot=1').run(reviewRoundCap(mission.budget));
         // Heal what the rebuild skipped: corrupt archive rows move to their
         // own table (kept for inspection) so later restores need no force.
         if(own.corruptArchive.length){
@@ -1006,10 +1046,17 @@ export async function storageAdoptQuarantine(id,file=statePath(),{confirm=false,
           mergeBudgetFacts(db,security.budget);
         }
         mergeSecurityFacts(db,{blind:true,actions:[],revoked:[],epoch:null});
-        // One event per quarantine: a rerun after a crash before link() sees
-        // the already-healed copy, so it reuses what the first run recorded.
-        recorded=adoptionRecord(db,id);
-        if(!recorded)addEvent(db,mission,'QUARANTINE_ADOPTED',detail);
+        // One event per adoption run. A rerun after a crash between COMMIT
+        // and link() finds this copy marked as prepared for the same UUID and
+        // reuses what the first run recorded. Any other copy (even one that
+        // reuses an adopted UUID) records its own event.
+        const prepared=db.prepare('SELECT value FROM metadata WHERE key=?').get(ADOPTION_PREPARED_KEY)?.value;
+        recorded=prepared===id?adoptionRecord(db,id):null;
+        if(!recorded){
+          addEvent(db,mission,'QUARANTINE_ADOPTED',detail);
+          db.prepare('INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+            .run(ADOPTION_PREPARED_KEY,id);
+        }
         db.exec('COMMIT');
       }catch(error){rollbackIfOpen(db);throw error;}
     }finally{db.close();}
@@ -1025,6 +1072,10 @@ export async function storageAdoptQuarantine(id,file=statePath(),{confirm=false,
     await link(quarantine,path);
     const d=await open(dirname(path),'r');
     try{await d.sync();}finally{await d.close();}
+    // Clear the marker while both names still point to the same inode: if
+    // this fails or the process dies here, a rerun takes the same-inode
+    // "recovered" branch instead of LIVE_PRESENT.
+    clearAdoptionPrepared(path);
     await rm(quarantine);
     const d2=await open(dirname(path),'r');
     try{await d2.sync();}finally{await d2.close();}

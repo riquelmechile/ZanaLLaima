@@ -20,7 +20,7 @@ El código queda y sigue probado en stdio, pero **no se toca más**:
 - los grants de escritura Ed25519;
 - el aislamiento de OS (ZL-004);
 - los warnings pendientes de la ronda 11 (atributos y `crlf`, `**/.gitignore` del hilo Codex `4485193524`, lock con fd en Node, alias `nlink=2`, `setup-python` en CI, epoch clampeado).
-- límites conocidos del storage local que tampoco se tocan: un restore devuelve las rondas de revisión consumidas, y si se pierde la DB SQLite el `state.json` heredado se reimporta solo (preexistente).
+- límite conocido del storage local que tampoco se toca: si se pierde la DB SQLite el `state.json` heredado se reimporta solo (preexistente). Las rondas de revisión y el presupuesto consumido ya son monótonos en restore desde la versión anterior.
 
 <!-- HISTORICAL_VERSIONS_START -->
 ## Historial de versiones (no vigente)

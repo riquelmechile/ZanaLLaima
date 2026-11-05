@@ -247,3 +247,17 @@ test('revoke-then-regrant cannot revive an old durable WRITE intention',async()=
     await assert.rejects(operations.applyWrite(f.args()),/required state/);
   }finally{await f.cleanup();}
 });
+
+test('WARNING W6 prolonged locked effect aborts before rename and remains uncertain',async()=>{
+  const f=await fixture();
+  try{
+    await assert.rejects(applyWriteEffect(f.args(),f.file,{
+      maxEffectLockMs:25,
+      beforeEffect:async()=>new Promise(resolve=>setTimeout(resolve,80))
+    }),/Effect lock deadline exceeded/);
+    await absent(join(f.dir,'docs','guide.txt'));
+    const m=await readState(f.file);
+    assert.equal(m.units[0].status,'OUTCOME_UNKNOWN');
+    assert.equal(m.units[0].run.effectReceipt,undefined);
+  }finally{await f.cleanup();}
+});

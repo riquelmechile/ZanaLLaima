@@ -121,3 +121,72 @@ test('R11: adopt con hermanas legibles no omite fuentes y conserva el máximo',a
     assert.equal((await readState(f.file)).units[0].attempts,1);
   }finally{await f.close();}
 });
+
+const corruptArchive=path=>{
+  const db=new DatabaseSync(path);
+  try{db.prepare("INSERT INTO mission_archive(mission_id,snapshot,archived_at) VALUES('roto','{no es json',?)").run(new Date().toISOString());}
+  finally{db.close();}
+};
+
+test('R11 final: un backup con un snapshot archivado corrupto se rechaza en restore normal y ciego',async()=>{
+  const f=await fixture();
+  try{
+    await backupState(f.backup,f.file);
+    corruptArchive(f.backup);
+    await assert.rejects(restoreBackup(f.backup,f.file,{offline:true}),err=>err.code==='INVALID_LEDGER');
+    await assert.rejects(restoreBackup(f.backup,f.file,{offline:true,forceDataLoss:true}),err=>err.code==='INVALID_LEDGER');
+    const base=databasePath(f.file);
+    await rm(base,{force:true});for(const s of ['-wal','-shm'])await rm(base+s,{force:true});
+    await assert.rejects(restoreBackup(f.backup,f.file,{offline:true,forceDataLoss:true}),
+      err=>err.code==='INVALID_LEDGER','el restore ciego tampoco publica un backup corrupto');
+  }finally{await f.close();}
+});
+
+test('R11 final: adopt con --force-data-loss repara un snapshot archivado corrupto y deja la base restaurable',async()=>{
+  const f=await fixture();
+  try{
+    const base=databasePath(f.file),id=randomUUID();
+    await backupState(f.backup,f.file);
+    checkpoint(base);
+    corruptArchive(base);
+    await rename(base,base+'.quarantine.'+id);
+    for(const s of ['-wal','-shm'])await rm(base+s,{force:true});
+    await assert.rejects(storageAdoptQuarantine(id,f.file,{confirm:true}),err=>err.code==='INVALID_LEDGER');
+    const adopted=await storageAdoptQuarantine(id,f.file,{confirm:true,forceDataLoss:true});
+    assert.equal(adopted.ledgerRebuilt,true);
+    const result=await restoreBackup(f.backup,f.file,{offline:true});
+    assert.equal(result.restored,true,'tras reparar, un restore normal no debe exigir force');
+  }finally{await f.close();}
+});
+
+test('R11 final: una misión legacy con id no UUID sigue siendo restaurable',async()=>{
+  const f=await fixture();
+  try{
+    const base=databasePath(f.file);
+    await backupState(f.backup,f.file);
+    for(const path of [base,f.backup]){
+      const db=new DatabaseSync(path);
+      try{db.exec("UPDATE units SET mission_id='legacy-mission-1'");db.exec("UPDATE active_mission SET id='legacy-mission-1'");}
+      finally{db.close();}
+    }
+    const result=await restoreBackup(f.backup,f.file,{offline:true});
+    assert.equal(result.restored,true);
+  }finally{await f.close();}
+});
+
+test('R11 final: adopt rechaza forceDataLoss no booleano y etiqueta una hermana con ledger inválido',async()=>{
+  const f=await fixture();
+  try{
+    const base=databasePath(f.file),id=randomUUID(),sibling=base+'.aborted.'+randomUUID();
+    await backupState(f.backup,f.file);
+    checkpoint(base);
+    await copyFile(f.backup,sibling);
+    const db=new DatabaseSync(sibling);
+    try{db.prepare("INSERT INTO metadata(key,value) VALUES('consumed_budget','[1]')").run();}finally{db.close();}
+    await rename(base,base+'.quarantine.'+id);
+    for(const s of ['-wal','-shm'])await rm(base+s,{force:true});
+    await assert.rejects(storageAdoptQuarantine(id,f.file,{confirm:true,forceDataLoss:'yes'}),err=>err.code==='INVALID_FORCE');
+    const adopted=await storageAdoptQuarantine(id,f.file,{confirm:true,forceDataLoss:true});
+    assert.deepEqual(adopted.skippedSources.map(x=>x.reason),['INVALID_LEDGER']);
+  }finally{await f.close();}
+});

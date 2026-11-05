@@ -13,6 +13,14 @@ const MAX_EVENTS = 2000;
 const MAX_ARCHIVES = 200;
 const BUSY_MS = 10000;
 const now = () => new Date().toISOString();
+const RESTORE_EPOCH_KEY='restore_epoch';
+const parseEpoch=(value,at=Date.now())=>{
+  if(typeof value!=='string'||
+     !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(value))return at;
+  const ts=Date.parse(value);
+  return Number.isFinite(ts)&&ts<=at?ts:at;
+};
+
 const tokenHash = token => createHash('sha256').update(token).digest('hex');
 const fail = (message) => { throw new Error(message); };
 // SQLite may automatically roll back (SQLITE_FULL / RAISE(ROLLBACK)).
@@ -519,12 +527,9 @@ function mergeSecurityFacts(db,security){
   // if a nonce was never stored in the lost live database.
   const existing=db.prepare("SELECT value FROM metadata WHERE key='restore_epoch'").get()?.value;
   const floor=security.blind?new Date().toISOString():security.epoch;
-  const parsed=[existing,floor].filter(x=>x!==null&&x!==undefined).map(value=>{
-    // Malformed legacy epochs fail closed at "now"; do NOT sort strings.
-    if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(value)||
-       !Number.isFinite(Date.parse(value)))return Date.now();
-    return Date.parse(value);
-  });
+  const currentTime=Date.now();
+  const parsed=[existing,floor].filter(x=>x!==null&&x!==undefined)
+    .map(x=>parseEpoch(x,currentTime));
   const epoch=parsed.length?new Date(Math.max(...parsed)).toISOString():null;
   if(epoch)db.prepare("INSERT INTO metadata(key,value) VALUES('restore_epoch',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(epoch);
 }
@@ -692,9 +697,7 @@ export async function applyOperatorAction(envelope,file=statePath()){
       const p=verifySignedAction(envelope,previous,key);
       const epoch=db.prepare("SELECT value FROM metadata WHERE key='restore_epoch'").get()?.value;
       if(epoch){
-        const cutoff=typeof epoch==='string'&&
-          /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(epoch)&&
-          Number.isFinite(Date.parse(epoch))?Date.parse(epoch):Date.now();
+        const cutoff=parseEpoch(epoch);
         if(!Number.isFinite(Date.parse(p.issuedAt))||Date.parse(p.issuedAt)<=cutoff)
           fail('Operator action issuedAt precedes restore epoch; obtain a new signature');
       }

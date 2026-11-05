@@ -289,7 +289,8 @@ const privateIgnoreDir=(repo,index)=>{
   mkdirSync(join(gitdir,'objects'));mkdirSync(join(gitdir,'refs'));
   writeFileSync(join(gitdir,'HEAD'),'ref: refs/heads/main\n',{mode:0o600});
   writeFileSync(join(gitdir,'config'),'[core]\n\trepositoryformatversion = 0\n\tbare = false\n',{mode:0o600});
-  let hasTrackedIgnores=false;
+  let hasTrackedIgnores=false,needsFullShadowDirs=false;
+  const simpleIgnoredDirectoryNames=new Set();
   for(const path of index.keys()){
     if(path.split('/').at(-1)!=='.gitignore')continue;
     hasTrackedIgnores=true;
@@ -306,8 +307,20 @@ const privateIgnoreDir=(repo,index)=>{
     if(hash('blob',ignoreBytes)!==index.get(path).sha)
       deny('Tracked .gitignore differs from index during shadow construction: '+path);
     writeFileSync(target,ignoreBytes,{mode:0o600});
+    // Fast path ONLY for literal directory-only rules (e.g. node_modules/).
+    // Materializing every candidate directory costs ~400-700ms at 3400 dirs.
+    // A wildcard, slash path, negation or escaped pattern needs full shadow
+    // semantics so check-ignore sees real directory traversal. Never turn
+    // off shadow creation in those complex cases.
+    for(const raw of ignoreBytes.toString('utf8').split('\n')){
+      const line=raw.endsWith('\r')?raw.slice(0,-1):raw;
+      if(line===''||line.startsWith('#'))continue;
+      if(/^[A-Za-z0-9_.-]+\/$/.test(line))
+        simpleIgnoredDirectoryNames.add(line.slice(0,-1));
+      else needsFullShadowDirs=true;
+    }
   }
-  return {holder,gitdir,worktree,hasTrackedIgnores};
+  return {holder,gitdir,worktree,hasTrackedIgnores,needsFullShadowDirs,simpleIgnoredDirectoryNames};
 };
 const ignoredNames=(repo,gitdir,paths)=>{
   if(!paths.length)return new Set();
@@ -402,7 +415,8 @@ function inspect(root,expectedSha,parentGitDir,depth=0){
           const abs=join(root,path),st=lstatSync(abs),isDir=st.isDirectory();
           // No tracked ignore rules: avoid 3400 unnecessary shadow mkdirs.
           // Python autoignore and nested repositories are checked separately.
-          if(isDir&&ignoreGit.hasTrackedIgnores)
+          if(isDir&&ignoreGit.hasTrackedIgnores&&
+             (ignoreGit.needsFullShadowDirs||ignoreGit.simpleIgnoredDirectoryNames.has(ent.name)))
             mkdirSync(join(ignoreGit.worktree,path),{recursive:true});
           candidates.push({ent,path,abs,st,isDir});
         }

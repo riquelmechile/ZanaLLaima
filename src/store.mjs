@@ -13,6 +13,11 @@ const BUSY_MS = 10000;
 const now = () => new Date().toISOString();
 const tokenHash = token => createHash('sha256').update(token).digest('hex');
 const fail = (message) => { throw new Error(message); };
+// SQLite may automatically roll back (SQLITE_FULL / RAISE(ROLLBACK)).
+// Never mask the original error by issuing ROLLBACK against no transaction.
+function rollbackIfOpen(db){
+  try{if(db.isTransaction)db.exec('ROLLBACK');}catch{/* preserve original failure */}
+}
 const json = x => JSON.stringify(x);
 const parse = x => x == null ? null : JSON.parse(x);
 
@@ -87,7 +92,7 @@ function connect(path, readonly = false) {
         const unitColumns=db.prepare('PRAGMA table_info(units)').all().map(x=>x.name);
         if(!unitColumns.includes('attempts')) db.exec('ALTER TABLE units ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0');
         db.exec('PRAGMA user_version = ' + SCHEMA_VERSION + '; COMMIT');
-      } catch (e) { db.exec('ROLLBACK'); throw e; }
+      } catch (e) { rollbackIfOpen(db); throw e; }
     } else {
       if (db.prepare('PRAGMA user_version').get().user_version !== SCHEMA_VERSION)
         fail('Unsupported database schema');
@@ -300,7 +305,7 @@ export async function transact(change, file = statePath()) {
       persist(db,previous,updated);
       db.exec('COMMIT');
       return updated;
-    } catch (e) { db.exec('ROLLBACK'); throw e; }
+    } catch (e) { rollbackIfOpen(db); throw e; }
   } finally { db.close(); }
   });
 }
@@ -509,7 +514,7 @@ export async function applyOperatorAction(envelope,file=statePath()){
       db.exec('COMMIT');
       return {kind:p.kind,missionId:next.id,revision:next.revision,
         actionId:p.nonce,writeGrant:await readEffectiveGrant(db,next)};
-    }catch(e){db.exec('ROLLBACK');throw e;}
+    }catch(e){rollbackIfOpen(db);throw e;}
   }finally{db.close();}
   });
 }
@@ -540,7 +545,7 @@ export async function archiveMission(file=statePath()){
       db.prepare("INSERT INTO metadata(key,value) VALUES('legacy_imported','1') ON CONFLICT(key) DO UPDATE SET value='1'").run();
       db.exec('COMMIT');
       return {archived:true,missionId:m.id};
-    }catch(e){db.exec('ROLLBACK');throw e;}
+    }catch(e){rollbackIfOpen(db);throw e;}
   }finally{db.close();}
   });
 }

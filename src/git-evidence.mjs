@@ -2,8 +2,6 @@ import { execFileSync,spawnSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-// Disable Git extensions capable of executing local commands or trusting stale
-// index metadata. Apply to the root and to every initialized submodule.
 const SAFE_GIT_ARGS=[
   '-c','core.fsmonitor=false',
   '-c','core.untrackedCache=false',
@@ -13,6 +11,7 @@ const SAFE_GIT_ARGS=[
   '-c','diff.external=false',
   '-c','core.pager=cat',
 ];
+
 const SHA=/^[a-f0-9]{40}$/;
 const deny=reason=>{throw new Error('Git candidate rejected: '+reason);};
 const safeRef=ref=>typeof ref==='string' && ref.startsWith('refs/heads/') &&
@@ -21,7 +20,7 @@ const safeRef=ref=>typeof ref==='string' && ref.startsWith('refs/heads/') &&
 const gitEnv=()=>{
   const result={...process.env};
   for(const name of Object.keys(result)){
-    if(name.startsWith('GIT_') && name!=='GIT_OPTIONAL_LOCKS')delete result[name];
+    if(name.startsWith('GIT_'))delete result[name];
   }
   result.GIT_OPTIONAL_LOCKS='0';
   result.GIT_CONFIG_NOSYSTEM='1';
@@ -68,60 +67,11 @@ export function observeGit({
         timeout:10000,maxBuffer:1048576
       }).trimEnd();}catch{deny('Git submodule index inspection failed');}
     };
-    // Fail closed on executable filters from local or included config.
+    // Reject locally configured executable filters before any status call.
+    // Disabling hooks and fsmonitor alone does not neutralize filter.clean.
     const configuredFilters=spawnSync('git',[
       ...SAFE_GIT_ARGS,'-C',worktree,'config','--local','--includes',
-      '--name-only','--get-regexp','^filter[.].*[.](clean|smudge|process)'
-    ],{env:gitEnv(),encoding:'utf8',stdio:['ignore','pipe','pipe'],
-      timeout:10000,maxBuffer:1048576});
-    if(configuredFilters.error || ![0,1].includes(configuredFilters.status))
-      deny('Git filter configuration inspection failed');
-    if(configuredFilters.status===0 && configuredFilters.stdout.trim())
-      deny('Git worktree contains executable filter configuration');
-    // Every nested worktree has its own ignore configuration. A top-level
-    // status override does not propagate reliably to grandchildren.
-    let dirty=nestedCall('status','--porcelain=v1','--untracked-files=all',
-      '--ignore-submodules=none').length>0;
-    const indexEntries=nestedCall('ls-files','-v','-z').split('\0').filter(Boolean);
-    if(indexEntries.some(entry=>!entry.startsWith('H ')))
-      deny('Git index contains hidden/unsupported tracked-file flags');
-    const gitlinks=nestedCall('ls-files','--stage','-z').split('\0')
-      .filter(Boolean).filter(entry=>entry.startsWith('160000 '));
-    for(const entry of gitlinks){
-      const tab=entry.indexOf('\t');
-      if(tab<0)deny('Invalid Git submodule index entry');
-      const subpath=entry.slice(tab+1);
-      let nested;
-      try{nested=realpathSync(resolve(worktree,subpath));}
-      catch{deny('Git submodule unavailable for index inspection');}
-      if(!nested.startsWith(worktree+'/'))
-        deny('Git submodule escapes repository root');
-      if(nestedCall('-C',nested,'rev-parse','--show-toplevel')!==nested)
-        deny('Git submodule is not an exact worktree root');
-      if(inspectIndex(nested,depth+1))dirty=true;
-    }
-    return dirty;
-  };
-  // Check the root and each initialized submodule, not only their indexes.
-  const dirty=inspectIndex(root);
-  return Object.freeze({assurance:'LOCAL_GIT_OBSERVED',repoRoot:root,
-    candidateSha:sha,treeSha,branchRef:branch,targetRef,baseSha,
-    clean:!dirty,observedAt:new Date().toISOString()});
-}
-
-export function matchesReviewCandidate(review,observed){
-  const frozen=review?.gitEvidence;
-  if(!frozen || frozen.assurance!=='LOCAL_GIT_OBSERVED')return false;
-  return observed?.clean===true && frozen.clean===true &&
-    frozen.repoRoot===observed.repoRoot &&
-    frozen.candidateSha===observed.candidateSha &&
-    frozen.treeSha===observed.treeSha &&
-    frozen.branchRef===observed.branchRef &&
-    frozen.targetRef===observed.targetRef &&
-    frozen.baseSha===observed.baseSha &&
-    review.candidateSha===observed.candidateSha;
-}
-
+      '--name-only','--get-regexp','^filter[.].*[.](clean|smudge|process)$'
     ],{env:gitEnv(),encoding:'utf8',stdio:['ignore','pipe','pipe'],
       timeout:10000,maxBuffer:1048576});
     if(configuredFilters.error || ![0,1].includes(configuredFilters.status))

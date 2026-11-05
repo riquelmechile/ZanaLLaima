@@ -325,3 +325,54 @@ test('R11 Codex P1b: el adopt forzado no publica contadores activos inválidos q
     assert.equal((await restoreBackup(f.backup,f.file,{offline:true})).restored,true,'la base adoptada debe quedar restaurable sin force');
   }finally{await f.close();}
 });
+
+test('R11 agotada: con el presupuesto por defecto, una unidad PENDING con attempts=maxUnitAttempts no vuelve a arrancar',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'r11-exhaust-'));
+  const file=join(dir,'state.json'),backup=join(dir,'backup.sqlite');
+  const saved={ZANA_STATE_FILE:process.env.ZANA_STATE_FILE,ZANA_RESTORE_OFFLINE:process.env.ZANA_RESTORE_OFFLINE};
+  process.env.ZANA_STATE_FILE=file;process.env.ZANA_RESTORE_OFFLINE='1';
+  try{
+    await transact(()=>createMission({objective:'Presupuesto por defecto agotado por unidad',
+      authorization:{writesAllowed:false,allowedPaths:[]},
+      units:[{id:'scan',effect:'READ',paths:['src'],instruction:'Leer el código fuente'}]}),file);
+    await backupState(backup,file);
+    const {retryRead}=await import('../src/lifecycle.mjs');
+    for(let i=0;i<3;i++){
+      await transact(m=>{startBatch(m);return m;},file);
+      await transact(m=>{expireUnits(m,Date.now()+3600_000);return m;},file);
+      if(i<2)await transact(m=>{retryRead(m,'scan');return m;},file);
+    }
+    assert.equal((await readState(file)).units[0].attempts,3);
+    await restoreBackup(backup,file,{offline:true,forceDataLoss:true});
+    const u=(await readState(file)).units[0];
+    assert.equal(u.status,'PENDING');assert.equal(u.attempts,3);
+    await assert.rejects(transact(m=>{startBatch(m);return m;},file),/No runnable batch/,
+      'una unidad agotada no puede consumir un cuarto intento');
+  }finally{
+    for(const [k,v] of Object.entries(saved)){if(v===undefined)delete process.env[k];else process.env[k]=v;}
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
+test('R11 cerco: reusar el UUID de una cuarentena ya adoptada registra un evento nuevo con lo que de verdad pasó',async()=>{
+  const f=await fixture();
+  try{
+    const base=databasePath(f.file),id=randomUUID();
+    checkpoint(base);
+    await rename(base,base+'.quarantine.'+id);
+    for(const s of ['-wal','-shm'])await rm(base+s,{force:true});
+    await storageAdoptQuarantine(id,f.file,{confirm:true});
+    const copy=join(f.dir,'post-adopt.sqlite');
+    await backupState(copy,f.file);
+    await rm(base,{force:true});for(const s of ['-wal','-shm'])await rm(base+s,{force:true});
+    await copyFile(copy,base+'.quarantine.'+id);
+    const db=new DatabaseSync(base+'.quarantine.'+id);
+    try{db.prepare("INSERT INTO metadata(key,value) VALUES('consumed_budget','[1]') ON CONFLICT(key) DO UPDATE SET value=excluded.value").run();}finally{db.close();}
+    const again=await storageAdoptQuarantine(id,f.file,{confirm:true,forceDataLoss:true});
+    assert.equal(again.ledgerRebuilt,true,'el resultado debe reflejar esta adopción, no la anterior');
+    const live=new DatabaseSync(base,{readOnly:true});
+    try{
+      assert.equal(live.prepare("SELECT COUNT(*) AS n FROM state_events WHERE category='QUARANTINE_ADOPTED'").get().n,2);
+    }finally{live.close();}
+  }finally{await f.close();}
+});

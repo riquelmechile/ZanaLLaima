@@ -199,3 +199,79 @@ test('R11-C1d: un ledger manipulado con __proto__ no contamina Object.prototype 
     assert.equal(({}).polluted,undefined,'Object.prototype contaminado por el ledger');
   }finally{delete Object.prototype.polluted;await f.close();}
 });
+
+const setLedger=(path,value)=>{
+  const db=new DatabaseSync(path);
+  try{db.prepare("INSERT INTO metadata(key,value) VALUES('consumed_budget',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(value);}
+  finally{db.close();}
+};
+
+test('R11-C1e: un ledger con contadores no numéricos en el backup se rechaza y no envenena el max',async()=>{
+  const f=await budgetFixture();
+  try{
+    const missionId=(await readState(f.file)).id;
+    await backupState(f.backup,f.file);
+    for(const bad of ['"x"','{}','[1]','-1','1.5']){
+      const crafted=join(f.dir,'crafted-'+randomUUID()+'.sqlite');
+      await copyFile(f.backup,crafted);
+      setLedger(crafted,'{"'+missionId+'":{"scan":{"attempts":'+bad+',"leaseGeneration":0}}}');
+      await assert.rejects(restoreBackup(crafted,f.file,{offline:true}),err=>err.code==='INVALID_LEDGER','contador '+bad);
+    }
+  }finally{await f.close();}
+});
+
+test('R11-C1e: con --force-data-loss un ledger vivo corrupto se reconstruye desde las unidades y no bloquea la recuperación',async()=>{
+  const f=await budgetFixture();
+  try{
+    await backupState(f.backup,f.file);
+    await start(f.file);
+    await expire(f.file);
+    setLedger(databasePath(f.file),'{{{');
+    await assert.rejects(restoreBackup(f.backup,f.file,{offline:true}),err=>err.code==='INVALID_LEDGER');
+    const result=await restoreBackup(f.backup,f.file,{offline:true,forceDataLoss:true});
+    assert.equal(result.ledgerRebuilt,true,'el resultado debe declarar la reconstrucción');
+    assert.equal(result.blind,false);
+    assert.equal((await unit(f.file)).attempts,1,'el consumo de las unidades vivas se conserva');
+    await assert.rejects(start(f.file),/work-start budget exhausted/);
+  }finally{await f.close();}
+});
+
+test('R11-C1e: historias divergentes fusionadas sobre el límite no impiden cancelar la misión',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'r11-overflow-'));
+  const file=join(dir,'state.json');
+  try{
+    await transact(()=>createMission({
+      objective:'Límite total desbordado por fusión de historias',
+      authorization:{writesAllowed:false,allowedPaths:[]},
+      budget:{maxUnitAttempts:3,maxWorkStarts:2},
+      units:[{id:'a',effect:'READ',paths:['src'],instruction:'Leer a'},{id:'b',effect:'READ',paths:['docs'],instruction:'Leer b'}],
+    }),file);
+    const db=new DatabaseSync(databasePath(file));
+    try{db.exec("UPDATE units SET attempts=2 WHERE id='a'");db.exec("UPDATE units SET attempts=1 WHERE id='b'");}
+    finally{db.close();}
+    await assert.rejects(transact(m=>{startBatch(m);return m;},file),/budget/);
+    const cancelled=await transact(m=>{cancelMission(m);return m;},file);
+    assert.ok(['CANCELLED','CANCELLING'].includes(cancelled.status),'cancelar debe seguir siendo posible');
+  }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+test('R11-C1e: el merge no sube la leaseGeneration de una unidad OUTCOME_UNKNOWN, para no invalidar su reconciliación',async()=>{
+  const f=await budgetFixture();
+  try{
+    await start(f.file);
+    await expire(f.file);
+    await backupState(f.backup,f.file);
+    const b=new DatabaseSync(f.backup);
+    try{b.exec("UPDATE units SET status='OUTCOME_UNKNOWN' WHERE id='scan'");}finally{b.close();}
+    const live=new DatabaseSync(databasePath(f.file));
+    try{
+      const run=JSON.parse(live.prepare("SELECT run FROM units WHERE id='scan'").get().run);
+      run.leaseGeneration=5;
+      live.prepare("UPDATE units SET run=?,attempts=1 WHERE id='scan'").run(JSON.stringify(run));
+    }finally{live.close();}
+    await restoreBackup(f.backup,f.file,{offline:true,forceDataLoss:true});
+    const after=await unit(f.file);
+    assert.equal(after.status,'OUTCOME_UNKNOWN');
+    assert.equal(after.run.leaseGeneration,1,'la generación del token a reconciliar no debe cambiar');
+  }finally{await f.close();}
+});

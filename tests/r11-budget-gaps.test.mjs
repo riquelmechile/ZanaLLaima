@@ -305,3 +305,23 @@ test('R11 final: con varias unidades, el rebuild omite solo la unidad dañada y 
     await rm(dir,{recursive:true,force:true});
   }
 });
+
+test('R11 Codex P1b: el adopt forzado no publica contadores activos inválidos que regalan starts',async()=>{
+  const f=await fixture();
+  try{
+    const base=databasePath(f.file),id=randomUUID();
+    checkpoint(base);
+    const db=new DatabaseSync(base);
+    try{db.exec("UPDATE units SET attempts=-1");}finally{db.close();}
+    await rename(base,base+'.quarantine.'+id);
+    for(const s of ['-wal','-shm'])await rm(base+s,{force:true});
+    await assert.rejects(storageAdoptQuarantine(id,f.file,{confirm:true}),err=>err.code==='INVALID_LEDGER');
+    const adopted=await storageAdoptQuarantine(id,f.file,{confirm:true,forceDataLoss:true});
+    assert.equal(adopted.ledgerRebuilt,true);
+    const u=(await readState(f.file)).units[0];
+    assert.ok(Number.isSafeInteger(u.attempts)&&u.attempts>=1,'una unidad con consumo desconocido queda agotada, no con crédito');
+    await assert.rejects(start(f.file),/work-start budget exhausted|No runnable batch/);
+    await backupState(f.backup,f.file);
+    assert.equal((await restoreBackup(f.backup,f.file,{offline:true})).restored,true,'la base adoptada debe quedar restaurable sin force');
+  }finally{await f.close();}
+});

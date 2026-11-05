@@ -84,7 +84,6 @@ export async function capturePathAnchors(paths,root=process.env.ZANA_WORKSPACE_R
     for(const scope of paths){
       const parts=validateRelativePath(scope);
       let parent=base,at='';
-      const scoped=[];
       for(const part of parts){
         at=at?at+'/'+part:part;
         let child;
@@ -100,9 +99,10 @@ export async function capturePathAnchors(paths,root=process.env.ZANA_WORKSPACE_R
           }
           throw error;
         }
-        scoped.push(child);anchors[at]=id(await child.stat());parent=child;
+        handles.push(child); // Register immediately: failures must not leak an FD.
+        anchors[at]=id(await child.stat());parent=child;
       }
-      handles.push(...scoped);
+
     }
     return {workspaceRoot:home,anchors};
   }finally{

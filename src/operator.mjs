@@ -1,3 +1,4 @@
+import {validateRelativePath,inScope} from './paths.mjs';
 import { createHash, createPublicKey, verify } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -5,8 +6,7 @@ import {assertPublicPem} from './public-key.mjs';
 
 const check=(ok,msg)=>{if(!ok)throw new Error(msg)};
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const pathSafe=p=>typeof p==='string'&&p.length>0&&p.length<=240
-  &&!p.startsWith('/')&&!p.includes('\\')&&p.split('/').every(x=>x&&x!=='.'&&x!=='..');
+const pathSafe=p=>{try{validateRelativePath(p);return true;}catch{return false;}};
 
 export async function operatorPublicKey(path=process.env.ZANA_OPERATOR_PUBLIC_KEY_PATH){
   check(typeof path==='string'&&path.length>0,'Operator public key is not configured');
@@ -43,8 +43,7 @@ export function verifySignedAction(envelope,mission,operatorKey,at=Date.now()){
     check(mission.authorization?.writesAllowed===true,'Mission did not request writes');
     check(Array.isArray(p.paths)&&p.paths.length>0&&p.paths.length<=32&&
       p.paths.every(pathSafe),'Invalid permitted paths');
-    check(p.paths.every(x=>mission.authorization.allowedPaths.some(root=>
-      x===root||x.startsWith(root+'/'))),'Grant exceeds mission requested paths');
+    check(p.paths.every(x=>inScope(x,mission.authorization.allowedPaths)),'Grant exceeds mission requested paths');
   }
   if(p.kind==='REVOKE_WRITE'){
     check(UUID.test(p.grantId),'Missing grant identifier');

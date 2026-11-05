@@ -1,3 +1,4 @@
+import {validateRelativePath,inScope} from './paths.mjs';
 import { randomUUID } from 'node:crypto';
 import { createBudget, budgetOf, budgetExpired, budgetStatus, remainingStarts, requirePayloadBudget } from './budget.mjs';
 
@@ -17,11 +18,7 @@ export const HOST_REQUEST = Object.freeze({
 const assert = (ok, message) => { if (!ok) throw new Error(message); };
 const unique = (values) => [...new Set(values)];
 const stamp = () => new Date().toISOString();
-const pathSafe = (p) => typeof p === 'string' && p.length > 0 && p.length <= 240 &&
-  !p.startsWith('/') && !p.includes('\\') && p.split('/').every(x => x && x !== '.' && x !== '..');
-const intersects = (a, b) => a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
-const overlaps = (a, b) => a.some(x => b.some(y => intersects(x, y)));
-const MAX_ATTEMPTS=3;
+const pathSafe=p=>{try{validateRelativePath(p);return true;}catch{return false;}};
 const LEASE_SECONDS=300;
 export function grantPermits(unit,grant,at=Date.now()){
   return unit.effect==='READ'||(grant?.valid===true&&
@@ -34,10 +31,6 @@ function live(mission,unit,token,generation){
   assert(generation===undefined||generation===unit.run.leaseGeneration,'Invalid or stale lease generation');
   assert(unit.run.expiresAt&&Date.parse(unit.run.expiresAt)>Date.now(),
     'Lease expired; reconciliation required');
-}
-function markUnknown(unit,reason){
-  unit.status='OUTCOME_UNKNOWN';
-  unit.run.uncertainty={reason,since:stamp()};
 }
 export function missionSummary(mission){
   return {id:mission.id,status:mission.status||'ACTIVE',revision:mission.revision,
@@ -74,7 +67,7 @@ export function createMission(input) {
     if (u.effect === 'WRITE') {
       assert(paths.length > 0, `Write unit needs scoped paths: ${u.id}`);
       assert(authorization.writesAllowed, `Writes not authorized: ${u.id}`);
-      assert(paths.every(p => allowedPaths.some(x => p === x || p.startsWith(`${x}/`))),
+      assert(paths.every(p => inScope(p,allowedPaths)),
         `Write path outside authorization: ${u.id}`);
     }
     return { id: u.id, instruction: u.instruction, effect: u.effect,

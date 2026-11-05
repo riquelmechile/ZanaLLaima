@@ -1,3 +1,5 @@
+import {validateRelativePath} from './paths.mjs';
+export {validateRelativePath} from './paths.mjs';
 import {constants} from 'node:fs';
 import {open, lstat, realpath, rename, unlink} from 'node:fs/promises';
 import {resolve, isAbsolute, sep} from 'node:path';
@@ -9,14 +11,6 @@ const writeFlags=constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants
 const hash=buffer=>createHash('sha256').update(buffer).digest('hex');
 const fail=message=>{throw Error('Write effect boundary: '+message);};
 const inside=(root,value)=>value===root||value.startsWith(root+sep);
-
-export function validateRelativePath(path){
-  if(typeof path!=='string'||!path||path.length>240||
-      path.startsWith('/')||path.includes('\\')||path.includes('\0')||
-      path.split('/').some(x=>!x||x==='.'||x==='..'||x==='~'))
-    fail('Unsafe relative path');
-  return path.split('/');
-}
 
 export function validateWriteRequest({path,content,deleteFile,expectedPreSha256},limit){
   validateRelativePath(path);

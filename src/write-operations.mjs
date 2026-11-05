@@ -1,3 +1,4 @@
+import {inScope} from './paths.mjs';
 import {randomUUID,createHash} from 'node:crypto';
 import {transact,statePath} from './store.mjs';
 import {grantPermits} from './core.mjs';
@@ -5,7 +6,6 @@ import {budgetOf} from './budget.mjs';
 import {atomicWorkspaceEffect,inspectPreimage,validateWriteRequest} from './write-effect.mjs';
 
 const ensure=(ok,message)=>{if(!ok)throw Error('Write effect rejected: '+message);};
-const inScope=(path,roots)=>Array.isArray(roots)&&roots.some(x=>path===x||path.startsWith(x+'/'));
 const hash=value=>createHash('sha256').update(value).digest('hex');
 
 function permitted(m,ctx,{unitId,token,leaseGeneration,path},status='RUNNING'){

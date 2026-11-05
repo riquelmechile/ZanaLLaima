@@ -101,3 +101,28 @@ test('R11-C1: adoptar una cuarentena con menos intentos conserva el máximo de t
     await assert.rejects(start(f.file),/No runnable batch|budget/i);
   }finally{await f.close();}
 });
+
+test('R11-C1b: pasar por una misión intermedia (A→B→A) no reinicia el presupuesto de A',async()=>{
+  const f=await budgetFixture();
+  try{
+    const backupB=join(f.dir,'backup-b.sqlite');
+    await backupState(f.backup,f.file);
+    await start(f.file);
+    await expire(f.file);
+    // Otra misión B en un estado separado, respaldada para el restore intermedio.
+    const otherFile=join(f.dir,'other.json');
+    await transact(()=>createMission({
+      objective:'Misión intermedia sin relación',
+      authorization:{writesAllowed:false,allowedPaths:[]},
+      units:[{id:'other',effect:'READ',paths:['docs'],instruction:'Leer la documentación'}],
+    }),otherFile);
+    await backupState(backupB,otherFile);
+    process.env.ZANA_STATE_FILE=f.file;
+    await restoreBackup(backupB,f.file,{offline:true});
+    await assert.rejects(restoreBackup(f.backup,f.file,{offline:true}),
+      err=>err.code==='CONSUMED_BUDGET','Volver al backup viejo de A no puede devolver intentos consumidos');
+    await restoreBackup(f.backup,f.file,{offline:true,forceDataLoss:true});
+    assert.equal((await unit(f.file)).attempts,1,'Con force se conserva el consumo de A registrado en el ledger');
+    await assert.rejects(start(f.file),/No runnable batch|budget/i);
+  }finally{await f.close();}
+});

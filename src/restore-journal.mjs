@@ -20,7 +20,7 @@ const syncDir=async path=>{
  try{await fd.sync();}finally{await fd.close();}
 };
 const journalPath=path=>path+'.restore-pending';
-const stable=async marker,journal=>{
+const stable=async (marker,journal)=>{
  const tmp=marker+'.new.'+randomUUID();
  const h=await open(tmp,'wx',0o600);
  try{await h.writeFile(JSON.stringify(journal));await h.sync();}

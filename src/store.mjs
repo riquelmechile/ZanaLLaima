@@ -393,10 +393,25 @@ export async function cleanupEffectTemporaries(mission){
   return cleaned;
 }
 
+async function listRestoreArtifacts(path){
+  const entries=await readdir(dirname(path)).catch(error=>{
+    if(error?.code==='ENOENT')return [];
+    throw error;
+  });
+  const prefix=basename(path);
+  const bases=entries.filter(x=>
+    (x.startsWith(prefix+'.restoring.')||x.startsWith(prefix+'.quarantine.'))&&
+    !x.endsWith('-wal')&&!x.endsWith('-shm'));
+  return {
+    restoring:bases.filter(x=>x.startsWith(prefix+'.restoring.')).map(x=>join(dirname(path),x)),
+    quarantines:bases.filter(x=>x.startsWith(prefix+'.quarantine.')).map(x=>join(dirname(path),x))
+  };
+}
 export async function storageStatus(file=statePath()) {
   await refuseInterruptedRestore(file);
   const path=databasePath(file);
-  if (!await exists(path)) return {backend:'LEGACY_OR_EMPTY',databasePath:path,legacyExists:await exists(legacyPath(file))};
+  const restoreArtifacts=await listRestoreArtifacts(path);
+  if (!await exists(path)) return {backend:'LEGACY_OR_EMPTY',databasePath:path,restoreArtifacts,legacyExists:await exists(legacyPath(file))};
   const db=connect(path,true);
   try {
     assertHealthy(db);
@@ -406,7 +421,7 @@ export async function storageStatus(file=statePath()) {
       const temp=await pendingTemporary(u);
       if(temp)effectTemporaries.push({unitId:u.id,...temp});
     }
-    return {backend:'SQLITE_WAL',databasePath:path,effectTemporaries,schemaVersion:db.prepare('PRAGMA user_version').get().user_version,
+    return {backend:'SQLITE_WAL',databasePath:path,effectTemporaries,restoreArtifacts,schemaVersion:db.prepare('PRAGMA user_version').get().user_version,
       journalMode:db.prepare('PRAGMA journal_mode').get().journal_mode,
       integrity:'ok',activeMission:live?.id??null,
       events:db.prepare('SELECT COUNT(*) AS n FROM state_events').get().n,
@@ -433,7 +448,7 @@ export async function backupState(destination,file=statePath()) {
     try {assertHealthy(check);} finally {check.close();}
     await link(temp,target); // fails instead of overwriting another backup
     return {path:target,integrity:'ok'};
-  } finally {db.close();await rm(temp,{force:true});}
+  } finally {db.close();for(const suffix of ['','-wal','-shm'])await rm(temp+suffix,{force:true});}
 }
 
 // Security facts are monotone across offline restore. A missing live DB after

@@ -72,7 +72,7 @@ test('invalid target refs and detached HEAD are rejected',()=>{
   try{
     assert.throws(()=>observeGit({repoPath:f.repo,targetRef:'--exec=unsafe'}),/Invalid target/);
     f.git('checkout','--detach','HEAD');
-    assert.throws(()=>observeGit({repoPath:f.repo}),/Git command failed: symbolic-ref/);
+    assert.throws(()=>observeGit({repoPath:f.repo}),/Detached or invalid local branch/);
   }finally{f.cleanup();}
 });
 

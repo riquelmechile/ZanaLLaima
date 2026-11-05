@@ -43,7 +43,7 @@ for(const variant of ['worktree','include','includeIf','local-attributes']){
       writeFileSync(join(f.repo,'f.txt'),'xyz'); // filtro podría convertir xyz a abc
       try{assert.equal(observeGit({repoPath:f.repo}).clean,false,
         'Git no debe declarar limpio el contenido diferente');}
-      catch(error){assert.match(error.message,/Git candidate rejected:.*(filter|attr|normaliz)/i);}
+      catch(error){assert.match(error.message,/Git candidate rejected:.*(filter|attr|normaliz|config include)/i);}
       assert.equal(existsSync(marker),false,'observeGit ejecutó el filtro '+variant);
     }finally{f.close();}
   });

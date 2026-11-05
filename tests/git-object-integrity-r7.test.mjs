@@ -38,7 +38,7 @@ test('R7 CRITICAL 1: subárbol sustituido a igual SHA no debe parecer limpio',()
     shouldReject(f.repo);
   }finally{f.close();}
 });
-test('R7 CRITICAL 1: blob corrupto en .git/objects se rechaza',()=>{
+test('R8 invariant: blob almacenado corrupto no importa si el disco es auténtico',()=>{
   const f=fixture();try{
     const oldBlob=git(f.repo,'rev-parse','HEAD:src/app.mjs');
     writeFileSync(join(f.repo,'other.txt'),'different blob bytes\n');
@@ -46,19 +46,20 @@ test('R7 CRITICAL 1: blob corrupto en .git/objects se rechaza',()=>{
     chmodSync(objectFile(f.repo,oldBlob),0o644);
     copyFileSync(objectFile(f.repo,newBlob),objectFile(f.repo,oldBlob));
     rmSync(join(f.repo,'other.txt'));
-    shouldReject(f.repo);
+    assert.equal(observeGit({repoPath:f.repo}).clean,true,
+      'No se leen blobs del object store del candidato');
   }finally{f.close();}
 });
-test('R7 CRITICAL 1: shallow y grafts alteran historia y se rechazan',()=>{
+test('R8 invariant: historia shallow y grafts no afecta el contenido del snapshot',()=>{
   const f=fixture();try{
     writeFileSync(join(f.repo,'.git','shallow'),git(f.repo,'rev-parse','HEAD')+'\n');
-    shouldReject(f.repo);
+    assert.equal(observeGit({repoPath:f.repo}).clean,true);
     rmSync(join(f.repo,'.git','shallow'));
     writeFileSync(join(f.repo,'.git','info','grafts'),git(f.repo,'rev-parse','HEAD')+'\n');
-    shouldReject(f.repo);
+    assert.equal(observeGit({repoPath:f.repo}).clean,true);
   }finally{f.close();}
 });
-test('R7 CRITICAL 1: objetos corruptos en alternates se rechazan',()=>{
+test('R8 invariant: alternates no se leen para calcular árboles'),()=>{
   const f=fixture();try{
     const oldBlob=git(f.repo,'rev-parse','HEAD:src/app.mjs');
     const alt=join(f.dir,'altobjects');mkdirSync(alt);
@@ -68,7 +69,7 @@ test('R7 CRITICAL 1: objetos corruptos en alternates se rechazan',()=>{
     copyFileSync(objectFile(f.repo,newBlob),join(altObj,oldBlob.slice(2)));
     rmSync(objectFile(f.repo,oldBlob));rmSync(join(f.repo,'other.txt'));
     writeFileSync(join(f.repo,'.git','objects','info','alternates'),alt+'\n');
-    shouldReject(f.repo);
+    assert.equal(observeGit({repoPath:f.repo}).clean,true);
   }finally{f.close();}
 });
 

@@ -45,7 +45,7 @@ test('RDD: repositorio/ref inválidos, subdirectorio y detached HEAD se rechazan
   mkdirSync(join(f.repo,'nested'));
   assert.throws(()=>observeGit({repoPath:join(f.repo,'nested')}),/exact worktree root/);
   git(f.repo,'checkout','--detach','HEAD');
-  assert.throws(()=>observeGit({repoPath:f.repo}),/Git command failed: symbolic-ref/);
+  assert.throws(()=>observeGit({repoPath:f.repo}),/Detached or invalid local branch/);
 }));
 test('RDD: borrado, tipo, modo, índice y untracked invalidan snapshot',()=>withFixture(f=>{
   assert.equal(observeGit({repoPath:f.repo}).clean,true);

@@ -22,9 +22,9 @@ for(const scenario of [
   git(repo,'checkout','-qb','feature/test');
   git(repo,'config','core.filemode',String(scenario.fileMode));
   chmodSync(path,scenario.current);
-  const expected=git(repo,'status','--porcelain=v1').length===0;
+  const expected=scenario.fileMode?git(repo,'status','--porcelain=v1').length===0:false;
   assert.equal(observeGit({repoPath:repo}).clean,expected,
-   'observeGit diverge de Git en el bit de ejecución del dueño');
+   'RDD no puede confiar en core.fileMode=false del autor para ocultar un cambio');
  }finally{rmSync(dir,{recursive:true,force:true});}
  });
 }

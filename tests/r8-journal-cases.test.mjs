@@ -128,6 +128,16 @@ test('R8 journal: candidato perdido durante crash no autoriza recuperar datos ar
     quarantine:q,phase:'restoring',restoreOps:[
       {from:path,to:q,state:'done'},
       {from:temp,to:path,state:'pending'}],abortOps:null}));
-  await assert.rejects(storageRestoreAbort(f.file),{code:'LOST_CANDIDATE'});
+  // El candidato se perdió, pero la cuarentena identificada por el diario
+  // conserva íntegramente la DB revocada. R9 exige rollback seguro, no bloqueo.
+  const beforeQuarantine=new DatabaseSync(q,{readOnly:true});
+  let events;
+  try{events=beforeQuarantine.prepare('SELECT COUNT(*) AS n FROM state_events').get().n;}
+  finally{beforeQuarantine.close();}
+  const outcome=await storageRestoreAbort(f.file);
+  assert.equal(outcome.aborted,true);
+  assert.equal((await authorizationStatus(f.file)).valid,false);
+  assert.equal(f.events(),events);
+  await assert.rejects(stat(q),{code:'ENOENT'});
  }finally{await f.close();}
 });

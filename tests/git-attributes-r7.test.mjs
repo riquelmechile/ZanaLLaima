@@ -22,8 +22,15 @@ for(const a of [
    writeFileSync(join(repo,'f.txt'),a.rule.includes('eol')?'line\r\n':'line\n');
    git(repo,'add','.');git(repo,'commit','-qm','attributes tracked');
    git(repo,'checkout','-qb','feature/attr');
-   assert.throws(()=>observeGit({repoPath:repo}),/Git candidate rejected:.*(attr|filter|normaliz|eol|ident)/i,
-     'El usuario necesita un rechazo explícito, no clean:false mudo');
+   // R9 permite text=auto cuando el contenido LF del disco coincide con HEAD:
+   // core.autocrlf local no concede autoridad para transformar los bytes.
+   if(a.rule==='text=auto'){
+     assert.equal(observeGit({repoPath:repo}).clean,true,
+       'text=auto en LF idéntico a HEAD no debe ser rechazo artificial');
+   }else{
+     assert.throws(()=>observeGit({repoPath:repo}),/Git candidate rejected:.*(attr|filter|normaliz|eol|ident)/i,
+       'Los filtros y atributos peligrosos requieren rechazo explícito');
+   }
   }finally{rmSync(dir,{recursive:true,force:true});}
  });
 }

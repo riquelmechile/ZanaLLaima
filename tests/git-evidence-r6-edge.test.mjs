@@ -93,7 +93,7 @@ test('RDD: gitlink divergente y submódulo no inicializado fallan cerrados',()=>
   git(nested,'config','user.email','security@example.invalid');
   writeFileSync(join(nested,'sub.txt'),'two');
   git(nested,'add','sub.txt');git(nested,'commit','-qm','advance submodule');
-  assert.equal(observeGit({repoPath:f.repo}).clean,false);
+  assert.throws(()=>observeGit({repoPath:f.repo}),/Submodule HEAD differs from parent gitlink/);
   rmSync(nested,{recursive:true});
   assert.throws(()=>observeGit({repoPath:f.repo}),/submodule|Git command failed/);
 }));

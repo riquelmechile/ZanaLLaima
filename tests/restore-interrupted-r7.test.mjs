@@ -58,7 +58,8 @@ test('R7 C3: SIGKILL tras cuarentena no reactiva grant revocado al reintentar',a
    const revoke=f.signed('REVOKE_WRITE',{grantId:grant.payload.nonce});
    await applyOperatorAction(revoke,f.file);
    await crashAfterQuarantine(f);
-   await rm(databasePath(f.file)+'.restore-pending',{force:true}); // reproduce instrucción insegura antigua
+   // El diario duradero se conserva tras SIGKILL. Un rerun lo revierte
+   // antes de revalidar revocaciones y nonces, sin tocar cuarentenas por mtime.
    await restoreBackup(f.backup,f.file,{offline:true});
    assert.equal((await authorizationStatus(f.file)).valid,false,
      'Restore tras crash resucitó grant revocado');

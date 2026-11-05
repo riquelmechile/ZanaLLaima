@@ -143,7 +143,7 @@ test('interrupted restore marker fails closed across reads and writes',async()=>
     const marker=databasePath(f.file)+'.restore-pending';
     await writeFile(marker,'pending');
     await assert.rejects(readState(f.file),/Interrupted offline restore/);
-    await assert.rejects(storageStatus(f.file),/Interrupted offline restore/);
+    assert.equal((await storageStatus(f.file)).backend,'RESTORE_PENDING');
     await assert.rejects(readHistory({},f.file),/Interrupted offline restore/);
     await assert.rejects(readReviewArchive({},f.file),/Interrupted offline restore/);
     await assert.rejects(transact(s=>s,f.file),/Interrupted offline restore/);

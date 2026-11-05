@@ -9,7 +9,7 @@ import {inspectEffectTemporary} from './write-effect.mjs';
 import {beginRestoreMoves,abortRestoreMoves,classifyRestoreArtifacts,cleanupRestoreArtifacts,interruptedRestoreJournal} from './restore-journal.mjs';
 import {withRestoreLock} from './restore-lock.mjs';
 
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 const MAX_EVENTS = 2000;
 const MAX_ARCHIVES = 200;
 const BUSY_MS = 10000;
@@ -22,6 +22,21 @@ const parseEpoch=(value,at=Date.now())=>{
   return Number.isFinite(ts)&&ts<=at?ts:at;
 };
 
+// Schema v7 (remote MCP mode): sessions, remote mission bindings, session
+// activity, check requests, review tickets and audit. Lens receipts reuse
+// review_receipts (review_id = ticket id) and finalized reviews reuse
+// review_archive (review_id = ticket id).
+const REMOTE_TABLES=[
+  'CREATE TABLE IF NOT EXISTS remote_sessions (session_id TEXT PRIMARY KEY, host TEXT NOT NULL, client_id TEXT NOT NULL, created_at TEXT NOT NULL, last_seen_at TEXT NOT NULL)',
+  'CREATE TABLE IF NOT EXISTS remote_missions (mission_id TEXT PRIMARY KEY, repo TEXT NOT NULL, base TEXT NOT NULL, branch TEXT NOT NULL, code_units TEXT NOT NULL, created_session TEXT NOT NULL, created_at TEXT NOT NULL)',
+  'CREATE TABLE IF NOT EXISTS remote_activity (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, mission_id TEXT NOT NULL, kind TEXT NOT NULL, tool TEXT NOT NULL, created_at TEXT NOT NULL)',
+  'CREATE INDEX IF NOT EXISTS remote_activity_session ON remote_activity(mission_id,session_id)',
+  'CREATE TABLE IF NOT EXISTS remote_checks (check_id TEXT PRIMARY KEY, mission_id TEXT NOT NULL, sha TEXT NOT NULL, workflow TEXT NOT NULL, dispatched INTEGER NOT NULL, session_id TEXT NOT NULL, created_at TEXT NOT NULL)',
+  'CREATE TABLE IF NOT EXISTS review_tickets (ticket_id TEXT PRIMARY KEY, code_hash TEXT NOT NULL UNIQUE, mission_id TEXT NOT NULL, repo TEXT NOT NULL, pr_number INTEGER NOT NULL, sha TEXT NOT NULL, author_session TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, state TEXT NOT NULL, reviewer_session TEXT, claimed_at TEXT, finalized_at TEXT, verdict TEXT, execution TEXT, github_review_id INTEGER, status_posted INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL)',
+  'CREATE TABLE IF NOT EXISTS remote_audit (seq INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, host TEXT, session_id TEXT, tool TEXT NOT NULL, mission_id TEXT, outcome TEXT NOT NULL, args_hmac TEXT, detail TEXT)',
+];
+const MAX_REMOTE_AUDIT=5000;
+const TICKET_RANK={OPEN:0,CLAIMED:1,FINALIZING:2,FINALIZED:3,STALE_SHA:3,EXPIRED:3};
 const tokenHash = token => createHash('sha256').update(token).digest('hex');
 const fail = (message) => { throw new Error(message); };
 // SQLite may automatically roll back (SQLITE_FULL / RAISE(ROLLBACK)).
@@ -90,7 +105,8 @@ function connect(path, readonly = false) {
           'CREATE TABLE IF NOT EXISTS mission_archive (seq INTEGER PRIMARY KEY AUTOINCREMENT, mission_id TEXT NOT NULL UNIQUE, snapshot TEXT NOT NULL, archived_at TEXT NOT NULL)',
           'CREATE TABLE IF NOT EXISTS operator_grants (grant_id TEXT PRIMARY KEY, mission_id TEXT NOT NULL, payload TEXT NOT NULL, signature TEXT NOT NULL, fingerprint TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)',
           'CREATE TABLE IF NOT EXISTS operator_actions (nonce TEXT PRIMARY KEY, mission_id TEXT NOT NULL, kind TEXT NOT NULL, created_at TEXT NOT NULL)',
-          'CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)'
+          'CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)',
+          ...REMOTE_TABLES
         ].join(';') + ';');
         const columns=db.prepare('PRAGMA table_info(active_mission)').all().map(x=>x.name);
         if(!columns.includes('lifecycle')) db.exec("ALTER TABLE active_mission ADD COLUMN lifecycle TEXT NOT NULL DEFAULT 'ACTIVE'");
@@ -162,7 +178,8 @@ function trimHistory(db) {
     (MAX_ARCHIVES - 1) + '), -1) AND seq < (SELECT MAX(seq) FROM review_archive)');
   const active=db.prepare('SELECT content FROM active_review LIMIT 1').get();
   const current=active ? parse(active.content).id : '';
-  db.prepare('DELETE FROM review_receipts WHERE review_id != ? AND review_id NOT IN (SELECT review_id FROM review_archive)').run(current);
+  db.prepare('DELETE FROM review_receipts WHERE review_id != ? AND review_id NOT IN (SELECT review_id FROM review_archive) AND review_id NOT IN (SELECT ticket_id FROM review_tickets)').run(current);
+  db.exec('DELETE FROM remote_audit WHERE seq <= COALESCE((SELECT seq FROM remote_audit ORDER BY seq DESC LIMIT 1 OFFSET '+MAX_REMOTE_AUDIT+'), -1)');
 }
 
 function persist(db, previous, next, kind = 'STATE_CHANGED') {
@@ -316,7 +333,7 @@ export async function transact(change, file = statePath()) {
         }
       }
       const grant=previous ? await readEffectiveGrant(db,previous) : null;
-      const updated = await change(previous ? structuredClone(previous) : null,{writeGrant:grant});
+      const updated = await change(previous ? structuredClone(previous) : null,{writeGrant:grant,db});
       validate(updated);
       persist(db,previous,updated);
       db.exec('COMMIT');
@@ -642,12 +659,100 @@ function securityFacts(db,{rebuild=false}={}){
     actions:db.prepare('SELECT nonce,mission_id,kind,created_at FROM operator_actions').all(),
     revoked:db.prepare('SELECT grant_id,mission_id,payload,signature,fingerprint,revoked,created_at FROM operator_grants WHERE revoked=1').all(),
     epoch:db.prepare('SELECT value FROM metadata WHERE key=?').get(RESTORE_EPOCH_KEY)?.value??null,
-    budget:budgetFacts(db,{rebuild})};
+    budget:budgetFacts(db,{rebuild}),
+    remote:remoteFacts(db)};
+}
+// Remote review facts are monotone too: a consumed (claimed, finalized, stale
+// or expired) ticket must never become claimable again because an older
+// backup was restored. Sessions, activity, checks and audit rows are unioned.
+// Hooked only through securityFacts/mergeSecurityFacts, so the restore and
+// adopt flows themselves are unchanged.
+function remoteFacts(db){
+  return {
+    sessions:db.prepare('SELECT * FROM remote_sessions').all(),
+    missions:db.prepare('SELECT * FROM remote_missions').all(),
+    activity:db.prepare('SELECT session_id,mission_id,kind,tool,created_at FROM remote_activity').all(),
+    checks:db.prepare('SELECT * FROM remote_checks').all(),
+    tickets:db.prepare('SELECT * FROM review_tickets').all(),
+    lenses:db.prepare('SELECT r.* FROM review_receipts r JOIN review_tickets t ON t.ticket_id=r.review_id').all(),
+    archive:db.prepare('SELECT a.mission_id,a.review_id,a.content,a.created_at FROM review_archive a JOIN review_tickets t ON t.ticket_id=a.review_id').all(),
+    audit:db.prepare('SELECT at,host,session_id,tool,mission_id,outcome,args_hmac,detail FROM remote_audit').all(),
+    auditKey:db.prepare("SELECT value FROM metadata WHERE key='remote_audit_key'").get()?.value??null,
+  };
+}
+const insertRow=(db,table,row,mode='OR IGNORE')=>{
+  const keys=Object.keys(row);
+  db.prepare('INSERT '+mode+' INTO '+table+'('+keys.join(',')+') VALUES('+keys.map(()=>'?').join(',')+')')
+    .run(...keys.map(k=>row[k]));
+};
+function mergeRemoteFacts(db,facts){
+  if(!facts)return;
+  for(const row of facts.sessions)insertRow(db,'remote_sessions',row);
+  for(const row of facts.missions)insertRow(db,'remote_missions',row);
+  for(const row of facts.checks)insertRow(db,'remote_checks',row);
+  const findTicket=db.prepare('SELECT state FROM review_tickets WHERE ticket_id=?');
+  for(const row of facts.tickets){
+    const old=findTicket.get(row.ticket_id);
+    if(!old||(TICKET_RANK[row.state]??3)>=(TICKET_RANK[old.state]??3))
+      insertRow(db,'review_tickets',row,'OR REPLACE');
+  }
+  for(const row of facts.lenses)insertRow(db,'review_receipts',row);
+  for(const row of facts.archive)insertRow(db,'review_archive',row);
+  const sameActivity=db.prepare('SELECT 1 FROM remote_activity WHERE session_id=? AND mission_id=? AND kind=? AND tool=? AND created_at=?');
+  for(const row of facts.activity)
+    if(!sameActivity.get(row.session_id,row.mission_id,row.kind,row.tool,row.created_at))
+      insertRow(db,'remote_activity',row,'');
+  const sameAudit=db.prepare('SELECT 1 FROM remote_audit WHERE at=? AND tool=? AND outcome=? AND session_id IS ? AND args_hmac IS ?');
+  for(const row of facts.audit)
+    if(!sameAudit.get(row.at,row.tool,row.outcome,row.session_id,row.args_hmac))
+      insertRow(db,'remote_audit',row,'');
+  if(facts.auditKey)db.prepare("INSERT INTO metadata(key,value) VALUES('remote_audit_key',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(facts.auditKey);
+}
+// Without readable live history, no restored ticket may still be claimable.
+function fenceRemoteTickets(db){
+  db.prepare("UPDATE review_tickets SET state='EXPIRED',updated_at=? WHERE state IN ('OPEN','CLAIMED','FINALIZING')").run(now());
+}
+// Remote mode helpers. The callback receives the open handle and the active
+// mission (read-only view). Writes run inside the same serialized
+// BEGIN IMMEDIATE discipline as transact().
+export async function remoteWrite(fn,file=statePath()){
+  const path=databasePath(file);
+  return queueLocalWrite(path,async()=>{
+    await refuseInterruptedRestore(file);
+    await ensureFile(path);
+    const db=connect(path);
+    try{
+      db.exec('BEGIN IMMEDIATE');
+      try{
+        const result=await fn(db,load(db));
+        db.exec('COMMIT');
+        return result;
+      }catch(e){rollbackIfOpen(db);throw e;}
+    }finally{db.close();}
+  });
+}
+export async function remoteRead(fn,file=statePath()){
+  await refuseInterruptedRestore(file);
+  const path=databasePath(file);
+  if(!await exists(path))return fn(null,null);
+  const db=connect(path,true);
+  try{return await fn(db,load(db));}finally{db.close();}
+}
+export async function ensureSchema(file=statePath()){
+  const path=databasePath(file);
+  return queueLocalWrite(path,async()=>{
+    await refuseInterruptedRestore(file);
+    await ensureFile(path);
+    connect(path).close();
+    return {databasePath:path,schemaVersion:SCHEMA_VERSION};
+  });
 }
 function mergeSecurityFacts(db,security){
   if(security.blind){
     db.exec('UPDATE operator_grants SET revoked=1');
+    fenceRemoteTickets(db);
   }else{
+    mergeRemoteFacts(db,security.remote);
     const findNonce=db.prepare('SELECT nonce,mission_id,kind,created_at FROM operator_actions WHERE nonce=?');
     const putNonce=db.prepare('INSERT INTO operator_actions(nonce,mission_id,kind,created_at) VALUES(?,?,?,?)');
     for(const row of security.actions){

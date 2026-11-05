@@ -84,7 +84,8 @@ gh api --method PUT "repos/$REPO/environments/$ENVIRONMENT" \
   -F "reviewers[0][id]=$reviewer_id" \
   -f 'reviewers[0][type]=User' \
   -F 'deployment_branch_policy[protected_branches]=false' \
-  -F 'deployment_branch_policy[custom_branch_policies]=true' >/dev/null
+  -F 'deployment_branch_policy[custom_branch_policies]=true' \
+  -F 'prevent_self_review=true' >/dev/null
 policy_api="repos/$REPO/environments/$ENVIRONMENT/deployment-branch-policies"
 existing="$(gh api --paginate "$policy_api" --jq '.branch_policies[] | [.id,.name] | @tsv')"
 while IFS=$'\t' read -r id policy; do
@@ -105,6 +106,8 @@ reviewers="$(gh api "repos/$REPO/environments/$ENVIRONMENT" \
   --jq '.protection_rules[] | select(.type=="required_reviewers") | .reviewers[]? | .reviewer.login')"
 grep -Fxq "$REVIEWER" <<< "$reviewers" ||
   fail "El environment no requiere aprobación de $REVIEWER."
+self_review="$(gh api "repos/$REPO/environments/$ENVIRONMENT" --jq '.prevent_self_review')"
+[[ "$self_review" == true ]] || fail 'El environment permite self-review; no configurar la firma CI.'
 
 # La llave privada se transmite al secreto exclusivamente por stdin.
 gh secret set ZANA_CI_SIGNING_KEY --repo "$REPO" --env "$ENVIRONMENT" < "$PRIVATE_KEY" >/dev/null

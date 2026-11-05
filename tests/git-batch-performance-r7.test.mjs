@@ -19,6 +19,7 @@ test('R7 W1 benchmark: observar 5000 archivos rastreados en menos de 1 segundo',
    const started=performance.now();
    const observed=observeGit({repoPath:repo});
    const elapsed=performance.now()-started;
+   console.log('R8_BENCH_FILES_5000_MS='+elapsed.toFixed(2));
    assert.equal(observed.clean,true);
    assert.ok(elapsed<1000,'RDD 5000 archivos demoró '+elapsed.toFixed(0)+'ms (máximo 1000ms)');
  }finally{rmSync(dir,{recursive:true,force:true});}

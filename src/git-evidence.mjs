@@ -90,7 +90,7 @@ function rejectUnsafeAttributeFile(path,label){
   if(/(?:^|[ \t])(?:[-+]?text(?:=\S+)?|eol(?:=\S+)?|filter(?:=\S+)?|ident(?:=\S+)?|working-tree-encoding(?:=\S+)?)(?=[ \t]|$)/m.test(content))
     deny('Unsafe '+label+' with text/eol/filter/ident/working-tree-encoding');
 }
-const validateConfig=gitDir=>{
+const validateConfig=(gitDir,{allowedSubmoduleWorktree=null}={})=>{
   const common=commonDirFor(gitDir);
   for(const attr of new Set([join(common,'info','attributes'),join(gitDir,'info','attributes')]))
     rejectUnsafeAttributeFile(attr,'Git info/attributes');
@@ -145,8 +145,15 @@ const validateConfig=gitDir=>{
          /^remote\.[^.]+\.(?:promisor|uploadpack)$/.test(qualified)||
          /^remote\.[^.]+\.(?:promisor|uploadpack)$/.test(key))
         deny('Unsafe remote promisor/uploadpack configuration');
-      if((section==='core'&&key==='worktree')||key==='core.worktree')
-        deny('Unsafe core.worktree override');
+      if((section==='core'&&key==='worktree')||key==='core.worktree'){
+        // Git itself writes core.worktree into a real submodule's metadata.
+        // Accept ONLY its canonical, exact already-validated submodule root;
+        // all arbitrary overrides and top-level core.worktree are rejected.
+        const canonical=allowedSubmoduleWorktree&&
+          realpathSync(resolve(gitDir,value));
+        if(!canonical||canonical!==allowedSubmoduleWorktree)
+          deny('Unsafe core.worktree override');
+      }
       if(section==='core'&&key==='attributesfile'){
         if(value.includes('\0'))deny('Invalid core.attributesFile');
         let attributePath=value;
@@ -188,7 +195,8 @@ const reference=(gitDir,common,ref)=>{
   deny('Target ref unavailable: '+ref);
 };
 const snapshot=(root,parentGitDir)=>{
-  const gitDir=gitDirFor(root,parentGitDir),common=validateConfig(gitDir);
+  const gitDir=gitDirFor(root,parentGitDir),common=validateConfig(gitDir,
+    {allowedSubmoduleWorktree:parentGitDir?root:null});
   const head=readRequired(join(gitDir,'HEAD'),'HEAD').toString('utf8').trim();
   const m=/^ref: (refs\/heads\/[A-Za-z0-9_.\/-]+)$/.exec(head);
   if(!m&&!(parentGitDir&&SHA.test(head)))deny('Detached or invalid local branch');

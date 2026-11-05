@@ -1,5 +1,5 @@
 import {execFileSync} from 'node:child_process';
-import {lstatSync,readlinkSync,realpathSync} from 'node:fs';
+import {existsSync,lstatSync,readlinkSync,realpathSync} from 'node:fs';
 import {dirname,isAbsolute,resolve,sep} from 'node:path';
 
 // Git config belongs to the candidate's author. No subprocess may execute
@@ -98,6 +98,15 @@ const trackedParentsAreRealDirectories=(worktree,path)=>{
 };
 const inspect=(worktree,depth=0)=>{
   if(depth>16)deny('Git submodule nesting exceeds inspection limit');
+  // Verify actual bytes of all objects reachable from HEAD, including
+  // packed objects, external alternates and nested trees. Never use
+  // --connectivity-only: it skips validation of blob contents.
+  for(const relative of ['info/grafts','shallow']){
+    const gitPath=call(worktree,['rev-parse','--git-path',relative]).trim();
+    const absolute=isAbsolute(gitPath)?gitPath:resolve(worktree,gitPath);
+    if(existsSync(absolute))deny('Git graft or shallow history is forbidden');
+  }
+  call(worktree,['fsck','--full','--strict','--no-reflogs','--no-dangling','HEAD']);
   // Only Git plumbing commands that do not consult content filters or run
   // status/diff. The index, HEAD and bytes on disk are compared separately.
   const flags=records(call(worktree,['ls-files','-v','-z']));

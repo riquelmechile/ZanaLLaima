@@ -116,3 +116,39 @@ test('history trimming keeps lens receipts of open tickets',async()=>{
     assert.equal(await remoteRead(db=>db.prepare('SELECT COUNT(*) n FROM review_receipts').get().n,f.file),1);
   }finally{await f.cleanup();}
 });
+
+test('restore merge: duplicates are not doubled, a less advanced live ticket never downgrades the backup',async()=>{
+  const f=await fixture();
+  try{
+    const m=await transact(()=>createMission(spec()),f.file);
+    const act={session_id:'s-a',mission_id:m.id,kind:'WRITE',tool:'x',created_at:'2026-01-01T00:00:00.000Z'};
+    const aud={at:'2026-01-01T00:00:00.000Z',host:'gpt',session_id:'s-a',tool:'x',mission_id:m.id,outcome:'OK',args_hmac:'k',detail:null};
+    await remoteWrite(db=>{
+      insert(db,'remote_activity',act);insert(db,'remote_audit',aud);
+      insert(db,'review_tickets',{...ticket(m.id,'FINALIZED'),reviewer_session:'s-rev'});
+      insert(db,'review_tickets',ticket(m.id,'WEIRD','t3'));
+    },f.file);
+    const backup=join(f.dir,'b.sqlite');
+    await backupState(backup,f.file);
+    // Live diverges by hand: ticket t1 back to OPEN (must not win), t3 unknown state (ranked as final).
+    await remoteWrite(db=>{
+      insert(db,'review_tickets',ticket(m.id,'OPEN'));
+      insert(db,'review_tickets',ticket(m.id,'OPEN','t3'));
+    },f.file);
+    process.env.ZANA_RESTORE_OFFLINE='1';
+    try{await restoreBackup(backup,f.file,{offline:true});}
+    finally{delete process.env.ZANA_RESTORE_OFFLINE;}
+    const after=await remoteRead(db=>({
+      t1:db.prepare("SELECT state FROM review_tickets WHERE ticket_id='t1'").get().state,
+      t3:db.prepare("SELECT state FROM review_tickets WHERE ticket_id='t3'").get().state,
+      activity:db.prepare('SELECT COUNT(*) n FROM remote_activity').get().n,
+      audit:db.prepare('SELECT COUNT(*) n FROM remote_audit').get().n,
+      key:db.prepare("SELECT value FROM metadata WHERE key='remote_audit_key'").get()?.value??null,
+    }),f.file);
+    assert.equal(after.t1,'FINALIZED');
+    assert.equal(after.t3,'WEIRD');
+    assert.equal(after.activity,1);
+    assert.equal(after.audit,1);
+    assert.equal(after.key,null);
+  }finally{await f.cleanup();}
+});

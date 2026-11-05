@@ -220,3 +220,57 @@ test('R11 Codex P1: el restore ciego aplica el ledger propio del backup aunque r
     await assert.rejects(start(f.file),/work-start budget exhausted/);
   }finally{await f.close();}
 });
+
+test('R11 cerco: reparar un snapshot archivado corrupto no borra la evidencia de consumo de esa misión',async()=>{
+  const f=await fixture();
+  try{
+    const base=databasePath(f.file),id=randomUUID();
+    const xId=(await readState(f.file)).id;
+    const oldX=join(f.dir,'old-x.sqlite');
+    await backupState(oldX,f.file);
+    await start(f.file);
+    await expire(f.file);
+    const {cancelMission}=await import('../src/lifecycle.mjs');
+    const {archiveMission}=await import('../src/store.mjs');
+    await transact(m=>{cancelMission(m);return m;},f.file);
+    await archiveMission(f.file);
+    await transact(()=>f.mission('Misión Y posterior'),f.file);
+    checkpoint(base);
+    const db=new DatabaseSync(base);
+    try{db.prepare("UPDATE mission_archive SET snapshot='{roto' WHERE mission_id=?").run(xId);}finally{db.close();}
+    await rename(base,base+'.quarantine.'+id);
+    for(const s of ['-wal','-shm'])await rm(base+s,{force:true});
+    const adopted=await storageAdoptQuarantine(id,f.file,{confirm:true,forceDataLoss:true});
+    assert.equal(adopted.ledgerRebuilt,true);
+    await assert.rejects(restoreBackup(oldX,f.file,{offline:true}),err=>err.code==='CONSUMED_BUDGET',
+      'el backup viejo de X no puede devolver el consumo que el snapshot corrupto registraba');
+    await restoreBackup(oldX,f.file,{offline:true,forceDataLoss:true});
+    await assert.rejects(start(f.file),/budget exhausted|Retry limit/,'con force, una misión de consumo desconocido queda agotada');
+  }finally{await f.close();}
+});
+
+test('R11 cerco: re-ejecutar el adopt tras un crash antes del link no duplica el evento y devuelve lo registrado',async()=>{
+  const f=await fixture();
+  try{
+    const base=databasePath(f.file),id=randomUUID();
+    await backupState(f.backup,f.file);
+    checkpoint(base);
+    const db=new DatabaseSync(base);
+    try{db.prepare("INSERT INTO metadata(key,value) VALUES('consumed_budget','[1]')").run();}finally{db.close();}
+    await rename(base,base+'.quarantine.'+id);
+    for(const s of ['-wal','-shm'])await rm(base+s,{force:true});
+    const first=await storageAdoptQuarantine(id,f.file,{confirm:true,forceDataLoss:true});
+    assert.equal(first.ledgerRebuilt,true);
+    // Simula el crash: el COMMIT quedó en la cuarentena pero el link no se hizo.
+    checkpoint(base);
+    await rename(base,base+'.quarantine.'+id);
+    for(const s of ['-wal','-shm'])await rm(base+s,{force:true});
+    const again=await storageAdoptQuarantine(id,f.file,{confirm:true});
+    assert.equal(again.ledgerRebuilt,true,'la re-ejecución debe informar lo que hizo la primera');
+    const live=new DatabaseSync(base,{readOnly:true});
+    try{
+      const n=live.prepare("SELECT COUNT(*) AS n FROM state_events WHERE category='QUARANTINE_ADOPTED'").get().n;
+      assert.equal(n,1,'un solo evento de adopción por cuarentena');
+    }finally{live.close();}
+  }finally{await f.close();}
+});

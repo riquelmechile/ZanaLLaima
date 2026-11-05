@@ -185,3 +185,17 @@ test('R11-C1c: adoptar con una cuarentena hermana ilegible exige --force-data-lo
     }finally{db.close();}
   }finally{await f.close();}
 });
+
+test('R11-C1d: un ledger manipulado con __proto__ no contamina Object.prototype y se rechaza',async()=>{
+  const f=await budgetFixture();
+  try{
+    await backupState(f.backup,f.file);
+    const crafted=new DatabaseSync(f.backup);
+    try{
+      crafted.prepare("INSERT INTO metadata(key,value) VALUES('consumed_budget',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+        .run('{"__proto__":{"polluted":{"attempts":9,"leaseGeneration":0}}}');
+    }finally{crafted.close();}
+    await assert.rejects(restoreBackup(f.backup,f.file,{offline:true}),err=>err.code==='INVALID_LEDGER');
+    assert.equal(({}).polluted,undefined,'Object.prototype contaminado por el ledger');
+  }finally{delete Object.prototype.polluted;await f.close();}
+});

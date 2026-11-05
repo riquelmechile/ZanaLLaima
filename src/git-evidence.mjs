@@ -114,6 +114,7 @@ const inspect=(worktree,depth=0)=>{
   if(flags.some(x=>!x.startsWith('H ')))
     deny('Git index contains hidden/unsupported tracked-file flags');
   const {result:index,hasConflict}=parseIndex(call(worktree,['ls-files','-s','-z']));
+  const honorFileMode=call(worktree,['config','--bool','--default=true','--get','core.filemode']).trim()!=='false';
   const tree=parseTree(call(worktree,['ls-tree','-r','-z','HEAD']));
   let dirty=hasConflict||index.size!==tree.size;
   for(const [path,entry] of index){
@@ -141,7 +142,7 @@ const inspect=(worktree,depth=0)=>{
     if(symlink!==stat.isSymbolicLink()||(!symlink&&!stat.isFile())){
       dirty=true;continue;
     }
-    if(!symlink&&Boolean(stat.mode&0o111)!==(entry.mode==='100755'))dirty=true;
+    if(honorFileMode&&!symlink&&Boolean(stat.mode&0o100)!==(entry.mode==='100755'))dirty=true;
     const contentSha=symlink
       ?call(worktree,['hash-object','--stdin'],{input:readlinkSync(full,{encoding:'buffer'})}).trim()
       :call(worktree,['hash-object','--no-filters','--',path]).trim();

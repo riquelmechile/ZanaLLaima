@@ -6,7 +6,8 @@ const deny=reason=>{throw new Error('Write boundary rejected: '+reason);};
 export function validateRelativePath(path){
   if(typeof path!=='string'||!path||path.length>240||
     path.startsWith('/')||path.includes('\\')||path.includes('\0')||
-    path.split('/').some(x=>!x||x==='.'||x==='..'||x==='~'||x==='.git'||x==='.zana'))
+    path.split('/').some(x=>!x||x==='.'||x==='..'||x==='~'||
+      ['.git','.zana'].includes(x.normalize('NFKC').toLowerCase().replace(/[. ]+$/u,''))))
     throw new Error('Unsafe path: invalid relative path');
   return path.split('/');
 }

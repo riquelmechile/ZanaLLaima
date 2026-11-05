@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
-import {mkdtemp,mkdir,rm} from 'node:fs/promises';
+import {mkdtemp,mkdir,rm,writeFile,link,symlink} from 'node:fs/promises';
 import {setTimeout as delay} from 'node:timers/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createMission} from '../src/core.mjs';
 import {transact,backupState,storageCleanupArtifacts,storageRestoreAbort,restoreBackup,
  databasePath} from '../src/store.mjs';
+import {withRestoreLock} from '../src/restore-lock.mjs';
 
 async function fixture(){
  const dir=await mkdtemp(join(tmpdir(),'zana-r9-flock-'));
@@ -56,4 +57,23 @@ test('R9 W2: cleanup, abort y restore respetan exclusión entre procesos con flo
    await work;
   }
  }finally{await f.close();}
+});
+
+test('R9 W2: flock rechaza lock hardlink para impedir alias de inode',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'zana-r9-lock-hardlink-'));
+ try{
+  const db=join(dir,'db.sqlite'),lock=db+'.restore.lock';
+  await writeFile(lock,'');
+  await link(lock,join(dir,'other-hardlink'));
+  await assert.rejects(withRestoreLock(db,async()=>{}),/regular|lock/i);
+ }finally{await rm(dir,{recursive:true,force:true});}
+});
+test('R9 W2: flock rechaza lock symlink con O_NOFOLLOW',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'zana-r9-lock-symlink-'));
+ try{
+  const db=join(dir,'db.sqlite'),lock=db+'.restore.lock';
+  await writeFile(join(dir,'other-file'),'');
+  await symlink(join(dir,'other-file'),lock);
+  await assert.rejects(withRestoreLock(db,async()=>{}),/ELOOP|symbolic|symlink/i);
+ }finally{await rm(dir,{recursive:true,force:true});}
 });

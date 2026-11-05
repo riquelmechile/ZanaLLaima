@@ -64,8 +64,17 @@ const parseTree=output=>{
 };
 const nestedRoot=(worktree,subpath)=>{
   let nested;
-  try{nested=realpathSync(resolve(worktree,subpath));}
-  catch{deny('Git submodule unavailable for inspection');}
+  try{
+    // A gitlink must name a real directory, not a symbolic-link alias.
+    // Git considers a symlink in place of a gitlink a worktree type change.
+    const stat=lstatSync(resolve(worktree,subpath));
+    if(!stat.isDirectory()||stat.isSymbolicLink())
+      deny('Git submodule entry is not a real directory');
+    nested=realpathSync(resolve(worktree,subpath));
+  }catch(error){
+    if(error?.message?.startsWith('Git candidate rejected:'))throw error;
+    deny('Git submodule unavailable for inspection');
+  }
   if(!nested.startsWith(worktree+sep))deny('Git submodule escapes repository root');
   if(realpathSync(call(nested,['rev-parse','--show-toplevel']).trim())!==nested)
     deny('Git submodule is not an exact worktree root');

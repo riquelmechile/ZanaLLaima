@@ -450,11 +450,18 @@ async function latestQuarantine(path){
   return {path:candidates[0]?.path??null,orphanRestoring:entries.some(x=>
     x.startsWith(basename(path)+'.restoring.'))};
 }
-async function previousLiveDatabase(path){
+async function previousLiveDatabase(path,currentRestoreTemp=null){
   if(await exists(path))return {path,quarantine:false};
   const pending=await latestQuarantine(path);
   if(pending.path)return {path:pending.path,quarantine:true};
-  if(pending.orphanRestoring)
+  // The current restore itself has a .restoring.UUID working copy; it is
+  // not evidence of an earlier interrupted restore.
+  const directoryEntries=await readdir(dirname(path));
+  const oldOrphans=directoryEntries.some(name=>name.startsWith(basename(path)+'.restoring.') &&
+    join(dirname(path),name)!==currentRestoreTemp &&
+    join(dirname(path),name)!==currentRestoreTemp+'-wal' &&
+    join(dirname(path),name)!==currentRestoreTemp+'-shm');
+  if(oldOrphans)
     guardRestore('ORPHAN_RESTORING','Orphaned restore candidate without live database; use offline recovery');
   return {path:null,quarantine:false};
 }
@@ -599,6 +606,7 @@ export async function restoreBackup(source,file=statePath(),
     // A backup may be older than a WRITE revocation or a consumed operator
     // nonce. Merge those security facts before the atomic replacement.
     // forceDataLoss never authorizes a rollback of signed permissions.
+    const sourceLive=await previousLiveDatabase(path,temp);
     const candidate=connect(temp);
     try{
       assertHealthy(candidate);
@@ -607,7 +615,6 @@ export async function restoreBackup(source,file=statePath(),
       if(m.units.some(x=>x.status==='RUNNING')||
          m.review?.lenses?.some(x=>x.state==='RUNNING'))
         fail('Backup contains running work; reconcile it before restoring');
-      const sourceLive=await previousLiveDatabase(path);
       const security=inspectLive(candidate,sourceLive,forceDataLoss);
       candidate.exec('BEGIN IMMEDIATE');
       try{

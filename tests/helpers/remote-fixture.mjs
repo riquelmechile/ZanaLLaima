@@ -7,6 +7,13 @@ import {registerSession} from '../../src/remote-state.mjs';
 import {ensureSchema} from '../../src/store.mjs';
 
 export const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+// Read every diff page of a claimed ticket (no-op before zana_review_diff exists).
+export async function readDiff(call,ticket,s){
+  const first=await call('zana_review_diff',{ticket,page:0},s);
+  if(first.error&&/Unknown tool/.test(first.error))return;
+  if(first.error)throw new Error(first.error);
+  for(let p=1;p<first.manifest.totalPages;p++){const r=await call('zana_review_diff',{ticket,page:p},s);if(r.error)throw new Error(r.error);}
+}
 export {AUTHOR_TOKEN,REVIEWER_TOKEN,sha};
 
 export async function remoteFixture({envExtra={},mcp={}}={}){
@@ -20,9 +27,9 @@ export async function remoteFixture({envExtra={},mcp={}}={}){
     ZANA_DOWNSTREAM_GITHUB_TOKEN:AUTHOR_TOKEN,ZANA_REVIEWER_TOKEN:REVIEWER_TOKEN,...envExtra};
   const runtime=createRemoteRuntime({env});
   let n=0;
-  const session=async(host='zana-chatgpt')=>{
+  const session=async(host='zana-chatgpt',clientId='zc_test')=>{
     await sleep(3); // distinct creation timestamps
-    return {...await registerSession({sessionId:'sess-'+(++n)+'-'+Date.now(),host,clientId:'zc_test'}),host};
+    return {...await registerSession({sessionId:'sess-'+(++n)+'-'+Date.now(),host,clientId}),host};
   };
   const call=async(name,args,s)=>{
     const r=await runtime.dispatch(name,args,s);

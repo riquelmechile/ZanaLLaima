@@ -43,7 +43,7 @@ export async function fakeGitHubApi(){
       const pull=state.pulls.find(x=>x.number===Number(m[1]));
       if(!pull)return send(404,{message:'nf'});
       const current={...pull,head:{...pull.head,sha:state.branches[pull.head.ref]??pull.head.sha}};
-      if(String(req.headers.accept).includes('diff'))return send(200,'diff --git a/x b/x\n+'+AUTHOR_TOKEN+'\n','text/plain');
+      if(String(req.headers.accept).includes('diff'))return send(200,state.diffText??('diff --git a/x b/x\n+'+AUTHOR_TOKEN+'\n'),'text/plain');
       return send(200,current);
     }
     if((m=/^\/pulls\/(\d+)\/commits$/.exec(p)))return send(200,state.commits[m[1]]??[]);

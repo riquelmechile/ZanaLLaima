@@ -19,8 +19,8 @@ test('R9-C6: documento de frontera RDD no admite verificador Git antiguo',()=>{
  assert.match(s,/Node/);
  assert.match(s,/shallow/i);
 });
-test('R9-C6: versión 0.5.0 y todas las guías operativas son coherentes',()=>{
- assert.equal(pkg.version,'0.5.0','Ronda 9 debe declarar 0.5.0');
+test('R9-C6: versión 0.5.1 y todas las guías operativas son coherentes',()=>{
+ assert.equal(pkg.version,'0.5.1','Ronda 9 debe declarar 0.5.1');
  const files=[...allMarkdown(new URL('..',import.meta.url).pathname).filter(p=>!p.includes('/')),
    ...allMarkdown(new URL('../docs/',import.meta.url).pathname,'docs')];
  assert.ok(files.length>=12,'Debe recorrer TODOS los documentos de raíz y docs');

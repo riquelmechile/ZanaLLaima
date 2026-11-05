@@ -1,4 +1,4 @@
-## Candidato 0.5.0 (sin publicar): verificación Git desde disco y restore transaccional
+## Candidato 0.5.1 (sin publicar): verificación Git desde disco y restore transaccional
 
 - R8: rediseños A y B aceptados técnicamente en la 4R independiente del SHA `c2df20f`.
 - R9: seis correcciones puntuales sobre shadow/ignorados, diario inicial atómico y manual de operaciones. Test rojo previo por hallazgo, matriz y benchmarks; sin merge, tag ni deploy.

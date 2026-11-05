@@ -1,5 +1,9 @@
 # Registro de cambios
 
+## [0.5.1] - No publicado
+
+Correcciones R10 sobre la revisión 4R de `7b6f3b1`: gramática exacta de autoignore Python, fusión monotónica de revocaciones y nonces durante adopción de cuarentena con cerco ciego, y repositorios `.git` anidados fail-closed. Hardening de config/atributos Git, epoch durable, crash de flock y benchmark con `.gitignore` rastreado. Candidato pendiente de revisión independiente, sin tag, merge ni deploy.
+
 ## [0.5.0] - No publicado
 
 Rediseños de verificación Git y recuperación SQLite, y cierre de la ronda 9. **No es un release**; nueva 4R independiente requerida.

@@ -1,5 +1,11 @@
 # Registro de cambios
 
+## [0.3.3] - No publicado
+
+- **P2, evidencia RDD Git de submódulos anidados:** además de inspeccionar los flags de índice de cada gitlink, \`observeGit()\` consulta el estado de cada worktree con \`--ignore-submodules=none\`, propagando cualquier cambio hasta la raíz. Corrige ocultación de contenido en un segundo nivel con \`submodule.inner.ignore=all\`.
+- **Regresión negativa:** repositorios Git reales \`root/lib/inner\`, configuración de ignorar cambios solo en \`lib\`, modificación rastreada dentro de \`inner\` y rechazo de la comparación contra el candidato congelado.
+- Sin release ni aprobación. \`keys/ci-verifier.pub\` permanece placeholder, el gate \`releaseAuthorized\` continúa falso y la atestación CI auténtica queda pendiente del operador.
+
 ## [0.3.2] - No publicado
 
 - P1 seguridad: intención WRITE vinculada al grant original y test negativo de revocación más regrant.

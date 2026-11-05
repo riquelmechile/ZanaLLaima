@@ -1,7 +1,10 @@
-## Candidato versión histórica (ver CHANGELOG): verificación Git desde disco y restore transaccional
+## Candidato 0.5.0 (sin publicar): verificación Git desde disco y restore transaccional
 
 - R8: rediseños A y B aceptados técnicamente en la 4R independiente del SHA `c2df20f`.
 - R9: seis correcciones puntuales sobre shadow/ignorados, diario inicial atómico y manual de operaciones. Test rojo previo por hallazgo, matriz y benchmarks; sin merge, tag ni deploy.
+- R9 W2/W3: `flock` offline para restore/abort/cleanup y `storage-adopt-quarantine <UUID> --confirm` con evento durable y preservación de revocaciones/nonces de la copia seleccionada.
+- Matriz R9: 66 escenarios Git únicos, cero discrepancias; benchmark 5000 archivos/3400 directorios <1 s; crash hooks tras diario, cuarentena y cada rename, además de pruebas anteriores de R8. Pendiente verificar kill por cada syscall de disco (no simular 62 puntos instrumentados).
+
 - Permanece pendiente una nueva 4R independiente y gates externos del anfitrión/CI firmado.
 
 # Roadmap técnico de ZanaLLaima

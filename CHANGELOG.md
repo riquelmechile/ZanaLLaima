@@ -1,5 +1,16 @@
 # Registro de cambios
 
+## [0.5.0] - No publicado
+
+Rediseños de verificación Git y recuperación SQLite, y cierre de la ronda 9. **No es un release**; nueva 4R independiente requerida.
+
+- El verificador deja de confiar en árboles/blobs del almacén de objetos del candidato. Re-hashea en Node el único commit leído en entorno aislado y reconstruye el árbol exclusivamente desde el worktree. **Sustituye explícitamente el método de verificación completa de objetos de R7**; elimina sus llamadas para evitar ejecución involuntaria y carreras. El índice únicamente impide aceptar cambios staged.
+- El restore deja de buscar la **cuarentena más reciente**. El diario durable identifica un UUID y los renames exactos de principal/WAL/SHM; los checkpoints exclusivos y el replay/abort preservan revocaciones, nonces y eventos. La primera publicación del diario ahora usa temporal + fsync + link exclusivo y recupera marcadores incompletos sin movimientos.
+- R9 C1: prefijo `./` en check-ignore para rutas con dos puntos y otros pathspecs. R9 C2: materialización de directorios en shadow antes de resolver negaciones. R9 C3: uso de bytes de `.gitignore` rastreados comprobados contra el índice antes de copiar al shadow. R9 C4: autoignore Python `*` sin archivos rastreados en el directorio. R9 C5: publicación inicial atómica del diario. R9 C6: documentación de frontera de confianza y recuperación alineada al código y comprobada en todos los Markdown.
+- Mantener los controles de firma CI en `workflow_run` desde `main`, el reviewer humano y `prevent_self_review`; ninguna prueba sustituye una aprobación 4R independiente.
+- Los tests negativos por CRITICAL se registraron en commits anteriores a los fixes. No se reduce cobertura, umbrales ni gates. No hay merge, tag, deploy ni aprobación.
+
+
 ## [0.4.2] - No publicado
 
 Cierre técnico de hallazgos 4R sobre `79d4494`, sujeto a nueva revisión independiente y sin autorización de release.

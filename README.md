@@ -90,7 +90,7 @@ Cada resultado lleva token y evidencia real. Si cambia el SHA o la base, se inva
 
 ## Atenciones de CI y entrega
 
-El CI verifica el HEAD exacto, ejecuta pruebas en Node 22.16.0 / 22.23.4 / 24, estrés multiproceso, cobertura y auditoría de dependencias. Un job opcional \`attest\` firma \`CI_RESULT\` solo si Zana habilitó el environment protegido \`ci-attestation\` con su secreto \`ZANA_CI_SIGNING_KEY\`. Mientras no exista la configuración, no hay atestación auténtica y \`trustedCIAttribution\` permanece sin conectar.
+El CI verifica el HEAD exacto, ejecuta pruebas en Node 22.16.0 / 22.23.4 / 24, estrés multiproceso, cobertura y auditoría de dependencias. La firma de `CI_RESULT` se ejecuta exclusivamente en `.github/workflows/ci-attestation.yml`, disparado por `workflow_run` desde el código confiable de `main`, cuando Zana configura el environment protegido y su secreto CI. Mientras no exista la configuración, no hay atestación auténtica y \`trustedCIAttribution\` permanece sin conectar.
 
 El gate \`delivery-check\` requiere dos firmantes Ed25519 distintos: CI y operador. Incluso con ambos devuelve como máximo \`READY_FOR_MANUAL_RELEASE\`, nunca \`mergeAuthorized:true\`.
 
@@ -113,6 +113,6 @@ Ver [auditoría de seguridad](docs/release-security.md) y [registro de cambios](
 - [Plantilla de observaciones](examples/host-e2e-report.json)
 - [Estado y criterios pendientes](ROADMAP.md)
 
-**ChatGPT web no puede ejecutar directamente el proceso stdio local.** Una conexión web necesita un servicio HTTP MCP autenticado mediante OAuth y controles de aislamiento adicionales. Ese transporte queda fuera de la versión 0.4.2.
+**ChatGPT web no puede ejecutar directamente el proceso stdio local.** Una conexión web necesita un servicio HTTP MCP autenticado mediante OAuth y controles de aislamiento adicionales. Ese transporte queda fuera de la versión 0.5.0.
 
-La guía breve para completar los pasos humanos de la versión 0.4.2 es [docs/operator-checklist.md](docs/operator-checklist.md). La configuración de firma CI se realiza desde la máquina de Zana con `bash scripts/setup-ci-signing.sh`.
+La guía breve para completar los pasos humanos de la versión 0.5.0 es [docs/operator-checklist.md](docs/operator-checklist.md). La configuración de firma CI se realiza desde la máquina de Zana con `bash scripts/setup-ci-signing.sh`.

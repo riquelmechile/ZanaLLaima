@@ -1,8 +1,8 @@
 # Fase 5: auditoría de CI, seguridad del repositorio y release
 
-**Versión del proyecto: ZanaLLaima 0.4.2.** Firma CI por `workflow_run` en `ci-attestation.yml`, política **main-only** y reviewer humano requerido en el environment `ci-attestation`.
+**Versión del proyecto: ZanaLLaima 0.5.0.** Firma CI por `workflow_run` en `ci-attestation.yml`, política **main-only** y reviewer humano requerido en el environment `ci-attestation`.
 
-## Complemento de seguridad 0.4.1 (no publicado)
+## Complemento de seguridad versión histórica (no publicado)
 
 La revisión Codex sobre `dc2c443` identificó filtros ejecutables en submódulos y en configuración Git por worktree/inclusiones, además de grants revocados que un respaldo antiguo podía reactivar. El observador Git ahora lee blobs y modos sin `git status` ni filtros; los grants revocados y nonces consumidos son monótonos frente al restore. Ni el consentimiento para perder datos elimina una revocación conocida. Una DB viva ilegible solo admite restore explícitamente forzado con todos los grants recuperados revocados. Sigue siendo obligatorio verificar CI y revisión independiente en el SHA final.
 
@@ -130,6 +130,6 @@ gh pr review 1 --repo riquelmechile/ZanaLLaima --approve \
 
 No se genera esa aprobación durante este cierre ni se invita ninguna cuenta sin un identificador aportado por Zana.
 
-### Seguridad del restore offline 0.4.0
+### Seguridad del restore offline versión histórica
 
 La restauración se prepara sobre una copia temporal con migración de esquema y comprobación de integridad antes de mover la DB viva a cuarentena. No sobrescribe una DB con `OUTCOME_UNKNOWN`, intenciones de efecto aún sin recibo o recibos durables ausentes en el backup, salvo autorización manual explícita `--force-data-loss` con el modo offline. Cuando la base viva no se puede inspeccionar se exige el mismo flag. Ante fallo tras cuarentena, se restituye la base anterior.

@@ -111,7 +111,7 @@ No se movió `writeFile`/`fsync` fuera de `BEGIN IMMEDIATE`: hacerlo permitiría
 
 Cada intención WRITE persiste el nombre de su temporal `.zana-effect-<UUID>` antes de crearlo. `storage-status` lista únicamente temporales de intenciones conocidas; `recover-expired` y la reconciliación firmada borran esos temporales mediante descriptores de directorio anclados. No se eliminan indiscriminadamente archivos por prefijo. La regresión SIGKILL mata el proceso tras sincronizar el temporal y antes del `rename`, prueba limpieza y conserva el estado incierto.
 
-## Conservación de permisos POSIX en reemplazos (corrección de revisión 0.3.1)
+## Conservación de permisos POSIX en reemplazos (corrección de revisión versión histórica)
 
 En Linux, un reemplazo de archivo regular conserva sus permisos de lectura, escritura y ejecución: el modo anterior se obtiene del mismo \`fstat\` que valida el descriptor del destino. El recibo de SQLite v6 registra **\`pre_mode\`** con los bits reales \`mode & 0o7777\` y **\`post_mode\`** con los permisos efectivos del archivo nuevo.
 

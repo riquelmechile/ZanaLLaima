@@ -1,16 +1,22 @@
+## Candidato versión histórica (ver CHANGELOG): verificación Git desde disco y restore transaccional
+
+- R8: rediseños A y B aceptados técnicamente en la 4R independiente del SHA `c2df20f`.
+- R9: seis correcciones puntuales sobre shadow/ignorados, diario inicial atómico y manual de operaciones. Test rojo previo por hallazgo, matriz y benchmarks; sin merge, tag ni deploy.
+- Permanece pendiente una nueva 4R independiente y gates externos del anfitrión/CI firmado.
+
 # Roadmap técnico de ZanaLLaima
 
 **Estado:** seguimiento vivo de fases implementadas localmente y gates pendientes de integración.
 **Corte de auditoría:** 2026-11-04. Base confirmada del cierre: `79ef90260768da3a606060a2213fb1e8db3599a6`; para el SHA final ver el HEAD del PR #1, pues escribirlo dentro de su propio commit cambiaría ese hash.
 **Objetivo:** un único anfitrión GPT que planifique, ejecute con sus capacidades nativas, se recupere de interrupciones y revise resultados con evidencia verificable, sin delegación entre cuentas ni llamadas a APIs de inferencia.
 
-## Candidato 0.4.2: re-revisión 4R y seguridad de recuperación
+## Candidato anterior R7 (histórico): re-revisión 4R y seguridad de recuperación
 
 - **CRITICAL R7:** verificar los bytes de los objetos Git hasta HEAD, actualizar instrucciones operativas de firma a `workflow_run` main-only, impedir restauración insegura tras SIGKILL y hacer best-effort la limpieza de temporales de efecto. Tests negativos por hallazgo antes de cada fix.
 - **WARNING R7:** `hash-object --no-filters --stdin-paths` en lote, ignores comprometidos, bits POSIX del dueño, normalización Git explícita, rutas NFKC/casefold, errores de restore tipados, sidecars, generación atómica de llave Ed25519, vista de reconciliación solo CLI y `prevent_self_review`.
 - **Revisión pendiente:** CI, preflight, cobertura, stress, benchmark y audit sobre SHA exacto; Codex completado y nueva 4R de `sebastianriquelme95-max`. No aprobar, mergear, etiquetar ni desplegar.
 
-## Candidato 0.4.1: límites Git y restauración monotónica (sin release)
+## Candidato versión histórica (ver CHANGELOG): límites Git y restauración monotónica (sin release)
 
 - **RDD P1-a/P1-b:** reemplazar `git status` por comparación de entradas `git ls-files -s -z` frente a `git ls-tree -r -z HEAD`; comprobar blobs sin filtros con `git hash-object --no-filters`, permisos y symlinks, y archivos no rastreados con `git ls-files --others --exclude-standard -z`. Repetirlo en submódulos y exigir coincidencia de gitlinks. No ejecutar drivers de atributos ni confiar en `config.worktree`, `include` o `includeIf`.
 - **Persistencia P1-c:** unión monotónica de `operator_actions` y grants revocados desde la base viva al candidato de restauración. `forceDataLoss` no puede restaurar autorizaciones revocadas. Base viva ilegible: revocar todos los grants restaurados y exigir consentimiento explícito.
@@ -19,12 +25,12 @@
 - **Evidencia:** tests negativos Git locales y cuatro negativos SQLite rojos en GitHub CI antes de aplicar el fix; después exigir cobertura sin bajar umbrales, suite, estrés, benchmark y auditoría en el SHA final.
 - **Gates:** nueva revisión Codex con recibo completado y nueva 4R independiente de `sebastianriquelme95-max`. Sin aprobación, firma CI real, merge ni despliegue.
 
-## Seguimiento 0.3.3 (candidato, sin release)
+## Seguimiento versión histórica (ver CHANGELOG) (candidato, sin release)
 
 - **RDD / ZL-010:** inspeccionar recursivamente los índices **y el estado de cada worktree** de los submódulos, aun cuando las configuraciones de ignorado de un segundo nivel oculten archivos modificados al repositorio raíz. Regresión \`root/lib/inner\` para \`submodule.inner.ignore=all\`; ningún snapshot RDD debe declararse limpio si un submódulo rastreado cambió.
 - La revisión Codex del SHA exacto, los checks CI, la atestación real y la aprobación independiente siguen siendo puertas separadas. No confundir código corregido con revisión completa ni con release autorizado.
 
-## Candidato 0.4.0: seguridad CI y rutas
+## Candidato versión histórica (ver CHANGELOG): seguridad CI y rutas
 
 - **CRITICAL C1:** `workflow_run` sobre `main`, código del firmante confiable y checks de GitHub API; `ci-attestation` con required reviewer y política main-only deberá configurarlo y comprobarlo el operador.
 - **CRITICAL C2:** Git fail-closed con `fsmonitor`/hooks/filters deshabilitados o rechazados, también en submódulos.
@@ -155,16 +161,16 @@ ZL-001 a ZL-003 y ZL-005 a ZL-009 tienen implementación local y pruebas; ZL-004
 
 Se incorporó `zana_apply_write` como herramienta MCP 24, con intentos durables, validación de grants Ed25519 y lease, anclaje Linux de directorios, rechazo de symlink/hardlink, recibos SHA y tests de caída real tras el efecto. El preflight puede reportar `MCP_EFFECT_BOUNDARY_ENFORCED`, **no `VERIFIED`**, porque un modelo con otras herramientas del SO podría saltarse el MCP. El gate real sigue abierto hasta probar la separación de permisos del host.
 
-### Cierre candidato 0.3.0 (sin release)
+### Cierre candidato versión histórica (ver CHANGELOG) (sin release)
 
 - **ZL-004 local:** herramienta MCP 24 con efecto atómico de archivo, firma Ed25519, lease, rutas, recibo SHA, prueba de caída posterior al efecto y pruebas negativas. **Host y aislamiento SO no verificados**.
-- **Emisor CI preparado, sin activación:** `scripts/ci-attest.mjs` y job de Actions `attest` bajo `ci-attestation`. El archivo `keys/ci-verifier.pub` es un marcador, no una llave real. **PASO HUMANO:** generar dos llaves distintas (CI y operador), cargar secret, environment protegido y variable de activación, y validar un run firmado. El gate `trustedCIAttribution` queda `NOT_CONNECTED` hasta entonces.
+- **Emisor CI preparado, sin activación:** `scripts/ci-attest.mjs` y workflow confiable `ci-attestation.yml` bajo `ci-attestation`. El archivo `keys/ci-verifier.pub` es un marcador, no una llave real. **PASO HUMANO:** generar dos llaves distintas (CI y operador), cargar secret, environment protegido y variable de activación, y validar un run firmado. El gate `trustedCIAttribution` queda `NOT_CONNECTED` hasta entonces.
 - **Cobertura:** global 92/85/90 y bloqueo automático si cualquier módulo de `src/` cae bajo 80 % de ramas.
 - **ZL-018 permanece abierto:** guías `docs/host-codex.md` / `docs/host-e2e.md` y plantilla `examples/host-e2e-report.json`; sin ejecución con Codex real ni informe verificado.
 - **Revisión independiente abierta:** el ciclo 4R solo puede etiquetarse como self-check; se requiere otra cuenta Github y evaluación humana sobre SHA exacto.
 
 
-### Ronda 2: cuatro hallazgos corregidos, candidata 0.3.1
+### Ronda 2: cuatro hallazgos corregidos, candidata versión histórica (ver CHANGELOG)
 
 Auditoría inicial: commit `a36120b4d0a03f61445dbfcff32e382390e95e14`. Se publicaron cuatro correcciones separadas, sin cambiar `main`:
 
@@ -175,22 +181,22 @@ Auditoría inicial: commit `a36120b4d0a03f61445dbfcff32e382390e95e14`. Se public
 | P2 | Heartbeat CLI forzaba 300 segundos | `44d9a441d198e15d8e64081e450b4ec84529f2ec` | CLI y MCP stdio sin default fijo con presupuesto de 60 s; rechazo de 61 s |
 | P2 | Review invalidada no reabría el mismo SHA tras cambiar base | `2b91918bd478271b1869c7fadd3b5ccdc3d605eb` | Git real: cambia `main`, feature HEAD idéntico, nueva ronda y archivo; rechaza revisión viva, snapshot idéntico y presupuesto agotado |
 
-**Versión candidata:** `0.3.1` sin tag, release ni deploy. Los umbrales de cobertura global 92/85/90 y por módulo (mínimo 80 % de ramas) siguen activos. Los hilos del revisor no se resuelven artificialmente: cada respuesta apunta al SHA corrector y queda sujeta a otra pasada.
+**Versión candidata:** `versión histórica (ver CHANGELOG)` sin tag, release ni deploy. Los umbrales de cobertura global 92/85/90 y por módulo (mínimo 80 % de ramas) siguen activos. Los hilos del revisor no se resuelven artificialmente: cada respuesta apunta al SHA corrector y queda sujeta a otra pasada.
 
 **Gates que no se cierran con estos cuatro fixes:** CI firmado con secretos humanos y llaves públicas verificables; aislamiento real del anfitrión por permisos del SO; ZL-018 (E2E Codex ejecutado y registrado por Zana); revisión independiente y aprobación de GitHub distinta del autor. `releaseAuthorized:false` sigue siendo obligatorio.
 
-### Seguimiento de revisión Codex sobre 0.3.1 (2026-11-04)
+### Seguimiento de revisión Codex sobre versión histórica (ver CHANGELOG) (2026-11-04)
 
 Los cuatro hallazgos originales se corrigieron en commits separados: P1 cola SQLite `0dfbc8d`, P2 modos de archivos `931921a`, P2 lease CLI `44d9a44` y P2 reapertura Git RDD `2b91918`. Los hilos originales recibieron respuesta con SHA y CI por cada cambio, sin simular aprobación independiente.
 
 Una revisión intermedia detectó dos P2 adicionales en `src/lifecycle.mjs`, corregidos en `0fbe62a` (no acortar leases al renovar) y `2603dbf` (cancelación invalida paquetes RDD, permite archivar). Cada corrección incluye pruebas negativas y mantiene el gate de release cerrado. Revalidar el SHA final y CI tras actualizar la documentación; pedir nueva revisión Codex sobre ese SHA. Las conversaciones siguen abiertas hasta verificación de la revisión.
 
-### Ronda 3 de seguridad, candidata 0.3.2
+### Ronda 3 de seguridad, candidata versión histórica (ver CHANGELOG)
 
 Codex identificó un P1 de regrant después de intención WRITE y un P2 de flags Git que ocultaban modificaciones. Se añadieron pruebas negativas: la segunda fase conserva el grant original y Git RDD rechaza assume-unchanged/skip-worktree. Se preparó un script idempotente de configuración humana de CI con simulación sin efectos y un checklist de operador. El preflight conserva releaseAuthorized:false y trustedCIAttribution:NOT_CONNECTED hasta evidencia real. Los hilos solo se resuelven si la última revisión Codex finaliza sin hallazgos, y no hay merge, release, tag ni deploy.
 
 - P2 adicional: inspección de submódulos pese a submodule.ignore=all, corregida en 7094de824757c4abafb96441dd34dd553cb172be; test Git con cambios internos.
 
-### Corrección adicional de revisión Codex · 0.3.2
+### Corrección adicional de revisión Codex · versión histórica (ver CHANGELOG)
 
 `ebd8c9b`: `observeGit()` inspecciona recursivamente los índices de los submódulos para impedir que flags `assume-unchanged` o `skip-worktree` oculten cambios rastreados. Dos regresiones con repositorios reales añadidas a `tests/git-evidence.test.mjs`. Requiere nueva revisión Codex y security review sobre el HEAD posterior a este commit; no implica aprobación independiente.

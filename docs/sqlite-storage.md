@@ -36,7 +36,7 @@ Para recuperar una base dañada o volver a un backup, **detener primero todos lo
 ZANA_RESTORE_OFFLINE=1 node src/cli.mjs storage-restore /ruta/backup.sqlite
 ```
 
-El backup debe ser válido, migrable al esquema actual (v1 a v6) y no contener trabajo `RUNNING`. Una restauración ciega sin base viva exige `--force-data-loss`, revoca todos los grants recuperados y registra un epoch que rechaza acciones firmadas antes de restaurar. Los archivos anteriores se mueven a una ruta de cuarentena recuperable. El proceso guarda un marcador durante la operación; cualquier interrupción en ese punto requiere inspección del operador antes de volver a iniciar el servidor. `storage-status` enumera `.restoring.*` y `.quarantine.*` huérfanos y reporta errores de temporales WRITE sin bloquear una reconciliación firmada.
+El backup debe ser válido, migrable al esquema actual (v1 a v6) y no contener trabajo `RUNNING`. Una restauración ciega sin base viva exige `--force-data-loss`, revoca todos los grants recuperados y registra un epoch que rechaza acciones firmadas antes de restaurar. Los archivos anteriores se mueven a una ruta de cuarentena recuperable. El proceso utiliza un diario JSON fsync; tras una interrupción, ejecutar abort offline o reintentar restore, que primero concilia el diario. `storage-status` enumera `.restoring.*` y `.quarantine.*` huérfanos y reporta errores de temporales WRITE sin bloquear una reconciliación firmada.
 
 ## Pruebas y límites
 
@@ -48,11 +48,45 @@ El almacenamiento es local: no usarlo como base compartida por filesystem de red
 
 ## Recuperación de una restauración interrumpida
 
-Si se encuentra `.restore-pending`, **todos los comandos de lectura, historia y modificación rechazan el almacén**. El operador debe inspeccionar las rutas del archivo SQLite, sus posibles `-wal`/`-shm` y los archivos `.quarantine.*`, detener los clientes y validar una copia antes de ejecutar la recuperación protegida. **No borrar el marcador a mano ni relanzar restore ignorando la cuarentena.** Con los clientes detenidos, ejecutar `ZANA_RESTORE_OFFLINE=1 node src/cli.mjs storage-restore-abort` para recuperar la base viva en cuarentena. Si el marcador ya no existe, el restore detecta cuarentenas y conserva revocaciones/nonces; si no existe una base anterior conocida, exige `--force-data-loss` y revoca todos los grants.
+Si se encuentra `.restore-pending`, los comandos de datos rechazan el almacén hasta completar o abortar el diario. El reintento de restore auto-aborta el diario anterior cuando su integridad es comprobable. **Nunca borrar el marcador ni mover cuarentenas a mano.**
 
 El comando **local** `node src/cli.mjs reconcile-view` muestra unidad, generación, ruta, SHA previo/esperado y token completo solo al operador. Ninguna herramienta MCP expone ese token. Los tokens de ejecución se guardan en recibos internos. Los eventos de historial solo incluyen un resumen SHA-256 del token y las consultas de revisiones ocultan los tokens de paquetes. Las consultas MCP del almacén son de solo lectura; la restauración está reservada al CLI local.
 
 Los tokens y generaciones de intento protegen de dobles completados. El heartbeat renovable y la recuperación controlada de READ están implementados. Ningún WRITE incierto se reintenta sin reconciliación firmada; su aplicación real por herramientas externas del anfitrión permanece pendiente de ZL-004.
+
+## Protocolo transaccional del diario de restauración
+
+**Invariante:** nunca se instala una base que retroceda una revocación o permita reutilizar un nonce confirmado, ni se separan una base SQLite y su WAL con información pendiente. Antes de tocar la base viva o su cuarentena se exige el checkpoint exclusivo `PRAGMA wal_checkpoint(TRUNCATE)`: el WAL debe tener longitud cero, y una segunda conexión que impida el checkpoint bloquea la operación.
+
+`.restore-pending` contiene JSON durable con los campos `version:1`, `id` (UUID), `path`, `temp`, `quarantine`, `phase`, `restoreOps` y `abortOps`. Las rutas están limitadas al archivo de estado y sus sidecars `-wal`/`-shm`; `temp` debe tener el prefijo de restauración autorizado. El primer diario se escribe en un temporal `.restore-pending.new.<UUID>`, se hace fsync del contenido, se publica exclusivamente con enlace duro (`link`, falla si existe otro diario), se elimina el temporal y se hace fsync del directorio. Nunca se escribe primero un archivo marcador vacío. Un marcador legado vacío/truncado sin movimientos posibles y con la base viva intacta se puede abortar sin borrar archivos a mano.
+
+**Estados y transición:**
+
+- `phase: restoring`: cada operación en `restoreOps` avanza `pending → intent → done`. `intent` se persiste antes del rename, el directorio se sincroniza después y `done` se persiste antes del siguiente paso.
+- `phase: aborting`: se infieren de forma conservadora los renames realizados y se genera `abortOps`; cada rollback también avanza `pending → intent → done`. El candidato instalado, si existe, queda en `.aborted.<UUID>`; la cuarentena se devuelve a la ruta original con sus sidecars.
+- `infer()` concilia el diario con existencia de `from` y `to`: solo origen presente equivale a pendiente; solo destino presente implica rename realizado. Ambos presentes es ambiguo, ambos ausentes se rechaza. Si no hubo ningún movimiento, abort elimina **solo el marcador**.
+- `storage-restore` ejecutado nuevamente después de SIGKILL primero intenta el abort del diario activo y solo después prepara un nuevo candidato. **Nunca** selecciona cuarentenas por fecha de modificación: solo el UUID del diario autoriza mover archivos.
+
+**Diagnóstico y acciones del operador:**
+
+| Código | Acción segura |
+| --- | --- |
+| `INVALID_JOURNAL` | No modificar archivos a mano. Si la base sigue intacta y no hubo movimientos, usar abort offline; de lo contrario conservar evidencia y revisar. |
+| `LOST_RENAME` / `LOST_DATABASE` / `LOST_CANDIDATE` | Falta una ruta del diario. Preservar cuarentena y temporales, comparar identidad y no forzar instalación de una base incompleta. |
+| `AMBIGUOUS_RENAME` | Ambos extremos del rename existen: no sobrescribir ni elegir por fecha; inspección manual. |
+| `UNOWNED_ARTIFACTS` | Existen restos sin diario dueño. No se adoptan automáticamente ni se omiten las revocaciones. |
+| `JOURNAL_ACTIVE` | Detener procesos concurrentes y completar o abortar el diario antes de restaurar o limpiar. |
+
+Comandos de operador, con todos los clientes cerrados:
+
+```sh
+ZANA_RESTORE_OFFLINE=1 node src/cli.mjs storage-status
+ZANA_RESTORE_OFFLINE=1 node src/cli.mjs storage-restore-abort
+ZANA_RESTORE_OFFLINE=1 node src/cli.mjs storage-restore /ruta/backup.sqlite
+ZANA_RESTORE_OFFLINE=1 node src/cli.mjs storage-cleanup-artifacts --confirm
+```
+
+`storage-status` enumera `restoring`, `quarantines`, `aborted`, `journal` y temporales `.restore-pending.new.*`. La limpieza confirmada elimina solo candidatos/aborted/temporales ya huérfanos, nunca las cuarentenas que pueden contener los últimos permisos y nonces. `reconcile-view` expone los tokens completos exclusivamente en CLI local; el MCP nunca los muestra. Los conflictos de recuperación se resuelven antes de autorizar nuevas acciones.
 
 ## Versión 3 y revisiones verificadas
 

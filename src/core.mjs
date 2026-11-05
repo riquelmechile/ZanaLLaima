@@ -108,9 +108,14 @@ export function evaluateHost(report = {}) {
     note: 'This process plans work only. The host owns model selection and any actual native subagent creation.' };
 }
 
+// A PENDING unit that already used maxUnitAttempts is exhausted: restore,
+// adoption fences or data repair can leave one behind, and it must never
+// start again (retryRead enforces the same limit on the way back to PENDING).
 function readyUnits(mission) {
   const done = new Set(mission.units.filter(u => u.status === 'DONE').map(u => u.id));
-  return mission.units.filter(u => u.status === 'PENDING' && u.dependsOn.every(x => done.has(x)));
+  const cap = budgetOf(mission).maxUnitAttempts;
+  return mission.units.filter(u => u.status === 'PENDING' && (u.attempts||0) < cap &&
+    u.dependsOn.every(x => done.has(x)));
 }
 
 export function nextBatch(mission, report = {}, grant = null) {

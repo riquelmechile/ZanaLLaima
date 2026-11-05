@@ -268,7 +268,11 @@ test('R11 cerco: re-ejecutar el adopt tras un crash antes del link no duplica el
     for(const s of ['-wal','-shm'])await rm(base+s,{force:true});
     const first=await storageAdoptQuarantine(id,f.file,{confirm:true,forceDataLoss:true});
     assert.equal(first.ledgerRebuilt,true);
-    // Simula el crash: el COMMIT quedó en la cuarentena pero el link no se hizo.
+    // Simula el crash entre COMMIT y link: la copia queda con el COMMIT y con
+    // la marca de adopción preparada (se borra recién al publicar).
+    const marked=new DatabaseSync(base);
+    try{marked.prepare("INSERT INTO metadata(key,value) VALUES('adoption_prepared',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(id);}
+    finally{marked.close();}
     checkpoint(base);
     await rename(base,base+'.quarantine.'+id);
     for(const s of ['-wal','-shm'])await rm(base+s,{force:true});
@@ -279,6 +283,8 @@ test('R11 cerco: re-ejecutar el adopt tras un crash antes del link no duplica el
     try{
       const n=live.prepare("SELECT COUNT(*) AS n FROM state_events WHERE category='QUARANTINE_ADOPTED'").get().n;
       assert.equal(n,1,'un solo evento de adopción por cuarentena');
+      assert.equal(live.prepare("SELECT value FROM metadata WHERE key='adoption_prepared'").get(),undefined,
+        'la marca se borra al publicar');
     }finally{live.close();}
   }finally{await f.close();}
 });

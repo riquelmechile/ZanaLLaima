@@ -1,3 +1,4 @@
+import { DEFAULT_BUDGET } from './budget.mjs';
 import { DatabaseSync, backup } from 'node:sqlite';
 import { constants } from 'node:fs';
 import { access, chmod, copyFile, link, mkdir, open, readFile, rename, rm, stat, lstat } from 'node:fs/promises';
@@ -630,8 +631,7 @@ function mergeBudgetFacts(db,facts,{ownLedger}={}){
   const own=Object.hasOwn(ledger,m.id)?ledger[m.id]:Object.create(null);
   if(Object.hasOwn(own,FENCE_UNIT)){
     // Unknown consumption: exhaust every unit so nothing can start again.
-    const limits=parse(db.prepare('SELECT budget FROM active_mission WHERE slot=1').get()?.budget??'null');
-    const cap=Number.isSafeInteger(limits?.maxUnitAttempts)?limits.maxUnitAttempts:3;
+    const cap=unitAttemptCap(parse(db.prepare('SELECT budget FROM active_mission WHERE slot=1').get()?.budget??'null'));
     db.prepare('UPDATE units SET attempts=MAX(attempts,?) WHERE mission_id=?').run(cap,m.id);
   }
   const read=db.prepare('SELECT status,attempts,run FROM units WHERE mission_id=? AND id=?');
@@ -656,6 +656,8 @@ function mergeBudgetFacts(db,facts,{ownLedger}={}){
     write.run(attempts,json(generation?{...(run??{}),leaseGeneration:generation}:run),m.id,unitId);
   }
 }
+// Per-unit attempt limit of a stored mission budget (grandfathered default).
+const unitAttemptCap=budget=>Number.isSafeInteger(budget?.maxUnitAttempts)?budget.maxUnitAttempts:DEFAULT_BUDGET.maxUnitAttempts;
 // The monotone facts every restore and adoption source contributes.
 function securityFacts(db,{rebuild=false}={}){
   return {
@@ -794,8 +796,16 @@ async function otherQuarantineSecurity(base,selected){
 }
 // The detail recorded by the first QUARANTINE_ADOPTED event for this exact
 // quarantine, or null.
+const ADOPTION_PREPARED_KEY='adoption_prepared';
+// Clear the prepared marker once the adopted DB is published, so a later
+// backup of it never looks like an interrupted adoption.
+function clearAdoptionPrepared(path){
+  const db=connect(path);
+  try{db.prepare('DELETE FROM metadata WHERE key=?').run(ADOPTION_PREPARED_KEY);}
+  finally{db.close();}
+}
 function adoptionRecord(db,id){
-  for(const row of db.prepare("SELECT detail FROM state_events WHERE category='QUARANTINE_ADOPTED' ORDER BY seq ASC").all()){
+  for(const row of db.prepare("SELECT detail FROM state_events WHERE category='QUARANTINE_ADOPTED' ORDER BY seq DESC").all()){
     let detail;
     try{detail=JSON.parse(row.detail);}catch{continue;}
     if(detail?.quarantineId===id)return detail;
@@ -833,6 +843,7 @@ export async function storageAdoptQuarantine(id,file=statePath(),{confirm=false,
           const done=connect(path,true);
           let first;
           try{first=adoptionRecord(done,id)??{};}finally{done.close();}
+          clearAdoptionPrepared(path);
           return {adopted:true,recovered:true,quarantineId:id,databasePath:path,
             skippedSources:first.skippedSources??[],ledgerRebuilt:!!first.ledgerRebuilt};
         }
@@ -873,8 +884,7 @@ export async function storageAdoptQuarantine(id,file=statePath(),{confirm=false,
         // it exhausted (never with credit such as attempts=-1) and with a
         // sane generation, and record that in the ledger.
         if(own.damagedUnits.length){
-          const limits=mission.budget;
-          const cap=Number.isSafeInteger(limits?.maxUnitAttempts)?limits.maxUnitAttempts:3;
+          const cap=unitAttemptCap(mission.budget);
           const read=db.prepare('SELECT run FROM units WHERE mission_id=? AND id=?');
           const write=db.prepare('UPDATE units SET attempts=?,run=? WHERE mission_id=? AND id=?');
           const ledger=readLedger(db);
@@ -903,10 +913,17 @@ export async function storageAdoptQuarantine(id,file=statePath(),{confirm=false,
           mergeBudgetFacts(db,security.budget);
         }
         mergeSecurityFacts(db,{blind:true,actions:[],revoked:[],epoch:null});
-        // One event per quarantine: a rerun after a crash before link() sees
-        // the already-healed copy, so it reuses what the first run recorded.
-        recorded=adoptionRecord(db,id);
-        if(!recorded)addEvent(db,mission,'QUARANTINE_ADOPTED',detail);
+        // One event per adoption run. A rerun after a crash between COMMIT
+        // and link() finds this copy marked as prepared for the same UUID and
+        // reuses what the first run recorded. Any other copy (even one that
+        // reuses an adopted UUID) records its own event.
+        const prepared=db.prepare('SELECT value FROM metadata WHERE key=?').get(ADOPTION_PREPARED_KEY)?.value;
+        recorded=prepared===id?adoptionRecord(db,id):null;
+        if(!recorded){
+          addEvent(db,mission,'QUARANTINE_ADOPTED',detail);
+          db.prepare('INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+            .run(ADOPTION_PREPARED_KEY,id);
+        }
         db.exec('COMMIT');
       }catch(error){rollbackIfOpen(db);throw error;}
     }finally{db.close();}
@@ -925,6 +942,7 @@ export async function storageAdoptQuarantine(id,file=statePath(),{confirm=false,
     await rm(quarantine);
     const d2=await open(dirname(path),'r');
     try{await d2.sync();}finally{await d2.close();}
+    clearAdoptionPrepared(path);
     const outcome=recorded??detail;
     return {adopted:true,quarantineId:id,databasePath:path,
       skippedSources:outcome.skippedSources??[],ledgerRebuilt:!!outcome.ledgerRebuilt,

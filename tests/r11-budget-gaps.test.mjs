@@ -407,3 +407,30 @@ test('R11 marca: la rama recovered (mismo inode) borra la marca y devuelve lo re
     finally{check.close();}
   }finally{await f.close();}
 });
+
+test('R11 Codex P1c: el restore no devuelve rondas de revisión consumidas',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'r11-review-'));
+  const file=join(dir,'state.json'),backup=join(dir,'backup.sqlite');
+  const saved={ZANA_STATE_FILE:process.env.ZANA_STATE_FILE,ZANA_RESTORE_OFFLINE:process.env.ZANA_RESTORE_OFFLINE};
+  process.env.ZANA_STATE_FILE=file;process.env.ZANA_RESTORE_OFFLINE='1';
+  try{
+    const {completeUnit}=await import('../src/core.mjs');
+    const {openReview}=await import('../src/review.mjs');
+    await transact(()=>createMission({objective:'Rondas de revisión monótonas',
+      authorization:{writesAllowed:false,allowedPaths:[]},budget:{maxReviewRounds:1},
+      units:[{id:'scan',effect:'READ',paths:['src'],instruction:'Leer el código fuente'}]}),file);
+    await transact(m=>{const p=startBatch(m).batch.packets[0];
+      completeUnit(m,p.unitId,p.token,{success:true,summary:'Lectura completa',evidence:['ok']},p.leaseGeneration);return m;},file);
+    await backupState(backup,file);
+    await transact(m=>{openReview(m,{candidateSha:'a'.repeat(40)});return m;},file);
+    await assert.rejects(transact(m=>{openReview(m,{candidateSha:'b'.repeat(40)});return m;},file),/review correction limit/);
+    await assert.rejects(restoreBackup(backup,file,{offline:true}),err=>err.code==='CONSUMED_BUDGET',
+      'el backup anterior a la ronda no puede devolverla');
+    await restoreBackup(backup,file,{offline:true,forceDataLoss:true});
+    assert.equal((await readState(file)).reviewCount,1,'con force se conserva el máximo de rondas');
+    await assert.rejects(transact(m=>{openReview(m,{candidateSha:'c'.repeat(40)});return m;},file),/review correction limit/);
+  }finally{
+    for(const [k,v] of Object.entries(saved)){if(v===undefined)delete process.env[k];else process.env[k]=v;}
+    await rm(dir,{recursive:true,force:true});
+  }
+});

@@ -1,6 +1,7 @@
 import { createHash, createPublicKey, verify } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import {assertPublicPem} from './public-key.mjs';
 
 const check=(ok,msg)=>{if(!ok)throw new Error(msg)};
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -10,7 +11,7 @@ const pathSafe=p=>typeof p==='string'&&p.length>0&&p.length<=240
 export async function operatorPublicKey(path=process.env.ZANA_OPERATOR_PUBLIC_KEY_PATH){
   check(typeof path==='string'&&path.length>0,'Operator public key is not configured');
   const pem=await readFile(resolve(path),'utf8');
-  const key=createPublicKey(pem);
+  const key=createPublicKey(assertPublicPem(pem));
   check(key.asymmetricKeyType==='ed25519','Operator key must be Ed25519');
   const fingerprint=createHash('sha256').update(key.export({type:'spki',format:'der'})).digest('hex');
   return {key,fingerprint};

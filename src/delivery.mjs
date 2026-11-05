@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { matchesReviewCandidate } from './git-evidence.mjs';
 import { reviewStatus } from './review.mjs';
+import {assertPublicPem} from './public-key.mjs';
 
 const SHA=/^[a-f0-9]{40}$/;
 const fail=message=>{throw new Error(message);};
@@ -10,7 +11,7 @@ const fingerprint=key=>createHash('sha256').update(
   key.export({type:'spki',format:'der'})).digest('hex');
 export function readVerifierKey(path){
   if(typeof path!=='string'||!path.trim())return null;
-  const key=createPublicKey(readFileSync(resolve(path),'utf8'));
+  const key=createPublicKey(assertPublicPem(readFileSync(resolve(path),'utf8')));
   if(key.asymmetricKeyType!=='ed25519')fail('Attestation key must be Ed25519');
   return key;
 }

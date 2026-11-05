@@ -190,3 +190,16 @@ test('R11 final: adopt rechaza forceDataLoss no booleano y etiqueta una hermana 
     assert.deepEqual(adopted.skippedSources.map(x=>x.reason),['INVALID_LEDGER']);
   }finally{await f.close();}
 });
+
+test('R11 final: contadores dañados en la misión activa viva no bloquean la recuperación con --force-data-loss',async()=>{
+  const f=await fixture();
+  try{
+    await backupState(f.backup,f.file);
+    const live=new DatabaseSync(databasePath(f.file));
+    try{live.exec("UPDATE units SET attempts=-1");}finally{live.close();}
+    await assert.rejects(restoreBackup(f.backup,f.file,{offline:true}),err=>err.code==='INVALID_LEDGER');
+    const result=await restoreBackup(f.backup,f.file,{offline:true,forceDataLoss:true});
+    assert.equal(result.restored,true);
+    assert.equal(result.ledgerRebuilt,true);
+  }finally{await f.close();}
+});

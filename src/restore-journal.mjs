@@ -62,17 +62,15 @@ const read=async path=>{
  catch(error){if(error?.code==='ENOENT')return null;throw error;}
  let j;
  try{j=JSON.parse(data);}catch{
-  if(await safeUnpublishedMarker(path))return {phase:'unpublished',path};
+  if((data.trim()===''||/^\s*\{\s*"version"\s*:\s*1(?:\s*[,}]|\s*$)/.test(data)) &&
+     await safeUnpublishedMarker(path))return {phase:'unpublished',path};
   refuse('INVALID_JOURNAL','Restore journal invalid JSON; manual recovery required');
  }
  if(j?.version!==1||j.path!==path||!UUID.test(j.id)||!['restoring','aborting'].includes(j.phase)||
     j.quarantine!==path+'.quarantine.'+j.id||
     typeof j.temp!=='string'||!j.temp.startsWith(path+'.restoring.')||
     !Array.isArray(j.restoreOps)||j.restoreOps.length>4)
-   {
-    if(await safeUnpublishedMarker(path))return {phase:'unpublished',path};
-    refuse('INVALID_JOURNAL','Restore journal invalid format/identity; manual recovery required');
-   }
+   refuse('INVALID_JOURNAL','Restore journal invalid format/identity; manual recovery required');
  // The journal is operator state, not an authorization to rename any path.
  const allowedFrom=new Set([path,path+'-wal',path+'-shm',j.temp]);
  for(const op of j.restoreOps){

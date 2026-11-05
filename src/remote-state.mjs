@@ -8,6 +8,7 @@ import {redactDeep,envSecrets} from './redact.mjs';
 
 export const nowIso=()=>new Date().toISOString();
 const SESSION=/^[A-Za-z0-9._:-]{8,200}$/;
+export const MAX_AUDIT=5000;
 
 // Bind a transport session id to the OAuth identity that opened it, and keep
 // the moment it was created (the "session created before the ticket" rule).
@@ -60,6 +61,8 @@ export function writeAudit(db,{caller,tool,missionId=null,outcome,args,detail=nu
   db.prepare('INSERT INTO remote_audit(at,host,session_id,tool,mission_id,outcome,args_hmac,detail) VALUES(?,?,?,?,?,?,?,?)')
     .run(nowIso(),caller?.host??null,caller?.sessionId??null,String(tool).slice(0,120),missionId,
       String(outcome).slice(0,40),argsHmac,safe);
+  // Bounded trail: keep the newest MAX_AUDIT rows.
+  db.prepare('DELETE FROM remote_audit WHERE seq <= (SELECT MAX(seq) FROM remote_audit) - ?').run(MAX_AUDIT);
 }
 export const audit=(entry,file)=>remoteWrite(db=>writeAudit(db,entry),file);
 export function readAudit({limit=50,missionId=null}={},file){

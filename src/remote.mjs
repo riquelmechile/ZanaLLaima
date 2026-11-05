@@ -227,7 +227,8 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         }
         return {server:gateway.status(),catalogVersion:CATALOG.version,tools:tools.map(describe),problems:liveProblems(tools)};
       }
-      const result=await gateway.call({host:session.host,sessionId:session.sessionId,role:'author'},
+      const reviewer=id?await rr(db=>Boolean(db&&sessionReviews(db,session.sessionId,id))):false;
+      const result=await gateway.call({host:session.host,sessionId:session.sessionId,role:reviewer?'reviewer':'author'},
         operation==='@index'?'index':operation,args,{missionId:id??null});
       return {passthrough:result};
     },
@@ -236,9 +237,9 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
   async function dispatch(name,args,session){
     const fn=ops[name];
     if(!fn)return {isError:true,content:[{type:'text',text:'Unknown tool'}]};
-    let outcome='OK';
+    let outcome='OK',data=null;
     try{
-      const data=await fn(args??{},session);
+      data=await fn(args??{},session);
       if(data?.passthrough)return data.passthrough;
       const safe=redactDeep(data,secrets());
       return {content:[{type:'text',text:JSON.stringify(safe)}],structuredContent:safe};
@@ -247,7 +248,11 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       return {isError:true,content:[{type:'text',text:clean(error,secrets()).slice(0,2000)}]};
     }finally{
       if(name!=='zana_ds_github'){
-        try{await audit({caller:session,tool:name,missionId:args?.missionId??null,outcome,args});}
+        try{
+          // The mission the call belongs to: named, returned, or the active one.
+          const missionId=args?.missionId??data?.missionId??(await readState().catch(()=>null))?.id??null;
+          await audit({caller:session,tool:name,missionId,outcome,args});
+        }
         catch(error){console.error('ZanaLLaima audit write failed:',clean(error,secrets()));}
       }
     }

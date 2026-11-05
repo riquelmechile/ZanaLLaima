@@ -162,7 +162,9 @@ test('Streamable HTTP sessions: two conversations get two sessions; the reviewer
     assert.equal((await fetch(s.base+'/mcp',{method:'POST',headers:{authorization:'Bearer '+token}})).status,401);
     // Audit: who, which tool, mission, outcome, argument hash; never a token.
     const audit=await f.runtime.readAudit({limit:100});
-    assert.ok(audit.some(x=>x.tool==='zana_review_claim'&&x.sessionId===b.transport.sessionId&&x.host==='zana-chatgpt'&&/^[0-9a-f]{64}$/.test(x.argsHmac)));
+    assert.ok(audit.some(x=>x.tool==='zana_review_claim'&&x.sessionId===b.transport.sessionId&&x.host==='zana-chatgpt'&&
+      x.missionId===init.id&&x.outcome==='OK'&&/^[0-9a-f]{64}$/.test(x.argsHmac)));
+    assert.ok(audit.some(x=>x.tool==='zana_start_batch'&&x.missionId===init.id&&x.sessionId===a.transport.sessionId));
     const text=JSON.stringify(audit);
     for(const secret of [AUTHOR_TOKEN,REVIEWER_TOKEN,token,PASSWORD])assert.equal(text.includes(secret),false);
     await a.client.close();await b.client.close();

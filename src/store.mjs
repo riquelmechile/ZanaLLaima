@@ -35,7 +35,6 @@ const REMOTE_TABLES=[
   'CREATE TABLE IF NOT EXISTS review_tickets (ticket_id TEXT PRIMARY KEY, code_hash TEXT NOT NULL UNIQUE, mission_id TEXT NOT NULL, repo TEXT NOT NULL, pr_number INTEGER NOT NULL, sha TEXT NOT NULL, author_session TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, state TEXT NOT NULL, reviewer_session TEXT, claimed_at TEXT, finalized_at TEXT, verdict TEXT, execution TEXT, github_review_id INTEGER, status_posted INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL)',
   'CREATE TABLE IF NOT EXISTS remote_audit (seq INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, host TEXT, session_id TEXT, tool TEXT NOT NULL, mission_id TEXT, outcome TEXT NOT NULL, args_hmac TEXT, detail TEXT)',
 ];
-const MAX_REMOTE_AUDIT=5000;
 const TICKET_RANK={OPEN:0,CLAIMED:1,FINALIZING:2,FINALIZED:3,STALE_SHA:3,EXPIRED:3};
 const tokenHash = token => createHash('sha256').update(token).digest('hex');
 const fail = (message) => { throw new Error(message); };
@@ -179,7 +178,6 @@ function trimHistory(db) {
   const active=db.prepare('SELECT content FROM active_review LIMIT 1').get();
   const current=active ? parse(active.content).id : '';
   db.prepare('DELETE FROM review_receipts WHERE review_id != ? AND review_id NOT IN (SELECT review_id FROM review_archive) AND review_id NOT IN (SELECT ticket_id FROM review_tickets)').run(current);
-  db.exec('DELETE FROM remote_audit WHERE seq <= COALESCE((SELECT seq FROM remote_audit ORDER BY seq DESC LIMIT 1 OFFSET '+MAX_REMOTE_AUDIT+'), -1)');
 }
 
 function persist(db, previous, next, kind = 'STATE_CHANGED') {

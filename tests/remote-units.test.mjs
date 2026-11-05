@@ -212,6 +212,11 @@ test('remote state: session identity binding and bounded audit reads',async()=>{
     assert.deepEqual(rows[0].detail,{truncated:true});
     assert.equal((await readAudit({},file)).length,2);
     assert.throws(()=>readAudit({limit:0},file),/Invalid audit limit/);
+    const {MAX_AUDIT}=await import('../src/remote-state.mjs');
+    const {remoteWrite}=await import('../src/store.mjs');
+    await remoteWrite(db=>db.prepare("UPDATE sqlite_sequence SET seq=seq+? WHERE name='remote_audit'").run(MAX_AUDIT+10),file);
+    await audit({caller:null,tool:'late',outcome:'OK'},file);
+    assert.deepEqual((await readAudit({limit:10},file)).map(r=>r.tool),['late'],'older rows trimmed');
     assert.equal(remoteMission(null,'m'),null);
     assert.equal(sessionRow(null,'s'),null);
   }finally{await rm(dir,{recursive:true,force:true});}

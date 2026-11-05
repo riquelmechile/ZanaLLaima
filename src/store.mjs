@@ -794,7 +794,7 @@ async function otherQuarantineSecurity(base,selected){
   }
   return {sources,skipped};
 }
-// The detail recorded by the first QUARANTINE_ADOPTED event for this exact
+// The detail recorded by the latest QUARANTINE_ADOPTED event for this exact
 // quarantine, or null.
 const ADOPTION_PREPARED_KEY='adoption_prepared';
 // Clear the prepared marker once the adopted DB is published, so a later
@@ -835,6 +835,9 @@ export async function storageAdoptQuarantine(id,file=statePath(),{confirm=false,
       if(await exists(quarantine)){
         const live=await stat(path),retained=await stat(quarantine);
         if(live.dev===retained.dev&&live.ino===retained.ino){
+          // Same order as the main path: clear the marker before dropping
+          // the second name, so a failure here can be retried.
+          clearAdoptionPrepared(path);
           await rm(quarantine);
           const fd=await open(dirname(path),'r');
           try{await fd.sync();}finally{await fd.close();}
@@ -843,7 +846,6 @@ export async function storageAdoptQuarantine(id,file=statePath(),{confirm=false,
           const done=connect(path,true);
           let first;
           try{first=adoptionRecord(done,id)??{};}finally{done.close();}
-          clearAdoptionPrepared(path);
           return {adopted:true,recovered:true,quarantineId:id,databasePath:path,
             skippedSources:first.skippedSources??[],ledgerRebuilt:!!first.ledgerRebuilt};
         }
@@ -939,10 +941,13 @@ export async function storageAdoptQuarantine(id,file=statePath(),{confirm=false,
     await link(quarantine,path);
     const d=await open(dirname(path),'r');
     try{await d.sync();}finally{await d.close();}
+    // Clear the marker while both names still point to the same inode: if
+    // this fails or the process dies here, a rerun takes the same-inode
+    // "recovered" branch instead of LIVE_PRESENT.
+    clearAdoptionPrepared(path);
     await rm(quarantine);
     const d2=await open(dirname(path),'r');
     try{await d2.sync();}finally{await d2.close();}
-    clearAdoptionPrepared(path);
     const outcome=recorded??detail;
     return {adopted:true,quarantineId:id,databasePath:path,
       skippedSources:outcome.skippedSources??[],ledgerRebuilt:!!outcome.ledgerRebuilt,

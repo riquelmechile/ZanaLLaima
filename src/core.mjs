@@ -143,6 +143,10 @@ export function nextBatch(mission, report = {}, grant = null) {
   if(remaining<=0)return blocked('Mission work-start budget exhausted');
 
   const ready=readyUnits(mission);
+  const cap=budget.maxUnitAttempts;
+  const exhausted=mission.units.filter(u=>u.status==='PENDING'&&!((u.attempts||0)<cap));
+  if(!ready.length&&exhausted.length)
+    return blocked('Unit '+exhausted[0].id+' exhausted maxUnitAttempts; cancel the mission');
   const authorizedWrite=ready.find(u=>u.effect==='WRITE'&&grantPermits(u,grant));
   // Fairness: once a signed writer is ready, drain existing readers instead of
   // endlessly refilling with new readers. Every WRITE remains an exclusive run.

@@ -352,8 +352,8 @@ test('R11 agotada: con el presupuesto por defecto, una unidad PENDING con attemp
     await restoreBackup(backup,file,{offline:true,forceDataLoss:true});
     const u=(await readState(file)).units[0];
     assert.equal(u.status,'PENDING');assert.equal(u.attempts,3);
-    await assert.rejects(transact(m=>{startBatch(m);return m;},file),/No runnable batch/,
-      'una unidad agotada no puede consumir un cuarto intento');
+    await assert.rejects(transact(m=>{startBatch(m);return m;},file),/No runnable batch: Unit scan exhausted maxUnitAttempts; cancel the mission/,
+      'una unidad agotada no puede consumir un cuarto intento, y el motivo lo dice');
   }finally{
     for(const [k,v] of Object.entries(saved)){if(v===undefined)delete process.env[k];else process.env[k]=v;}
     await rm(dir,{recursive:true,force:true});
@@ -380,5 +380,30 @@ test('R11 cerco: reusar el UUID de una cuarentena ya adoptada registra un evento
     try{
       assert.equal(live.prepare("SELECT COUNT(*) AS n FROM state_events WHERE category='QUARANTINE_ADOPTED'").get().n,2);
     }finally{live.close();}
+  }finally{await f.close();}
+});
+
+test('R11 marca: la rama recovered (mismo inode) borra la marca y devuelve lo registrado',async()=>{
+  const f=await fixture();
+  try{
+    const base=databasePath(f.file),id=randomUUID();
+    checkpoint(base);
+    const db=new DatabaseSync(base);
+    try{db.prepare("INSERT INTO metadata(key,value) VALUES('consumed_budget','[1]')").run();}finally{db.close();}
+    await rename(base,base+'.quarantine.'+id);
+    for(const s of ['-wal','-shm'])await rm(base+s,{force:true});
+    await storageAdoptQuarantine(id,f.file,{confirm:true,forceDataLoss:true});
+    // Estado tras un kill entre link y rm: mismo inode con dos nombres y marca presente.
+    const live=new DatabaseSync(base);
+    try{live.prepare("INSERT INTO metadata(key,value) VALUES('adoption_prepared',?)").run(id);live.exec('PRAGMA wal_checkpoint(TRUNCATE)');}
+    finally{live.close();}
+    const {link}=await import('node:fs/promises');
+    await link(base,base+'.quarantine.'+id);
+    const again=await storageAdoptQuarantine(id,f.file,{confirm:true});
+    assert.equal(again.recovered,true);
+    assert.equal(again.ledgerRebuilt,true);
+    const check=new DatabaseSync(base,{readOnly:true});
+    try{assert.equal(check.prepare("SELECT value FROM metadata WHERE key='adoption_prepared'").get(),undefined);}
+    finally{check.close();}
   }finally{await f.close();}
 });

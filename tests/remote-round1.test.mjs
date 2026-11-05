@@ -88,3 +88,28 @@ test('C2: operator CLI loads the server env explicitly and never creates a stray
     await rm(dir,{recursive:true,force:true});
   }
 });
+
+test('C3: an orphaned CLAIMED ticket with a BLOCKER (server restart) does not block the merge forever',async()=>{
+  const f=await remoteFixture();
+  try{
+    const {author,missionId,branch}=await f.authorReady();
+    const t1=await f.call('zana_review_request',{missionId},author);
+    const reviewer=await f.session();
+    assert.equal((await f.call('zana_review_claim',{ticket:t1.ticket},reviewer)).state,'CLAIMED');
+    assert.equal((await f.call('zana_review_lens_submit',{ticket:t1.ticket,...blocker},reviewer)).blocking,true);
+    // Restart: in-memory MCP sessions are gone; the reviewer conversation reconnects with a new session.
+    const {createRemoteRuntime}=await import('../src/remote.mjs');
+    await f.runtime.close();
+    f.runtime=createRemoteRuntime({env:f.env});
+    const call=async(name,args,s)=>{const r=await f.runtime.dispatch(name,args,s);return r.isError?{error:r.content[0].text}:r.structuredContent;};
+    const reconnected=await f.session();
+    assert.match((await call('zana_review_lens_submit',{ticket:t1.ticket,...clean('readability')},reconnected)).error,/NOT_REVIEWER/);
+    // The author fixes it on a new SHA; a new ticket supersedes the orphan and approves.
+    f.api.state.push(branch,sha('b'));f.api.state.green(sha('b'));
+    const t2=await call('zana_review_request',{missionId},author);
+    assert.equal(t2.error,undefined,t2.error);
+    await review({call},t2.ticket,await f.session());
+    const merge=await call('zana_merge',{missionId},author);
+    assert.equal(merge.state,'MERGED',JSON.stringify(merge.blockers));
+  }finally{await f.cleanup();}
+});

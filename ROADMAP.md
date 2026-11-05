@@ -4,6 +4,13 @@
 **Corte de auditoría:** 2026-11-04. Base confirmada del cierre: `79ef90260768da3a606060a2213fb1e8db3599a6`; para el SHA final ver el HEAD del PR #1, pues escribirlo dentro de su propio commit cambiaría ese hash.
 **Objetivo:** un único anfitrión GPT que planifique, ejecute con sus capacidades nativas, se recupere de interrupciones y revise resultados con evidencia verificable, sin delegación entre cuentas ni llamadas a APIs de inferencia.
 
+## Candidato 0.4.1: límites Git y restauración monotónica (sin release)
+
+- **RDD P1-a/P1-b:** reemplazar `git status` por comparación de entradas `git ls-files -s -z` frente a `git ls-tree -r -z HEAD`; comprobar blobs sin filtros con `git hash-object --no-filters`, permisos y symlinks, y archivos no rastreados con `git ls-files --others --exclude-standard -z`. Repetirlo en submódulos y exigir coincidencia de gitlinks. No ejecutar drivers de atributos ni confiar en `config.worktree`, `include` o `includeIf`.
+- **Persistencia P1-c:** unión monotónica de `operator_actions` y grants revocados desde la base viva al candidato de restauración. `forceDataLoss` no puede restaurar autorizaciones revocadas. Base viva ilegible: revocar todos los grants restaurados y exigir consentimiento explícito.
+- **Evidencia:** tests negativos Git locales y cuatro negativos SQLite rojos en GitHub CI antes de aplicar el fix; después exigir cobertura sin bajar umbrales, suite, estrés, benchmark y auditoría en el SHA final.
+- **Gates:** nueva revisión Codex con recibo completado y nueva 4R independiente de `sebastianriquelme95-max`. Sin aprobación, firma CI real, merge ni despliegue.
+
 ## Seguimiento 0.3.3 (candidato, sin release)
 
 - **RDD / ZL-010:** inspeccionar recursivamente los índices **y el estado de cada worktree** de los submódulos, aun cuando las configuraciones de ignorado de un segundo nivel oculten archivos modificados al repositorio raíz. Regresión \`root/lib/inner\` para \`submodule.inner.ignore=all\`; ningún snapshot RDD debe declararse limpio si un submódulo rastreado cambió.

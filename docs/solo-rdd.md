@@ -13,12 +13,12 @@ El sistema conserva:
 - `branchRef`: rama de trabajo real; no se permite HEAD desacoplado.
 - `targetRef` y `baseSha`: destino y su posición en la apertura.
 - `repoRoot`: ruta real de la raíz del worktree.
-- `clean`: combinación de `git status --porcelain=v1 --untracked-files=all --ignore-submodules=none` en el repositorio y cada submódulo inicializado, más rechazo de flags ocultos del índice (`assume-unchanged`/`skip-worktree`). Cada invocación Git neutraliza `core.fsmonitor`, caché, hooks, protocolos y comandos externos; filtros de `clean`, `smudge` o `process` del repositorio se rechazan, sin ejecutarlos.
+- `clean`: comparación sin `git status` entre entradas de índice (`git ls-files -s -z`) y árbol de `HEAD` (`git ls-tree -r -z HEAD`), comprobación de bytes rastreados con `git hash-object --no-filters`, tipo y modo (archivo o symlink) y no rastreados mediante `git ls-files --others --exclude-standard -z`. Se repite recursivamente en cada submódulo, comprobando su `HEAD` contra el gitlink. Se rechazan los flags ocultos del índice (`assume-unchanged`/`skip-worktree`). Todas las invocaciones neutralizan fsmonitor, caché de no rastreados, hooks, protocolos y comandos externos. La observación no ejecuta filtros definidos en `.gitattributes`, `.git/config`, `config.worktree`, `include` o `includeIf`; tampoco confía en el resultado filtrado para declarar limpio un blob.
 - `observedAt`: momento de lectura local.
 
 Se rechaza abrir revisión si existen modificaciones sin confirmar o archivos no rastreados. Las operaciones de revisar, iniciar, enviar y comprobar vuelven a contrastar Git. Si cambia el commit, el árbol, el destino, la rama o la limpieza del worktree, el ciclo se **invalida durablemente**. No se reutilizan sus paquetes ni sus recibos.
 
-La inspección Git tiene una ventana temporal limitada, pero no es un sandbox de archivos ni puede impedir mutaciones hechas por un ejecutor externo. La verificación final siempre requiere una nueva observación.
+La comparación de blobs deliberadamente puede considerar sucio un archivo cuyo contenido en disco difiere del blob de `HEAD` por una transformación de atributos; es más estricta que un `status` filtrado. La inspección Git tiene una ventana temporal limitada, pero no es un sandbox de archivos ni puede impedir mutaciones hechas por un ejecutor externo. La verificación final siempre requiere una nueva observación.
 
 ## Cuatro lentes
 

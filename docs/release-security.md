@@ -1,5 +1,10 @@
 # Fase 5: auditoría de CI, seguridad del repositorio y release
 
+## Complemento de seguridad 0.4.1 (no publicado)
+
+La revisión Codex sobre `dc2c443` identificó filtros ejecutables en submódulos y en configuración Git por worktree/inclusiones, además de grants revocados que un respaldo antiguo podía reactivar. El observador Git ahora lee blobs y modos sin `git status` ni filtros; los grants revocados y nonces consumidos son monótonos frente al restore. Ni el consentimiento para perder datos elimina una revocación conocida. Una DB viva ilegible solo admite restore explícitamente forzado con todos los grants recuperados revocados. Sigue siendo obligatorio verificar CI y revisión independiente en el SHA final.
+
+
 **Fecha de corte:** 2026-11-04. **Repositorio:** `riquelmechile/ZanaLLaima`. **PR:** #1, rama `feat/gpt-native-solo-engine`. Esta evaluación documenta seguridad de entrega, no certifica que los agentes o el anfitrión GPT hayan sido probados realmente.
 
 ## Qué controla el CI

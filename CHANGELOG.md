@@ -1,5 +1,16 @@
 # Registro de cambios
 
+## [0.4.1] - No publicado
+
+Correcciones P1 de la revisión Codex sobre `dc2c443`; la revisión 4R independiente sigue `CHANGES_REQUESTED` y requiere nueva evaluación del SHA.
+
+- **P1-a, submódulos:** `observeGit()` dejó de usar `git status` y dejó de ejecutar filtros configurables antes de validar cada submódulo. Se comparan entradas del índice, árbol de `HEAD`, modos y contenido sin filtros de forma recursiva. Pruebas negativas con filtros maliciosos a uno y dos niveles.
+- **P1-b, config efectiva:** `git hash-object --no-filters` impide usar `config.worktree`, `include`, `includeIf` y `.gitattributes` para ejecutar filtros u ocultar contenido. El índice conserva el rechazo de flags ocultos, y todas las llamadas mantienen desactivados fsmonitor, hooks, caché y protocolos.
+- **P1-c, restauración:** antes del intercambio atómico, `restoreBackup()` conserva los nonces consumidos y todas las revocaciones de la base viva; ni `forceDataLoss` puede deshacerlas. Una base viva ilegible exige `forceDataLoss` y revoca todos los grants del respaldo. Cuatro negativos confirmados rojos antes del fix en CI #41956409060.
+- **Pruebas adicionales:** detección de symlinks, tipos, modos, gitlinks, paths y cambios de evidencia, sin rebajar umbrales de cobertura.
+- Candidato sin release, merge, tag ni deploy. Atestación real y nueva revisión independiente pendientes.
+
+
 ## [0.4.0] - No publicado
 
 Revisión independiente 4R del PR #1; candidato sin autorización de release.

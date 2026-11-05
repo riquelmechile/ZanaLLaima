@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
-import {chmodSync,copyFileSync,mkdirSync,mkdtempSync,rmSync,writeFileSync} from 'node:fs';
+import {chmodSync,copyFileSync,mkdirSync,mkdtempSync,readFileSync,readdirSync,rmSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {observeGit} from '../src/git-evidence.mjs';
@@ -70,4 +70,41 @@ test('R7 CRITICAL 1: objetos corruptos en alternates se rechazan',()=>{
     writeFileSync(join(f.repo,'.git','objects','info','alternates'),alt+'\n');
     shouldReject(f.repo);
   }finally{f.close();}
+});
+
+test('R7 CRITICAL 1: árbol raíz sustituido no conserva una identidad confiable',()=>{
+ const f=fixture();try{
+   const oldTree=git(f.repo,'rev-parse','HEAD^{tree}');
+   writeFileSync(join(f.repo,'src','app.mjs'),'different bytes\n');
+   git(f.repo,'add','src/app.mjs');
+   const nextTree=git(f.repo,'write-tree');
+   assert.notEqual(oldTree,nextTree);
+   chmodSync(objectFile(f.repo,oldTree),0o644);
+   copyFileSync(objectFile(f.repo,nextTree),objectFile(f.repo,oldTree));
+   shouldReject(f.repo);
+ }finally{f.close();}
+});
+test('R7 CRITICAL 1: commit sustituido no conserva SHA del contenido',()=>{
+ const f=fixture();try{
+   const old=git(f.repo,'rev-parse','HEAD');
+   const next=git(f.repo,'commit-tree',git(f.repo,'rev-parse','HEAD^{tree}'),'-m','different author payload');
+   assert.notEqual(old,next);
+   chmodSync(objectFile(f.repo,old),0o644);
+   copyFileSync(objectFile(f.repo,next),objectFile(f.repo,old));
+   shouldReject(f.repo);
+ }finally{f.close();}
+});
+test('R7 CRITICAL 1: mutación de un pack de objetos alcanzables se rechaza',()=>{
+ const f=fixture();try{
+   git(f.repo,'gc','--prune=now');
+   const packdir=join(f.repo,'.git','objects','pack');
+   const pack=readdirSync(packdir).find(name=>name.endsWith('.pack'));
+   assert.ok(pack,'Fixture debe producir pack');
+   const path=join(packdir,pack);
+   const bytes=readFileSync(path);
+   const pos=Math.floor(bytes.length*0.45);
+   bytes[pos]^=1;
+   chmodSync(path,0o644);writeFileSync(path,bytes);
+   shouldReject(f.repo);
+ }finally{f.close();}
 });

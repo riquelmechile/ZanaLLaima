@@ -434,3 +434,36 @@ test('R11 Codex P1c: el restore no devuelve rondas de revisión consumidas',asyn
     await rm(dir,{recursive:true,force:true});
   }
 });
+
+test('R11 Codex P1d: un reviewCount activo inválido se rechaza en el backup y se agota en el adopt forzado',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'r11-rc-'));
+  const file=join(dir,'state.json'),backup=join(dir,'backup.sqlite');
+  const saved={ZANA_STATE_FILE:process.env.ZANA_STATE_FILE,ZANA_RESTORE_OFFLINE:process.env.ZANA_RESTORE_OFFLINE};
+  process.env.ZANA_STATE_FILE=file;process.env.ZANA_RESTORE_OFFLINE='1';
+  try{
+    const {completeUnit}=await import('../src/core.mjs');
+    const {openReview}=await import('../src/review.mjs');
+    await transact(()=>createMission({objective:'reviewCount dañado',
+      authorization:{writesAllowed:false,allowedPaths:[]},budget:{maxReviewRounds:1},
+      units:[{id:'scan',effect:'READ',paths:['src'],instruction:'Leer el código fuente'}]}),file);
+    await transact(m=>{const p=startBatch(m).batch.packets[0];
+      completeUnit(m,p.unitId,p.token,{success:true,summary:'Lectura completa',evidence:['ok']},p.leaseGeneration);return m;},file);
+    await backupState(backup,file);
+    const damage=path=>{const db=new DatabaseSync(path);try{db.exec('UPDATE active_mission SET review_count=-1');}finally{db.close();}};
+    damage(backup);
+    await assert.rejects(restoreBackup(backup,file,{offline:true}),err=>err.code==='INVALID_LEDGER');
+    await assert.rejects(restoreBackup(backup,file,{offline:true,forceDataLoss:true}),err=>err.code==='INVALID_LEDGER');
+    const base=databasePath(file),id=randomUUID();
+    damage(base);checkpoint(base);
+    await rename(base,base+'.quarantine.'+id);
+    for(const s of ['-wal','-shm'])await rm(base+s,{force:true});
+    await assert.rejects(storageAdoptQuarantine(id,file,{confirm:true}),err=>err.code==='INVALID_LEDGER');
+    const adopted=await storageAdoptQuarantine(id,file,{confirm:true,forceDataLoss:true});
+    assert.equal(adopted.ledgerRebuilt,true);
+    assert.equal((await readState(file)).reviewCount,1,'consumo de rondas desconocido: queda agotado');
+    await assert.rejects(transact(m=>{openReview(m,{candidateSha:'d'.repeat(40)});return m;},file),/review correction limit/);
+  }finally{
+    for(const [k,v] of Object.entries(saved)){if(v===undefined)delete process.env[k];else process.env[k]=v;}
+    await rm(dir,{recursive:true,force:true});
+  }
+});

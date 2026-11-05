@@ -47,3 +47,44 @@ test('C1: completed code unit + REQUEST_CHANGES -> correction unit -> new ticket
     assert.equal((await f.call('zana_merge',{missionId},author)).state,'MERGED');
   }finally{await f.cleanup();}
 });
+
+test('C2: operator CLI loads the server env explicitly and never creates a stray DB',async()=>{
+  const {mkdtemp,writeFile,rm,access}=await import('node:fs/promises');
+  const {tmpdir}=await import('node:os');
+  const {join}=await import('node:path');
+  const {runCli}=await import('../src/cli.mjs');
+  const {ensureSchema,databasePath}=await import('../src/store.mjs');
+  const {audit}=await import('../src/remote-state.mjs');
+  const {setEnrollment}=await import('../src/oauth.mjs');
+  const dir=await mkdtemp(join(tmpdir(),'zana-cli-env-'));
+  const saved={...process.env};
+  try{
+    for(const k of ['ZANA_STATE_FILE','ZANA_OAUTH_DB','ZANA_ENV_FILE'])delete process.env[k];
+    process.env.HOME=join(dir,'empty-home');
+    await assert.rejects(runCli('remote-clients',[]),/ZANA_STATE_FILE/);
+    // A relative path is refused, and nothing is created in the working directory.
+    process.env.ZANA_STATE_FILE='rel/state.json';
+    await assert.rejects(runCli('remote-audit',[]),/absolut/);
+    await assert.rejects(access(join(process.cwd(),'rel')),/ENOENT/);
+    delete process.env.ZANA_STATE_FILE;
+    // The server's env file: absolute paths of the real DBs.
+    const state=join(dir,'server','state.json'),oauthDb=join(dir,'server','oauth.sqlite');
+    await ensureSchema(state);
+    setEnrollment(oauthDb,0);
+    await audit({caller:{host:'zana-chatgpt',sessionId:'server-session'},tool:'zana_probe',outcome:'OK',args:{}},state);
+    const envFile=join(dir,'zanallaima.env');
+    await writeFile(envFile,'# server env\nZANA_STATE_FILE='+state+'\nZANA_OAUTH_DB="'+oauthDb+'"\n');
+    const items=(await runCli('remote-audit',['--env-file',envFile])).items;
+    assert.ok(items.some(x=>x.tool==='zana_probe'),'operates on the server DB');
+    assert.equal((await runCli('remote-clients',['--env-file',envFile])).clients.length,0);
+    await assert.rejects(runCli('remote-revoke',['zc_'+'a'.repeat(24),'--env-file',envFile]),/CLIENT_NOT_FOUND/);
+    // A missing DB is an error, not a fresh empty DB.
+    await writeFile(envFile,'ZANA_STATE_FILE='+join(dir,'nope','state.json')+'\nZANA_OAUTH_DB='+oauthDb+'\n');
+    await assert.rejects(runCli('remote-audit',['--env-file',envFile]),/does not exist/);
+    await assert.rejects(access(databasePath(join(dir,'nope','state.json'))),/ENOENT/);
+  }finally{
+    for(const k of Object.keys(process.env))if(!(k in saved))delete process.env[k];
+    Object.assign(process.env,saved);
+    await rm(dir,{recursive:true,force:true});
+  }
+});

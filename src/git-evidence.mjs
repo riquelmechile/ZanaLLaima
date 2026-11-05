@@ -241,7 +241,13 @@ const privateIgnoreDir=(repo,index)=>{
     if(!st.isFile()||st.isSymbolicLink())deny('Tracked .gitignore must be a regular file');
     const target=join(worktree,path);
     mkdirSync(dirname(target),{recursive:true});
-    writeFileSync(target,safeFile(source,st),{mode:0o600});
+    // A tracked ignore file must be IDENTICAL to the staged blob at the
+    // moment its bytes are used. Never copy an unverified ignore snapshot:
+    // a racing attacker could hide a different untracked path.
+    const ignoreBytes=safeFile(source,st);
+    if(hash('blob',ignoreBytes)!==index.get(path).sha)
+      deny('Tracked .gitignore differs from index during shadow construction: '+path);
+    writeFileSync(target,ignoreBytes,{mode:0o600});
   }
   return {holder,gitdir,worktree};
 };

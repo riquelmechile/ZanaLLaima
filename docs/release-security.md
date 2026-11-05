@@ -1,5 +1,7 @@
 # Fase 5: auditoría de CI, seguridad del repositorio y release
 
+**Versión del proyecto: ZanaLLaima 0.4.1.** Firma CI por `workflow_run` en `ci-attestation.yml`, política **main-only** y reviewer humano requerido en el environment `ci-attestation`.
+
 ## Complemento de seguridad 0.4.1 (no publicado)
 
 La revisión Codex sobre `dc2c443` identificó filtros ejecutables en submódulos y en configuración Git por worktree/inclusiones, además de grants revocados que un respaldo antiguo podía reactivar. El observador Git ahora lee blobs y modos sin `git status` ni filtros; los grants revocados y nonces consumidos son monótonos frente al restore. Ni el consentimiento para perder datos elimina una revocación conocida. Una DB viva ilegible solo admite restore explícitamente forzado con todos los grants recuperados revocados. Sigue siendo obligatorio verificar CI y revisión independiente en el SHA final.
@@ -28,7 +30,7 @@ El comando `npm run release:preflight` valida localmente la integridad estática
 | GitHub `main` sin protección (hallazgo inicial) | **RESUELTO** | Branch protection activada con sesión administrativa; GET de GitHub confirma `protected=true` y tres checks obligatorios | ZL-026 verificado |
 | Escritor externo puede eludir el controlador MCP | **BLOCKER** | Firmas y rutas verificadas al reservar, no en toda mutación del ejecutor real; riesgo TOCTOU/symlink | Pendiente ZL-004 |
 | Host GPT y subagentes no autenticados | **BLOCKER** | No se ha conectado ni medido un host real; no inferir modelo o independencia | Pendiente ZL-018 |
-| Atentación CI preparada pero sin firma real | **HIGH** | Emisor y job `attest` implementados, aún sin llave pública auténtica, secreto o environment protegido | PASO HUMANO |
+| Atestación CI preparada pero sin firma real | **HIGH** | Firmante `ci-attestation.yml` en `workflow_run` de `main`, pendiente llave pública auténtica, secreto, reviewer y environment protegido | PASO HUMANO |
 | Sin revisión de PR verdaderamente independiente | **HIGH** | PR en borrador; una sola cuenta no convierte autocomprobaciones en revisión independiente | Pendiente |
 | Planificador incremental y métricas (Fase 4) | **RESUELTO LOCALMENTE** | Reposición READ, writer único y cuotas SQLite v4 con tests y benchmark; throughput del host GPT todavía no medido | E2E host pendiente |
 | Dependencias y acciones sin bloqueo previo | **HIGH, resuelto localmente** | Lockfile npm, `npm ci`, pins SHA, pruebas en matriz y auditoría de producción | Implementado |

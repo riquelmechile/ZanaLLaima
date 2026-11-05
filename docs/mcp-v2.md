@@ -69,8 +69,10 @@ Entradas: `unitId`, `token`, `leaseGeneration`, `path` relativo y uno de `conten
 
 La herramienta no garantiza que otras capacidades del host hayan sido deshabilitadas. Hay que ejecutar el agente con workspace read-only y otorgar escritura exclusivamente al proceso MCP, mediante SO o contenedor. Ver [seguridad y ciclo de vida](safety-lifecycle.md).
 
-## Emisor de atestación CI (preparado, no conectado)
+## Emisor de atestación CI (workflow_run, main-only)
 
-El script `scripts/ci-attest.mjs` produce un sobre Ed25519 `CI_RESULT` para el SHA exacto, con rama/base, runId y vigencia máxima de 24 horas. El job de Actions `attest` depende de los tres jobs `test`, exige el environment `ci-attestation` y únicamente se considera para PR del mismo repositorio o pushes a `main` cuando la variable `ZANA_CI_ATTESTATION_READY` vale `true`. Sin secreto, falla cerrado; mientras no se active, queda omitido. La llave privada nunca pasa por el modelo.
+**Versión del proyecto: ZanaLLaima 0.4.1.** El sobre Ed25519 \`CI_RESULT\` es producido por \`scripts/ci-attest.mjs\`, ejecutado por \`.github/workflows/ci-attestation.yml\` mediante \`workflow_run\` una vez que concluye \`CI\`. El script confiable se carga exclusivamente desde \`main\` (policy **main-only**) y consulta la API de GitHub para verificar los jobs, SHA, árbol, base, runId y conclusión. Jamás se ejecuta código o dependencias del HEAD del PR con \`ZANA_CI_SIGNING_KEY\`.
 
-El archivo `keys/ci-verifier.pub` sigue siendo un **marcador de configuración**, no una llave PEM válida. **PASO HUMANO:** Zana genera la pareja Ed25519 y sustituye el marcador por la llave pública real. Luego se configura `ZANA_CI_PUBLIC_KEY_PATH` para el comando `delivery-check`. El resultado de la firma sigue separado de la aprobación del operador. Ver [auditoría de seguridad](release-security.md).
+El environment \`ci-attestation\` exige un reviewer requerido \`sebastianriquelme95-max\`, que pertenece al mismo dueño del autor; la separación de cuentas no constituye independencia organizacional. La configuración debe impedir self-review y mantener solo \`main\` como deployment policy. El workflow permanece desactivado hasta configurar el secreto, la llave pública real y \`ZANA_CI_ATTESTATION_READY=true\` con controles humanos. La llave \`keys/ci-verifier.pub\` sigue siendo placeholder hasta entonces.
+
+Para verificar el run firmado se usa \`gh run list --workflow ci-attestation.yml\`, \`gh run view\` y la descarga del artifact firmado. Ningún sobre CI sustituye la aprobación separada del operador ni autoriza merge o despliegue. Ver [operator-checklist.md](operator-checklist.md) y [release-security.md](release-security.md).

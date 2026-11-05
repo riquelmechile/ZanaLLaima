@@ -428,52 +428,106 @@ export async function backupState(destination,file=statePath()) {
   } finally {db.close();await rm(temp,{force:true});}
 }
 
-export async function restoreBackup(source,file=statePath(),{offline=false}={}){
-  if (!offline || process.env.ZANA_RESTORE_OFFLINE!=='1')
+// An offline restore must not erase later receipts or an uncertain WRITE.
+// Validate and migrate a temporary copy before quarantining the live database.
+function receiptIdentitySet(db){
+  const specs=[
+    ['work_receipts',['mission_id','unit_id','token','generation']],
+    ['review_receipts',['review_id','lens_id','token']],
+    ['write_effect_receipts',['mission_id','unit_id','token','generation','effect_id']]
+  ];
+  const keys=new Set();
+  for(const [table,columns] of specs){
+    const values=db.prepare('SELECT '+columns.join(',')+' FROM '+table).all();
+    for(const row of values)keys.add(table+':'+json(columns.map(c=>row[c])));
+  }
+  return keys;
+}
+
+export async function restoreBackup(source,file=statePath(),
+  {offline=false,forceDataLoss=false,afterQuarantine}={}){
+  if(!offline||process.env.ZANA_RESTORE_OFFLINE!=='1')
     fail('Restoration requires an explicit offline operator mode');
-  const path=databasePath(file), src=resolve(source);
-  if (src===path) fail('Backup source cannot be the active database');
-  const db=connect(src,true);
-  try {
-    assertHealthy(db);
-    const m=load(db);
-    if (!m) fail('Backup has no mission');
-    if (m.units.some(x=>x.status==='RUNNING') ||
-        m.review?.lenses?.some(x=>x.state==='RUNNING'))
-      fail('Backup contains running work; reconcile it before restoring');
-  } finally {db.close();}
+  const path=databasePath(file),src=resolve(source);
+  if(src===path)fail('Backup source cannot be the active database');
+  if(forceDataLoss!==false&&forceDataLoss!==true)
+    fail('forceDataLoss must be an explicit boolean');
+  await refuseInterruptedRestore(file);
   await mkdir(dirname(path),{recursive:true,mode:0o700});
-  const marker=path+'.restore-pending', quarantine=path+'.quarantine.'+randomUUID();
-  const hold=await open(marker,'wx',0o600);
-  await hold.close();
+  const temp=path+'.restoring.'+randomUUID();
+  const marker=path+'.restore-pending',quarantine=path+'.quarantine.'+randomUUID();
   const moved=[];
-  try {
-    for(const suffix of ['','-wal','-shm']){
-      if(await exists(path+suffix)){
-        await rename(path+suffix,quarantine+suffix);
-        moved.push(suffix);
+  let installed=false;
+  try{
+    // Read the source *without* the current-version-only connect(readonly)
+    // restriction; never mutate the operator's source backup.
+    const sourceDb=new DatabaseSync(src,{readOnly:true});
+    try{
+      assertHealthy(sourceDb);
+      const version=sourceDb.prepare('PRAGMA user_version').get().user_version;
+      if(version<1||version>SCHEMA_VERSION)fail('Unsupported backup schema');
+      await backup(sourceDb,temp);
+    }finally{sourceDb.close();}
+    await chmod(temp,0o600);
+    // Run the same ordered, transactional migrations as ordinary connect().
+    const migrating=connect(temp);
+    migrating.close();
+    const candidate=connect(temp,true);
+    try{
+      assertHealthy(candidate);
+      const m=load(candidate);
+      if(!m)fail('Backup has no mission');
+      if(m.units.some(x=>x.status==='RUNNING')||
+         m.review?.lenses?.some(x=>x.state==='RUNNING'))
+        fail('Backup contains running work; reconcile it before restoring');
+      if(await exists(path)){
+        const live=connect(path,true);
+        try{
+          assertHealthy(live);
+          const old=load(live);
+          if(!forceDataLoss && old?.units.some(x=>
+              x.status==='OUTCOME_UNKNOWN'||x.run?.effectIntent?.status==='INTENT_DURABLE'))
+            fail('Live OUTCOME_UNKNOWN write or uncertain intent prevents restore without --force-data-loss');
+          if(!forceDataLoss){
+            const retained=receiptIdentitySet(candidate);
+            for(const key of receiptIdentitySet(live)){
+              if(!retained.has(key))
+                fail('Restoring backup would discard newer durable receipt without --force-data-loss');
+            }
+          }
+        }finally{live.close();}
       }
+    }finally{candidate.close();}
+    const lock=await open(marker,'wx',0o600);
+    await lock.close();
+    try{
+      for(const suffix of ['','-wal','-shm']){
+        if(await exists(path+suffix)){
+          await rename(path+suffix,quarantine+suffix);
+          moved.push(suffix);
+        }
+      }
+      if(afterQuarantine)await afterQuarantine(); // internal fault injection only
+      await rename(temp,path);installed=true;
+      await rm(marker);
+      return {restored:true,databasePath:path,quarantinePath:moved.length?quarantine:null,
+        note:'Operator must retain the quarantined database and reconcile historical receipts'};
+    }catch(error){
+      try{
+        if(installed)await rm(path,{force:true});
+        for(const suffix of moved){
+          await rename(quarantine+suffix,path+suffix);
+        }
+        await rm(marker,{force:true});
+      }catch(rollbackError){
+        fail('Restore rollback failed; inspect quarantine and restore marker: '+
+          error.message+'; '+rollbackError.message);
+      }
+      throw error;
     }
-    const temp=path+'.restoring.'+randomUUID();
-    try {
-      const source=connect(src,true);
-      try { await backup(source,temp); } finally { source.close(); }
-      await chmod(temp,0o600);
-      const check=connect(temp,true);
-      try {assertHealthy(check);if (!load(check))fail('Restored database has no mission');}
-      finally {check.close();}
-      await rename(temp,path);
-    } finally {await rm(temp,{force:true});}
-    await rm(marker);
-    return {restored:true,databasePath:path,quarantinePath:moved.length?quarantine:null,
-      note:'Previous database files retained for explicit operator recovery'};
-  }catch(e){
-    if(!await exists(path) && moved.includes('')){
-      await rename(quarantine,path);
-      for(const suffix of ['-wal','-shm'])if(moved.includes(suffix))await rename(quarantine+suffix,path+suffix);
-    }
-    await rm(marker,{force:true});
-    throw e;
+  }finally{
+    for(const suffix of ['','-wal','-shm'])
+      await rm(temp+suffix,{force:true}).catch(()=>{});
   }
 }
 

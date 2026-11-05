@@ -58,7 +58,11 @@ export async function parseCliCommand(command,args=[],{json=readJson,text=readTe
   else if(command==='mission-history')
     input={limit:args[0]?Number(args[0]):25,before:args[1]?Number(args[1]):null};
   else if(command==='storage-backup')input={destination:args[0]};
-  else if(command==='storage-restore')input={source:args[0],offline:true};
+  else if(command==='storage-restore'){
+    if(args.length>2 || (args[1]!==undefined&&args[1]!=='--force-data-loss'))
+      throw Error('Only --force-data-loss is allowed for offline restore');
+    input={source:args[0],offline:true,forceDataLoss:args[1]==='--force-data-loss'};
+  }
   else if(!noArgs.has(command))throw Error(usage);
   return {command,action:aliases[command]??command,input};
 }

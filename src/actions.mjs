@@ -20,7 +20,8 @@ export const operations = {
   storageReviews: async (args = {}) => readReviewArchive(args),
   storageMigrate: async () => ({ mission: publicStatus(await migrateLegacy()), backend: await storageStatus() }),
   storageBackup: async ({ destination }) => backupState(destination),
-  storageRestore: async ({ source, offline = false }) => restoreBackup(source, undefined, { offline }),
+  storageRestore: async ({ source, offline = false, forceDataLoss = false }) =>
+    restoreBackup(source, undefined, { offline,forceDataLoss }),
   init: async ({ spec }) => {
     const result = await transact(existing => {
       if (existing) throw Error('Mission exists; finish or archive it before starting another');

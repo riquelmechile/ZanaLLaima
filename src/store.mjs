@@ -1,7 +1,7 @@
 import { DatabaseSync, backup } from 'node:sqlite';
 import { constants } from 'node:fs';
-import { access, chmod, copyFile, link, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { access, chmod, copyFile, link, mkdir, open, readFile, readdir, rename, rm, stat, lstat } from 'node:fs/promises';
+import { basename, dirname, join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { operatorPublicKey, verifySignedAction, verifyStoredGrant } from './operator.mjs';
 import { reconcileWrite, revokeRunningWrites } from './lifecycle.mjs';
@@ -428,6 +428,130 @@ export async function backupState(destination,file=statePath()) {
   } finally {db.close();await rm(temp,{force:true});}
 }
 
+// Security facts are monotone across offline restore. A missing live DB after
+// SIGKILL is not evidence that no previous authorization history existed.
+class RestoreGuardError extends Error {
+  constructor(code,message){super(message);this.name='RestoreGuardError';this.code=code;}
+}
+const guardRestore=(code,message)=>{throw new RestoreGuardError(code,message);};
+async function latestQuarantine(path){
+  const directory=dirname(path),prefix=basename(path)+'.quarantine.';
+  const entries=await readdir(directory);
+  const candidates=[];
+  for(const name of entries){
+    if(!name.startsWith(prefix)||!/^[0-9a-f-]{36}$/i.test(name.slice(prefix.length)))continue;
+    const candidate=join(directory,name);
+    const info=await lstat(candidate);
+    if(info.isSymbolicLink()||!info.isFile())
+      guardRestore('UNSAFE_QUARANTINE','Restore quarantine is not a regular file');
+    candidates.push({path:candidate,mtimeMs:(await stat(candidate)).mtimeMs});
+  }
+  candidates.sort((a,b)=>b.mtimeMs-a.mtimeMs||b.path.localeCompare(a.path));
+  return {path:candidates[0]?.path??null,orphanRestoring:entries.some(x=>
+    x.startsWith(basename(path)+'.restoring.'))};
+}
+async function previousLiveDatabase(path){
+  if(await exists(path))return {path,quarantine:false};
+  const pending=await latestQuarantine(path);
+  if(pending.path)return {path:pending.path,quarantine:true};
+  if(pending.orphanRestoring)
+    guardRestore('ORPHAN_RESTORING','Orphaned restore candidate without live database; use offline recovery');
+  return {path:null,quarantine:false};
+}
+function inspectLive(candidate,source,forceDataLoss){
+  if(!source.path){
+    if(!forceDataLoss)guardRestore('BLIND_RESTORE','No previous database known; explicit --force-data-loss required');
+    return {blind:true,actions:[],revoked:[],epoch:null};
+  }
+  let live;
+  try{
+    live=connect(source.path,true);assertHealthy(live);
+    const old=load(live);
+    if(!forceDataLoss&&old?.units.some(x=>
+        x.status==='OUTCOME_UNKNOWN'||x.run?.effectIntent?.status==='INTENT_DURABLE'))
+      guardRestore('UNCERTAIN_WRITE','Live OUTCOME_UNKNOWN write or uncertain intent prevents restore without --force-data-loss');
+    if(!forceDataLoss){
+      const retained=receiptIdentitySet(candidate);
+      for(const key of receiptIdentitySet(live))
+        if(!retained.has(key))
+          guardRestore('NEWER_RECEIPT','Restoring backup would discard newer durable receipt without --force-data-loss');
+    }
+    return {blind:false,
+      actions:live.prepare('SELECT nonce,mission_id,kind,created_at FROM operator_actions').all(),
+      revoked:live.prepare('SELECT grant_id,mission_id,payload,signature,fingerprint,revoked,created_at FROM operator_grants WHERE revoked=1').all(),
+      epoch:live.prepare("SELECT value FROM metadata WHERE key='restore_epoch'").get()?.value??null};
+  }catch(error){
+    if(error instanceof RestoreGuardError)throw error;
+    if(source.quarantine)
+      guardRestore('QUARANTINE_UNREADABLE','Quarantined live database cannot be inspected; use storage-restore-abort');
+    if(!forceDataLoss)
+      guardRestore('LIVE_UNREADABLE','Live database cannot be inspected; explicit --force-data-loss required');
+    return {blind:true,actions:[],revoked:[],epoch:null};
+  }finally{if(live)live.close();}
+}
+function mergeSecurityFacts(db,security){
+  if(security.blind){
+    db.exec('UPDATE operator_grants SET revoked=1');
+  }else{
+    const findNonce=db.prepare('SELECT nonce,mission_id,kind,created_at FROM operator_actions WHERE nonce=?');
+    const putNonce=db.prepare('INSERT INTO operator_actions(nonce,mission_id,kind,created_at) VALUES(?,?,?,?)');
+    for(const row of security.actions){
+      const old=findNonce.get(row.nonce);
+      if(old){
+        if(old.mission_id!==row.mission_id||old.kind!==row.kind||old.created_at!==row.created_at)
+          guardRestore('NONCE_COLLISION','Operator nonce collision while restoring; refusing rollback');
+      }else putNonce.run(row.nonce,row.mission_id,row.kind,row.created_at);
+    }
+    const findGrant=db.prepare('SELECT grant_id,mission_id,payload,signature,fingerprint,created_at FROM operator_grants WHERE grant_id=?');
+    const putRevoked=db.prepare('INSERT INTO operator_grants(grant_id,mission_id,payload,signature,fingerprint,revoked,created_at) VALUES(?,?,?,?,?,1,?)');
+    const revoke=db.prepare('UPDATE operator_grants SET revoked=1 WHERE grant_id=?');
+    for(const row of security.revoked){
+      const old=findGrant.get(row.grant_id);
+      if(old){
+        if(old.mission_id!==row.mission_id||old.payload!==row.payload||
+           old.signature!==row.signature||old.fingerprint!==row.fingerprint||
+           old.created_at!==row.created_at)
+          guardRestore('GRANT_COLLISION','Operator grant identity collision while restoring');
+        revoke.run(row.grant_id);
+      }else putRevoked.run(row.grant_id,row.mission_id,row.payload,
+        row.signature,row.fingerprint,row.created_at);
+    }
+  }
+  // On blind recovery revoke every grant and fence old signed actions, even
+  // if a nonce was never stored in the lost live database.
+  const existing=db.prepare("SELECT value FROM metadata WHERE key='restore_epoch'").get()?.value;
+  const floor=security.blind?new Date().toISOString():security.epoch;
+  const epoch=[existing,floor].filter(Boolean).sort().at(-1);
+  if(epoch)db.prepare("INSERT INTO metadata(key,value) VALUES('restore_epoch',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(epoch);
+}
+export async function storageRestoreAbort(file=statePath()){
+  if(process.env.ZANA_RESTORE_OFFLINE!=='1')
+    guardRestore('OFFLINE_REQUIRED','storage-restore-abort requires explicit offline operator mode');
+  const path=databasePath(file),marker=path+'.restore-pending';
+  if(!await exists(marker))guardRestore('NO_MARKER','No interrupted restore marker');
+  const previous=await latestQuarantine(path);
+  if(!previous.path)guardRestore('NO_QUARANTINE','No readable quarantine available to abort restore');
+  const live=connect(previous.path,true);
+  try{assertHealthy(live);}finally{live.close();}
+  // Keep marker until all files are back. Readers and writers refuse to open
+  // a partly recovered database.
+  const displaced=path+'.aborted.'+randomUUID();
+  const moved=[];
+  try{
+    for(const suffix of ['','-wal','-shm']){
+      if(await exists(path+suffix)){await rename(path+suffix,displaced+suffix);moved.push(suffix);}
+    }
+    for(const suffix of ['-wal','-shm','']){
+      if(await exists(previous.path+suffix))await rename(previous.path+suffix,path+suffix);
+    }
+    await rm(marker,{force:true});
+    return {aborted:true,databasePath:path,displacedPath:moved.length?displaced:null};
+  }catch(error){
+    // Preserve the marker and every available quarantine for manual recovery.
+    guardRestore('ABORT_INCOMPLETE','Offline restore abort incomplete; inspect marker and quarantine: '+error.message);
+  }
+}
+
 // An offline restore must not erase later receipts or an uncertain WRITE.
 // Validate and migrate a temporary copy before quarantining the live database.
 function receiptIdentitySet(db){
@@ -483,71 +607,11 @@ export async function restoreBackup(source,file=statePath(),
       if(m.units.some(x=>x.status==='RUNNING')||
          m.review?.lenses?.some(x=>x.state==='RUNNING'))
         fail('Backup contains running work; reconcile it before restoring');
-      let liveUnreadable=false;
-      let liveActions=[],liveRevoked=[];
-      if(await exists(path)){
-        let live;
-        try{
-          live=connect(path,true);
-          assertHealthy(live);
-          const old=load(live);
-          if(!forceDataLoss && old?.units.some(x=>
-              x.status==='OUTCOME_UNKNOWN'||x.run?.effectIntent?.status==='INTENT_DURABLE'))
-            fail('Live OUTCOME_UNKNOWN write or uncertain intent prevents restore without --force-data-loss');
-          if(!forceDataLoss){
-            const retained=receiptIdentitySet(candidate);
-            for(const key of receiptIdentitySet(live)){
-              if(!retained.has(key))
-                fail('Restoring backup would discard newer durable receipt without --force-data-loss');
-            }
-          }
-          liveActions=live.prepare('SELECT nonce,mission_id,kind,created_at FROM operator_actions').all();
-          liveRevoked=live.prepare('SELECT grant_id,mission_id,payload,signature,fingerprint,revoked,created_at FROM operator_grants WHERE revoked=1').all();
-        }catch(error){
-          // A failed security read cannot be turned into a permissive restore.
-          // With explicit data-loss consent, revoke EVERY restored grant.
-          if(!forceDataLoss){
-            if(/OUTCOME_UNKNOWN|newer durable receipt/.test(error.message))throw error;
-            fail('Live database cannot be inspected; explicit --force-data-loss required');
-          }
-          liveUnreadable=true;
-        }finally{if(live)live.close();}
-      }
+      const sourceLive=await previousLiveDatabase(path);
+      const security=inspectLive(candidate,sourceLive,forceDataLoss);
       candidate.exec('BEGIN IMMEDIATE');
       try{
-        if(liveUnreadable){
-          candidate.exec('UPDATE operator_grants SET revoked=1');
-        }else{
-          const findNonce=candidate.prepare(
-            'SELECT nonce,mission_id,kind,created_at FROM operator_actions WHERE nonce=?');
-          const putNonce=candidate.prepare(
-            'INSERT INTO operator_actions(nonce,mission_id,kind,created_at) VALUES(?,?,?,?)');
-          for(const row of liveActions){
-            const old=findNonce.get(row.nonce);
-            if(old){
-              if(old.mission_id!==row.mission_id||old.kind!==row.kind||
-                 old.created_at!==row.created_at)
-                fail('Operator nonce collision while restoring; refusing rollback');
-            }else putNonce.run(row.nonce,row.mission_id,row.kind,row.created_at);
-          }
-          const findGrant=candidate.prepare(
-            'SELECT grant_id,mission_id,payload,signature,fingerprint,created_at FROM operator_grants WHERE grant_id=?');
-          const putRevoked=candidate.prepare(
-            'INSERT INTO operator_grants(grant_id,mission_id,payload,signature,fingerprint,revoked,created_at) VALUES(?,?,?,?,?,1,?)');
-          const revoke=candidate.prepare(
-            'UPDATE operator_grants SET revoked=1 WHERE grant_id=?');
-          for(const row of liveRevoked){
-            const old=findGrant.get(row.grant_id);
-            if(old){
-              if(old.mission_id!==row.mission_id||old.payload!==row.payload||
-                 old.signature!==row.signature||old.fingerprint!==row.fingerprint||
-                 old.created_at!==row.created_at)
-                fail('Operator grant identity collision while restoring');
-              revoke.run(row.grant_id);
-            }else putRevoked.run(row.grant_id,row.mission_id,row.payload,
-              row.signature,row.fingerprint,row.created_at);
-          }
-        }
+        mergeSecurityFacts(candidate,security);
         candidate.exec('COMMIT');
       }catch(error){rollbackIfOpen(candidate);throw error;}
     }finally{candidate.close();}
@@ -563,7 +627,7 @@ export async function restoreBackup(source,file=statePath(),
       if(afterQuarantine)await afterQuarantine(); // internal fault injection only
       await rename(temp,path);installed=true;
       await rm(marker);
-      return {restored:true,databasePath:path,quarantinePath:moved.length?quarantine:null,
+      return {restored:true,databasePath:path,quarantinePath:moved.length?quarantine:sourceLive.path&&sourceLive.quarantine?sourceLive.path:null,
         note:'Operator must retain the quarantined database and reconcile historical receipts'};
     }catch(error){
       try{
@@ -620,6 +684,10 @@ export async function applyOperatorAction(envelope,file=statePath()){
       if(!previous)fail('No active mission to authorize');
       const {key,fingerprint}=await operatorPublicKey();
       const p=verifySignedAction(envelope,previous,key);
+      const epoch=db.prepare("SELECT value FROM metadata WHERE key='restore_epoch'").get()?.value;
+      if(epoch&&Date.parse(p.issuedAt)<=Date.parse(epoch))
+        fail('Operator action issuedAt precedes restore epoch; obtain a new signature');
+
       if(db.prepare('SELECT nonce FROM operator_actions WHERE nonce=?').get(p.nonce))
         fail('Operator action nonce already consumed');
       const next=structuredClone(previous);

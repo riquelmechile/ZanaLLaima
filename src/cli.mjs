@@ -3,13 +3,13 @@ import {readFile} from 'node:fs/promises';
 import {resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {operations} from './actions.mjs';
-import {applyOperatorAction} from './store.mjs';
+import {applyOperatorAction,storageRestoreAbort} from './store.mjs';
 
-const usage='Commands: operator-import, heartbeat, recover-expired, retry, cancel, close, archive, mission-history, authorization-status, storage-status, storage-history, storage-reviews, storage-migrate, storage-backup, storage-restore, profile, init, status, next, start, complete, apply-write, review-open, review-next, review-start, review-submit, review-check, review-status, delivery-check';
+const usage='Commands: operator-import, heartbeat, recover-expired, retry, cancel, close, archive, mission-history, authorization-status, storage-status, storage-history, storage-reviews, storage-migrate, storage-backup, storage-restore, storage-restore-abort, profile, init, status, next, start, complete, apply-write, review-open, review-next, review-start, review-submit, review-check, review-status, delivery-check';
 const readJson=async path=>JSON.parse(await readFile(path,'utf8'));
 const readText=async path=>readFile(path,'utf8');
 const noArgs=new Set(['status','profile','review-status','review-check','storage-status',
-  'storage-migrate','authorization-status','recover-expired','cancel','close','archive']);
+  'storage-migrate','storage-restore-abort','authorization-status','recover-expired','cancel','close','archive']);
 
 const aliases={
   'review-open':'reviewOpen','review-submit':'reviewSubmit',
@@ -70,6 +70,7 @@ export async function parseCliCommand(command,args=[],{json=readJson,text=readTe
 export async function runCli(command,args=[],{json,text}={}){
   const parsed=await parseCliCommand(command,args,{json,text});
   if(parsed.command==='operator-import')return applyOperatorAction(parsed.input.envelope);
+  if(parsed.command==='storage-restore-abort')return storageRestoreAbort();
   const operation=operations[parsed.action];
   if(typeof operation!=='function')throw Error(usage);
   return operation(parsed.input);

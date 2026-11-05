@@ -481,8 +481,13 @@ export async function restoreBackup(source,file=statePath(),
          m.review?.lenses?.some(x=>x.state==='RUNNING'))
         fail('Backup contains running work; reconcile it before restoring');
       if(await exists(path)){
-        const live=connect(path,true);
-        try{
+        let live;
+        try{live=connect(path,true);}
+        catch(error){
+          if(!forceDataLoss)
+            fail('Live database cannot be inspected; explicit --force-data-loss required');
+        }
+        if(live)try{
           assertHealthy(live);
           const old=load(live);
           if(!forceDataLoss && old?.units.some(x=>

@@ -127,8 +127,11 @@ test('corrupt database is never silently reset, recovery needs explicit operator
     await assert.rejects(readState(f.file));
     await assert.rejects(restoreBackup(backupFile,f.file),/explicit offline/);
     process.env.ZANA_RESTORE_OFFLINE='1';
-    try{await restoreBackup(backupFile,f.file,{offline:true});}
-    finally{delete process.env.ZANA_RESTORE_OFFLINE;}
+    try{
+      await assert.rejects(restoreBackup(backupFile,f.file,{offline:true}),
+        /--force-data-loss/);
+      await restoreBackup(backupFile,f.file,{offline:true,forceDataLoss:true});
+    }finally{delete process.env.ZANA_RESTORE_OFFLINE;}
     assert.equal((await storageStatus(f.file)).integrity,'ok');
   }finally{await f.cleanup();}
 });

@@ -289,9 +289,13 @@ function inspect(root,expectedSha,parentGitDir,depth=0){
       try{listing=readdirSync(dir,{withFileTypes:true});}
       catch{deny('Unable to enumerate worktree directory');}
       // One isolated ignore-query per directory, not per file.
+      // check-ignore must see real shadow directories for negative patterns.
+      // Check each directory WITHOUT a trailing slash; Git then evaluates
+      // negations against its actual path type, not an absent shadow path.
       const paths=listing.filter(e=>e.name!=='.git').map(e=>{
         const p=prefix?prefix+'/'+e.name:e.name;
-        return p+(e.isDirectory()?'/':'');
+        if(e.isDirectory())mkdirSync(join(ignoreGit.worktree,p),{recursive:true});
+        return p;
       });
       const ignored=ignoredNames(ignoreGit.worktree,ignoreGit.gitdir,paths);
       for(const ent of listing){
@@ -300,7 +304,7 @@ function inspect(root,expectedSha,parentGitDir,depth=0){
         if(!safePath(path))deny('Unsafe path in worktree');
         const abs=join(root,path),st=lstatSync(abs),isDir=st.isDirectory();
         const tracked=index.has(path)||trackedDirs.has(path);
-        if(!tracked&&ent.name!=='.gitignore'&&ignored.has(path+(isDir?'/':'')))continue;
+        if(!tracked&&ent.name!=='.gitignore'&&ignored.has(path))continue;
         if(isDir){
           if(index.get(path)?.mode==='160000'){
             const nested=realpathSync(abs);

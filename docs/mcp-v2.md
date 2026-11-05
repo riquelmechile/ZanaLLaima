@@ -1,10 +1,10 @@
-# MCP v2: integración local y contrato del anfitrión
+# MCP v2: modos stdio y remoto, y contrato del anfitrión
 
 ## Propósito y estado
 
-Esta implementación reemplaza el transporte MCP `stdio` construido manualmente por el **SDK oficial TypeScript v2**, fijado en `@modelcontextprotocol/server@2.4.0`. Usa `@modelcontextprotocol/client@2.4.0` en las pruebas y `zod@4.6.7` para definir y validar los argumentos. La interfaz sigue siendo **local, sin HTTP, sin servidor remoto y sin llamadas a proveedores de inferencia**.
+Esta implementación reemplaza el transporte MCP `stdio` construido manualmente por el **SDK oficial TypeScript v2**, fijado en `@modelcontextprotocol/server@2.4.0`. Usa `@modelcontextprotocol/client@2.4.0` en las pruebas y `zod@4.6.7` para definir y validar los argumentos. El modo **stdio** es local y sin HTTP. El modo **remoto** (Streamable HTTP + OAuth, ver abajo) sirve a la app de ChatGPT. Ninguno llama a proveedores de inferencia.
 
-El SDK soporta la especificación MCP 2026-07-28 y negociación con clientes compatibles con versiones anteriores. El programa expone un catálogo de **24 herramientas**, incluyendo `zana_capability_status`. La instalación real en ChatGPT y los lanzamientos de subagentes **NO** forman parte de esta fase de desarrollo.
+El SDK soporta la especificación MCP 2026-07-28 y negociación con clientes compatibles con versiones anteriores. En stdio el catálogo tiene **24 herramientas**, incluyendo `zana_capability_status`; en remoto tiene 25 (tabla abajo). La conexión real con ChatGPT la ejecuta el operador (`docs/host-e2e-remote.md`).
 
 Fuentes normativas del SDK:
 - https://ts.sdk.modelcontextprotocol.io/v2/
@@ -51,9 +51,40 @@ El manejador consulta `ctx.mcpReq.signal.aborted` antes de despachar. **La cance
 
 No existe todavía una prueba de una cuenta ChatGPT real, ni evidencia de modelo/esfuerzo real, ni subagentes nativos lanzados. Estos criterios corresponden a **ZL-018** y siguen abiertos por decisión del operador.
 
-## Frontera remota (ZL-020)
+## Modo remoto (ZL-020, esta versión)
 
-No hay listener TCP, HTTP, SSE ni URL de callback. La exposición remota no es una extensión automática del transporte local. Antes de habilitarla se deberá diseñar y comprobar: autenticación OAuth, audiencia/resource, permisos por misión, aislamiento del estado, protección Origin/CSRF, cuotas, tamaño de peticiones, trazabilidad e invalidación de credenciales. Toda integración con ChatGPT se pospone hasta completar las fases de código y revisar estos controles.
+`src/http.mjs` escucha solo en loopback IPv4, puerto `ZANA_HTTP_PORT`, con el transporte **Streamable HTTP con sesiones** del SDK (`WebStandardStreamableHTTPServerTransport`, era 2025). Un túnel de Cloudflare lo publica (por defecto `zanallaima.quintoestado.com`, ver `docs/deploy-remote.md`). Cada sesión tiene su `Mcp-Session-Id`, su transporte y su `McpServer`; el id queda **atado a la identidad OAuth** que la abrió (otra identidad recibe 403) y su `createdAt` se guarda en SQLite. Una petición con sobre por-request 2026 recibe un error de versión, y el cliente que negocia cae al handshake con sesión (probado con el cliente oficial en modo `auto`).
+
+- **OAuth con registro cerrado** (`src/oauth.mjs`, adaptado de Panter-ai `embedded-oauth.ts`): DCR, `/authorize` y consentimiento solo durante la ventana que abre el operador con `node src/cli.mjs remote-enroll <minutos>` y con la clave del operador. Fuera de la ventana no entra nadie nuevo; las conexiones aprobadas siguen y rotan su refresh token. Cada conexión queda atada a una etiqueta de host que elige el operador. El ledger OAuth vive en su propio SQLite (un restore de misiones nunca revive credenciales).
+- `/health` responde sin autenticación con nombre, versión, modo, sesiones abiertas y estado del downstream.
+- Host y Origin en allowlist (`ZANA_ALLOWED_ORIGINS`, por defecto `https://chatgpt.com`), cuerpo máximo 4 MB, `no-store`.
+- Las `instructions` del servidor piden cargar `zana-odd` al empezar y `zana-4r` al recibir un ticket.
+
+### Herramientas por modo
+
+| Herramienta | stdio | remoto | Nota |
+| --- | --- | --- | --- |
+| `zana_profile`, `zana_capability_status` | sí | sí | |
+| `zana_mission_init` | sí | sí | En remoto exige `github: {repo, base}`, unidades `READ` y `code: true` en las que cambian código |
+| `zana_mission_status`, `zana_next_batch`, `zana_mission_history` | sí | sí | |
+| `zana_start_batch`, `zana_unit_heartbeat`, `zana_recover_expired`, `zana_unit_retry`, `zana_mission_cancel`, `zana_mission_close` | sí | sí | En remoto la unidad queda atada a la sesión; una sesión revisora no puede usarlas |
+| `zana_complete_unit` | sí | sí | En remoto una unidad `code` exige check verde sobre el head actual de la rama |
+| `zana_apply_write` | sí | **no** | Congelada (ZL-004) |
+| `zana_review_open`, `zana_review_status`, `zana_review_next`, `zana_review_start`, `zana_review_submit`, `zana_review_check` | sí | **no** | Dependen de `git-evidence` local, congelado |
+| `zana_storage_status`, `zana_storage_history`, `zana_storage_reviews`, `zana_permission_status` | sí | **no** | Administración local: CLI del operador en el servidor |
+| `zana_session_status` | no | sí | Sesión, host, `createdAt` y rol en la misión activa |
+| `zana_skill_list`, `zana_skill_load` | no | sí | Skills de `skills/` |
+| `zana_checks_start`, `zana_checks_status` | no | sí | Checks en GitHub Actions por SHA exacto |
+| `zana_review_request`, `zana_review_claim`, `zana_review_lens_submit`, `zana_review_finalize` | no | sí | Ticket, conversación nueva y cuenta revisora |
+| `zana_delivery_status` | no | sí | Solo lectura |
+| `zana_merge` | no | sí | Solo con todo verde sobre un mismo head; `ZANA_MERGE_ENABLED=false` lo apaga |
+| `zana_ds_github` | no | sí | Router del GitHub MCP oficial, ver `docs/downstream-github.md` |
+
+Total: 24 en stdio y 25 en remoto. La restauración, la adopción de cuarentenas, la ventana de alta OAuth, la revocación de clientes, la auditoría (`remote-audit`) y el merge del operador (`remote-merge`) son solo CLI en el servidor.
+
+### Auditoría
+
+Cada llamada a una tool remota y cada llamada al downstream queda en `remote_audit` (SQLite v7): host, sesión, tool, misión, resultado y HMAC-SHA256 de los argumentos con una llave guardada en la DB. Nunca se guardan los argumentos ni un token; `tests/remote-http.test.mjs` y `tests/remote-downstream.test.mjs` comprueban la redacción.
 
 ## Limitaciones y siguientes gates
 
@@ -61,7 +92,7 @@ No hay listener TCP, HTTP, SSE ni URL de callback. La exposición remota no es u
 - La reconexión y cancelación MCP no sustituyen leases, recibos y reconciliación de operaciones WRITE.
 - El SDK y sus dependencias transitivas están fijados en `package-lock.json` v3; CI utiliza `npm ci --ignore-scripts`, un preflight estático y auditoría de dependencias de producción. El estado de release sigue bloqueado por requisitos externos de GitHub y del anfitrión.
 - La interfaz local no puede impedir ediciones directas realizadas por herramientas externas que no pasen por el controlador.
-- Sin merge, deploy o habilitación HTTP hasta pasar gates de seguridad y revisión independiente.
+- El deploy del modo remoto lo hace el operador (`docs/deploy-remote.md`); ningún agente mergea ni despliega por su cuenta.
 
 ## Herramienta `zana_apply_write` (ZL-004)
 
@@ -71,7 +102,7 @@ La herramienta no garantiza que otras capacidades del host hayan sido deshabilit
 
 ## Emisor de atestación CI (workflow_run, main-only)
 
-**Versión del proyecto: ZanaLLaima 0.5.2.** El sobre Ed25519 `CI_RESULT` es producido por `scripts/ci-attest.mjs`, ejecutado por `.github/workflows/ci-attestation.yml` mediante `workflow_run` una vez que concluye `CI`. El script confiable se carga exclusivamente desde `main` (policy **main-only**) y consulta la API de GitHub para verificar los jobs, SHA, árbol, base, runId y conclusión. Jamás se ejecuta código o dependencias del HEAD del PR con `ZANA_CI_SIGNING_KEY`.
+**Versión del proyecto: ZanaLLaima 0.6.0.** El sobre Ed25519 `CI_RESULT` es producido por `scripts/ci-attest.mjs`, ejecutado por `.github/workflows/ci-attestation.yml` mediante `workflow_run` una vez que concluye `CI`. El script confiable se carga exclusivamente desde `main` (policy **main-only**) y consulta la API de GitHub para verificar los jobs, SHA, árbol, base, runId y conclusión. Jamás se ejecuta código o dependencias del HEAD del PR con `ZANA_CI_SIGNING_KEY`.
 
 El environment `ci-attestation` exige un reviewer requerido `sebastianriquelme95-max`, que pertenece al mismo dueño del autor; la separación de cuentas no constituye independencia organizacional. La configuración debe impedir self-review y mantener solo `main` como deployment policy. El workflow permanece desactivado hasta configurar el secreto, la llave pública real y `ZANA_CI_ATTESTATION_READY=true` con controles humanos. La llave `keys/ci-verifier.pub` sigue siendo placeholder hasta entonces.
 

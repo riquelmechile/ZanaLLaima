@@ -83,3 +83,30 @@ Sin firmas, el gate devuelve `BLOCKED`. Con ambas válidas, puede devolver `READ
 La suite cubre cambios de SHA y árbol, worktree sucio, movimiento de rama base, HEAD desacoplado, capacidad 1/2/4, pérdida de subagentes, contexts repetidos, tokens obsoletos, hallazgos HIGH/BLOCKER, límite de cinco correcciones, CI falsificado, firmantes no independientes, aprobaciones caducadas y falta de atestaciones.
 
 No interpretar una suite verde como una revisión RDD independiente ni como autorización de entrega. El PR permanece en borrador hasta que se disponga de integración y verificación real.
+
+## RDD remoto: ticket, conversación nueva y cuenta revisora
+
+En el modo remoto la revisión la hace el **mismo GPT en una conversación nueva** de la app de ChatGPT, con la skill `zana-4r`. No se exige otro LLM: la independencia que ZanaLLaima puede comprobar viene de la sesión distinta, y la publicación en GitHub la firma la cuenta revisora `sebastianriquelme95-max` (`ZANA_REVIEWER_TOKEN`), distinta del token autor (`ZANA_DOWNSTREAM_GITHUB_TOKEN`).
+
+1. **`zana_review_request(missionId)`**, desde la sesión autora: exige un PR abierto desde `zana/<missionId>` hacia la base de la misión y checks verdes sobre su head. Crea un ticket `ZR-XXXX-XXXX-XXXX-XXXX` de un solo uso (en SQLite solo su SHA-256), con vencimiento (`ZANA_TICKET_TTL_MINUTES`, 120 por defecto), atado a repo, PR, SHA y sesión autora. Devuelve el texto que el usuario pega en una conversación nueva.
+2. **`zana_review_claim(ticket)`**: se rechaza con `AUTHOR_SESSION`, `SESSION_WROTE` (la sesión usó cualquier tool que muta la misión o escribió por el downstream), `SESSION_PREDATES_TICKET` (sesión creada antes que el ticket), `TICKET_ALREADY_CLAIMED` o `TICKET_EXPIRED`. La sesión que reclama queda en **solo lectura** sobre la misión: el downstream y las tools de misión le responden `REVIEWER_READ_ONLY`.
+3. **`zana_review_lens_submit`**: un envío por lente (`risk`, `readability`, `reliability`, `resilience`); cada hallazgo exige `severity` (`BLOCKER`, `CRITICAL`, `WARNING`, `SUGGESTION`), `location` `archivo:línea` y `evidence`. El lente se guarda en `review_receipts` con su hash.
+4. **`zana_review_finalize`**: exige los cuatro lentes; relee el head del PR en GitHub y, si cambió, deja el ticket `STALE_SHA` sin publicar nada; exige checks verdes sobre ese SHA; publica la review con el token revisor, `commit_id` = SHA, `APPROVE` sin BLOCKER ni CRITICAL o `REQUEST_CHANGES` si los hay, con la tabla por lente, el ticket, el hash de cada lente y la declaración de ejecución (`PARALLEL_SUBAGENTS` o `SEQUENTIAL_SAME_CONVERSATION`); crea el status `zana/4r` (success o failure) con el mismo token.
+5. **`zana_delivery_status`** (solo lectura, adaptado de Panter-ai `github-delivery.ts`) informa `APPROVED_EXACT_SHA`, `STALE_SHA`, `CHANGES_REQUESTED`, `DISMISSED`, `REVIEWER_IS_AUTHOR` (la revisora es autora del PR o de un commit), `MISSING` o `UNAVAILABLE`, el CI, `zana/4r` y si el PR es mergeable.
+6. **`zana_merge`** mergea solo con todo verde sobre el mismo head: aprobación exacta de la revisora, CI verde, `zana/4r` success, PR mergeable y ningún ticket abierto con BLOCKER o CRITICAL. Usa la API de merge con `sha` = head verificado (equivale a `--match-head-commit`); si el head cambió, GitHub lo rechaza y ZanaLLaima responde `STALE_SHA` sin reintentar. Lo puede pedir la sesión autora o el operador (`node src/cli.mjs remote-merge <missionId>`); `ZANA_MERGE_ENABLED=false` lo apaga. La protección de rama de `main` sigue siendo la segunda llave.
+
+### Qué prueba y qué no
+
+**Sí prueba:**
+- que la sesión que reclamó el ticket no es la sesión autora;
+- que esa sesión no usó ninguna tool que muta la misión ni escribió por el downstream antes de reclamar;
+- que se creó después del ticket y que, una vez revisora, no puede escribir en la misión;
+- que la review publicada corresponde a ese SHA exacto, con CI verde sobre él y el head del PR sin cambios al finalizar;
+- que llegaron los cuatro lentes, cada hallazgo con ubicación y evidencia, y que se publicaron con la cuenta revisora.
+
+**No prueba:**
+- qué modelo usó el anfitrión ni su esfuerzo;
+- que los subagentes existieran ni que tuvieran de verdad contexto fresco: la declaración `execution` es palabra del anfitrión;
+- que dos sesiones distintas correspondan a dos conversaciones distintas. Ambas usan la misma cuenta OAuth, así que ZanaLLaima solo distingue el `Mcp-Session-Id`. Si ChatGPT reutiliza una sesión entre conversaciones, o abre una sesión nueva dentro de la conversación autora (por ejemplo tras un reinicio del servidor, porque las sesiones viven en memoria), la regla no lo detecta: una sesión nueva de la conversación autora, sin escrituras y posterior al ticket, podría reclamarlo.
+
+La separación de sesiones depende de que ChatGPT abra una sesión MCP nueva por conversación. **Eso se verifica en el E2E real** (`docs/host-e2e-remote.md`, paso de `zana_session_status` en ambas conversaciones) y el resultado observado se escribe en `examples/host-e2e-remote.json`. Hasta entonces queda **sin observar**.

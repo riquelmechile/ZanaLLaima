@@ -1,4 +1,4 @@
-# Checklist del operador: ZanaLLaima 0.5.2
+# Checklist del operador: ZanaLLaima 0.6.0
 
 **PASOS HUMANOS.** Ningún resultado de CI concede permiso de merge ni despliegue. La llave privada permanece fuera del repositorio, de chats y del proceso MCP.
 
@@ -54,3 +54,9 @@ Seguir [host-codex.md](host-codex.md) y [host-e2e.md](host-e2e.md). Comprobar lo
 ## 5. Decisión humana posterior
 
 Comprobar nuevamente el SHA exacto y revisión 4R de `sebastianriquelme95-max`. No aprobar desde la cuenta autora, no descartar `CHANGES_REQUESTED` y no hacer merge, tag ni deploy desde este procedimiento sin una autorización humana posterior y explícita.
+
+## Modo remoto
+
+- Deploy y alta de cuentas: [deploy-remote.md](deploy-remote.md).
+- Workflow de checks en cada repo administrado: [checks-workflow.md](checks-workflow.md).
+- E2E real con la app de ChatGPT: [host-e2e-remote.md](host-e2e-remote.md).

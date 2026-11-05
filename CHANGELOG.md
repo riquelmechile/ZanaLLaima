@@ -1,5 +1,19 @@
 # Registro de cambios
 
+## [0.6.0] - No publicado
+
+MCP remoto para la app de ChatGPT. Candidato sin merge, tag ni deploy; el deploy y el E2E real los hace el operador.
+
+- **Transporte y auth (ZL-020):** `src/http.mjs` con Streamable HTTP con sesiones en `127.0.0.1`, `Mcp-Session-Id` atado a la identidad OAuth y `createdAt` en SQLite; `src/oauth.mjs` con OAuth embebido adaptado de Panter-ai y **registro cerrado** (ventana `remote-enroll` del operador + clave de consentimiento); `/health`; `deploy/` con unidad `systemd --user`, ejemplo de env y túnel; `docs/deploy-remote.md`.
+- **Downstream GitHub:** `src/downstream.mjs` (gateway de Panter-ai: clases, `writes`, timeout, circuit breaker, auditoría con HMAC, aserción de actor `src/actor-assertion.mjs`) y `src/github-policy.mjs`, allowlist fail-closed sobre `data/github-mcp-tools.json` (GitHub MCP Server v2.1.0, 58 tools: 25 lectura, 11 escritura acotada a la misión, 22 denegadas).
+- **Checks en Actions:** `zana_checks_start`/`zana_checks_status` por SHA exacto con cola de log redactada; `zana_complete_unit` de una unidad de código exige check verde sobre el head actual. Plantilla en `docs/checks-workflow.md`.
+- **Skills por MCP:** `skills/` y `zana_skill_list`/`zana_skill_load`; `instructions` del servidor piden `zana-odd` y `zana-4r`.
+- **Revisión remota:** `zana_review_request`/`claim`/`lens_submit`/`finalize`, sesión revisora en solo lectura, review con `ZANA_REVIEWER_TOKEN` y `commit_id` = SHA, status `zana/4r`; `zana_delivery_status` (adaptado de `github-delivery.ts`) y `zana_merge` con `sha` = head verificado y `ZANA_MERGE_ENABLED`.
+- **SQLite v7:** tablas remotas, recibos de lente en `review_receipts`, reviews en `review_archive`; restore/adopt fusionan los hechos remotos de forma monótona sin cambiar sus pasos.
+- **Superficie:** 25 tools en remoto; `zana_apply_write`, la revisión local con `git-evidence` y la administración del storage siguen solo en stdio/CLI (24 tools en stdio, sin cambios).
+- `@modelcontextprotocol/client@2.4.0` pasa a dependencia de producción (lo usa el gateway).
+- Congelados: endurecimiento de `git-evidence`, `zana_apply_write`, grants Ed25519, aislamiento de OS y warnings de la ronda 11 (`ROADMAP.md`).
+
 ## [0.5.2] - No publicado
 
 - **R11-C1 (restore):** el restore offline sin `--force-data-loss` se rechaza con `CONSUMED_BUDGET` si la DB viva tiene trabajo RUNNING o si su ledger de presupuesto consumido registra más intentos o generaciones de lease que el backup. Test negativo previo `d4f8de8` (hilo Codex `4485193503`). Con `--force-data-loss` se conserva `max(viva, backup)` por unidad, y en `storage-adopt-quarantine` el máximo entre la cuarentena elegida y sus hermanas legibles. La `revision` se fusiona en todo restore y queda por sobre cada fuente legible.

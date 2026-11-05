@@ -1,29 +1,53 @@
 # ZanaLLaima
 
-Motor local de misiones para un único anfitrión GPT, con estado durable, revisión RDD vinculada a Git y transporte **MCP stdio**. No llama directamente a APIs de modelos ni envía tareas a cuentas externas.
+Harness de misiones para **la app de ChatGPT**, servido como **MCP remoto** en zana-main. No llama a APIs de modelos, no tiene shell ni CLI para GPT y no depende de otros coordinadores. Versión 0.6.0, sin publicar.
+
+```
+App ChatGPT (GPT + subagentes)
+   │ MCP Streamable HTTP + OAuth (registro cerrado)
+   ▼
+ZanaLLaima (zana-main, loopback + túnel Cloudflare)
+   ├─ misiones / unidades / presupuestos / leases
+   ├─ skills por MCP (zana-odd, zana-4r, review-*)
+   ├─ tickets de revisión + 4 lentes por SHA
+   ├─ review publicada con la cuenta revisora
+   └─ downstream ──▶ GitHub MCP oficial ──▶ GitHub Actions corre los tests
+```
+
+**Cómo se trabaja:**
+
+1. **Conversación autora.** GPT carga `zana-odd`, crea una misión con `github: {repo, base}`, reserva unidades y escribe en GitHub **solo** por `zana_ds_github`, **solo** en `zana/<missionId>` y solo mientras su sesión tiene una unidad `RUNNING`. Los tests corren en Actions (`zana_checks_start`/`zana_checks_status`); una unidad de código no se completa sin check verde sobre su SHA final. Abre el PR y pide un ticket (`zana_review_request`).
+2. **Conversación revisora (nueva).** El usuario pega "Revisa el ticket ZR-... con ZanaLLaima". Esa sesión reclama el ticket (no puede ser la autora, no pudo haber escrito y debe ser posterior al ticket), queda en solo lectura, corre los 4 lentes con `zana-4r` y finaliza. ZanaLLaima relee el head del PR: si cambió, `STALE_SHA`; si no, publica la review **firmada por `sebastianriquelme95-max`** sobre ese SHA y el status `zana/4r`.
+3. **Entrega.** `zana_delivery_status` muestra aprobación exacta, CI, `zana/4r` y mergeable. `zana_merge` solo mergea con todo verde sobre el mismo head (`sha` = head verificado). La protección de `main` es la segunda llave.
+
+**La verdad es el SHA en GitHub y sus checks.** Los tokens (autor y revisora) viven solo en el servidor; nunca en el repo, en logs ni en resultados de tools. Qué prueba y qué no la separación de sesiones: [docs/solo-rdd.md](docs/solo-rdd.md).
+
+| Tema | Documento |
+| --- | --- |
+| Deploy en zana-main (lo hace el operador) | [docs/deploy-remote.md](docs/deploy-remote.md) |
+| Tools por modo y transporte | [docs/mcp-v2.md](docs/mcp-v2.md) |
+| GitHub MCP, política y lista real de tools | [docs/downstream-github.md](docs/downstream-github.md) |
+| Workflow de checks para repos administrados | [docs/checks-workflow.md](docs/checks-workflow.md) |
+| E2E real con la app de ChatGPT (ZL-018) | [docs/host-e2e-remote.md](docs/host-e2e-remote.md) |
 
 ## Estado del proyecto
 
 | Componente | Estado |
 | --- | --- |
-| SQLite WAL, leases, reintentos READ y recuperación de interrupciones | Implementado y probado localmente |
-| Planificación incremental READ y presupuestos por misión | Implementado; ejecución nativa de subagentes no verificada |
-| Cuatro lentes RDD sobre un SHA Git exacto | Implementado; autocomprobación no equivale a revisión independiente |
-| Herramienta de escrituras \`zana_apply_write\` con recibos SHA y permiso Ed25519 | Implementado localmente; aislamiento efectivo del anfitrión pendiente |
-| MCP SDK oficial v2 por stdio | Implementado y probado con cliente oficial |
-| CI reproducible en Node 22 y 24, auditoría y cobertura | Implementado; ver checks del SHA actual |
-| Emisor de atestación CI Ed25519 | Código y workflow preparados; llave y environment pendientes de Zana |
-| Integración real Codex, reporte de modelo/esfuerzo y subagentes | **PASO HUMANO**, sin pruebas reales todavía |
-| Revisión independiente y merge | Pendiente de otra identidad autorizada y decisión humana |
+| Modo remoto: HTTP con sesiones, OAuth con registro cerrado, `/health` | Implementado y probado con el cliente oficial contra servidores falsos locales |
+| Downstream GitHub MCP y política allowlist (v2.1.0) | Implementado y probado con un MCP falso; sin contacto real con `api.githubcopilot.com` |
+| Checks, tickets, lentes, review con cuenta revisora, delivery y merge | Implementado y probado contra una API de GitHub falsa |
+| E2E real con la app de ChatGPT y separación de sesiones | **PASO DEL OPERADOR**, sin observar |
+| SQLite WAL, leases, reintentos y recuperación | Implementado y probado |
+| Modo stdio local, `zana_apply_write`, RDD local con `git-evidence`, grants Ed25519 | Implementado; **congelado** por el cambio de rumbo |
 
-**El PR #1 no autoriza merge ni despliegue.** Los resultados de prueba locales no prueban capacidades que solo puede mostrar el anfitrión.
+**Este PR no autoriza merge ni despliegue.** Los tests locales no prueban capacidades que solo puede mostrar el anfitrión real.
 
 ## Requisitos y estructura
 
 Node.js ≥22.16, Linux para efectos de escritura anclados a descriptores, Git, y dependencias fijadas en \`package-lock.json\`.
 
 \`\`\`sh
-git checkout feat/gpt-native-solo-engine
 npm ci --ignore-scripts --no-audit --no-fund
 npm run check
 npm test
@@ -40,7 +64,7 @@ Los módulos principales:
 - \`src/mcp.mjs\`: servidor MCP oficial, local y sin HTTP.
 - \`scripts/ci-attest.mjs\`: emisor de sobre CI firmado, solo con llave privada provista por Zana.
 
-## Configuración local
+## Modo local stdio (congelado)
 
 \`\`\`sh
 export ZANA_STATE_FILE=/ruta/segura/zana/state.json
@@ -50,7 +74,7 @@ export ZANA_REVIEW_TARGET_REF=refs/heads/main
 node src/mcp.mjs
 \`\`\`
 
-El servidor dispone de **24 herramientas MCP**. El catálogo se comprueba automáticamente contra esta cifra en \`tests/sdk-mcp.test.mjs\`. Las herramientas MCP no administran claves privadas, no importan firmas del operador, no restauran respaldos ni hacen merge.
+En modo stdio el servidor dispone de **24 herramientas MCP**. El catálogo se comprueba automáticamente contra esta cifra en \`tests/sdk-mcp.test.mjs\`. Las herramientas stdio no administran claves privadas, no importan firmas del operador, no restauran respaldos ni hacen merge. El modo remoto expone 25 (ver [docs/mcp-v2.md](docs/mcp-v2.md)), entre ellas `zana_merge` con sus condiciones.
 
 Las acciones administrativas siguen en el CLI local:
 
@@ -113,6 +137,6 @@ Ver [auditoría de seguridad](docs/release-security.md) y [registro de cambios](
 - [Plantilla de observaciones](examples/host-e2e-report.json)
 - [Estado y criterios pendientes](ROADMAP.md)
 
-**ChatGPT web no puede ejecutar directamente el proceso stdio local.** Una conexión web necesita un servicio HTTP MCP autenticado mediante OAuth y controles de aislamiento adicionales. Ese transporte queda fuera de la versión 0.5.2.
+**ChatGPT no ejecuta el proceso stdio local.** Para la app de ChatGPT se usa el modo remoto de arriba; el modo stdio queda para pruebas y uso local, sin cambios.
 
-La guía breve para completar los pasos humanos de la versión 0.5.2 es [docs/operator-checklist.md](docs/operator-checklist.md). La configuración de firma CI se realiza desde la máquina de Zana con `bash scripts/setup-ci-signing.sh`.
+La guía breve para los pasos humanos de la versión 0.6.0 es [docs/operator-checklist.md](docs/operator-checklist.md). La configuración de firma CI se realiza desde la máquina de Zana con `bash scripts/setup-ci-signing.sh`.

@@ -18,7 +18,7 @@ function kill(f,point){
 
 test('R9 recovery: SIGKILL en journal ready, cuarentena y cada ordinal de rename recuperable',async()=>{
  let checked=0,finished=false;
- for(const point of ['ready',1,2,3,4,5,'quarantine']){
+ for(const point of ['ready','quarantine',1,2,3,4,5]){
   const f=await restoreFixture();
   try{
    const events=f.events();

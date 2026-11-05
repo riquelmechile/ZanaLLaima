@@ -372,9 +372,17 @@ async function pendingTemporary(unit,{remove=false}={}){
   if(!intent?.tempName)return null; // old records cannot be safely inferred
   if(run.effectReceipt)return null;
   const anchors=run.pathAnchors;
-  if(!anchors?.workspaceRoot)fail('Effect intent lost workspace anchors');
-  return inspectEffectTemporary({path:intent.path,tempName:intent.tempName,
-    root:anchors.workspaceRoot,anchors:anchors.anchors,remove});
+  try{
+    if(!anchors?.workspaceRoot)fail('Effect intent lost workspace anchors');
+    return await inspectEffectTemporary({path:intent.path,tempName:intent.tempName,
+      root:anchors.workspaceRoot,anchors:anchors.anchors,remove});
+  }catch(error){
+    // An unsafe/missing orphan never authorizes deletion of an arbitrary path.
+    // Its cleanup failure is observable, but it must not roll back a signed
+    // reconciliation or prevent recovery/status from reading durable state.
+    return {path:intent.path,tempName:intent.tempName,removed:false,pending:true,
+      error:{code:error?.code??'TEMP_CLEANUP_FAILED',message:String(error?.message??error)}};
+  }
 }
 export async function cleanupEffectTemporaries(mission){
   const cleaned=[];

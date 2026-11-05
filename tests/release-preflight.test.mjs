@@ -9,6 +9,7 @@ const workflow=readFileSync('.github/workflows/ci.yml','utf8');
 const attestationWorkflow=readFileSync('.github/workflows/ci-attestation.yml','utf8');
 const setup=readFileSync('scripts/setup-ci-signing.sh','utf8');
 const coverage=readFileSync('scripts/check-source-coverage.mjs','utf8');
+const mcp=readFileSync('src/mcp.mjs','utf8');
 const assess=(extras={})=>assessBuildPolicy({
   pkg,lock,workflow,attestationWorkflow,trackedFiles:[],
   sourceFiles:{coverage,setup},
@@ -102,4 +103,14 @@ test('placeholder CI public key cannot masquerade as configured attestation',()=
   assert.equal(publicOnly.externalGates.ciVerifierPublicKey,'FORMAT_VALID_NOT_ATTESTED');
   assert.equal(publicOnly.externalGates.trustedCIAttribution,'NOT_CONNECTED');
   assert.equal(publicOnly.releaseAuthorized,false);
+});
+
+test('WARNING W9 MCP server reads the same version as the release manifest',()=>{
+  assert.equal(assess({sourceFiles:{coverage,setup,mcp}}).errors.includes('MCP_VERSION_MISMATCH'),false);
+  const forged=mcp.replace(/version:\s*packageVersion/,"version:'0.0.0'");
+  assert.ok(assess({sourceFiles:{coverage,setup,mcp:forged}})
+    .errors.includes('MCP_VERSION_MISMATCH'));
+  const badPkg={...pkg,version:'0.0.0'};
+  assert.ok(assess({pkg:badPkg,sourceFiles:{coverage,setup,mcp}})
+    .errors.includes('LOCKFILE_VERSION_MISMATCH'));
 });

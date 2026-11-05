@@ -8,6 +8,7 @@ import {createHash, randomUUID} from 'node:crypto';
 const dirFlags=constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW;
 const readFlags=constants.O_RDONLY|constants.O_NOFOLLOW;
 const writeFlags=constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW;
+const effectTempName=/^\.zana-effect-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const hash=buffer=>createHash('sha256').update(buffer).digest('hex');
 const fail=message=>{throw Error('Write effect boundary: '+message);};
 const inside=(root,value)=>value===root||value.startsWith(root+sep);
@@ -105,6 +106,30 @@ export async function capturePathAnchors(paths,root=process.env.ZANA_WORKSPACE_R
   }
 }
 
+// Only a temp name committed in effectIntent may be removed; never sweep
+// arbitrary workspace files with a matching prefix.
+export async function inspectEffectTemporary({path,tempName,root,anchors={},remove=false}){
+  if(!effectTempName.test(tempName||''))
+    fail('Invalid durable effect temporary name');
+  const home=await workspaceRoot(root);
+  const fd=await traverse(home,path,{anchors});
+  try{
+    const target=fdPath(fd.current,tempName);
+    let stat;
+    try{stat=await lstat(target);}
+    catch(e){if(e.code==='ENOENT')return null;throw e;}
+    if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1)
+      fail('Unsafe effect temporary; manual reconciliation required');
+    if(remove){
+      await unlink(target);
+      await fd.current.sync();
+    }
+    return {path,tempName,removed:remove};
+  }finally{
+    await Promise.all(fd.openHandles.reverse().map(h=>h.close().catch(()=>{})));
+  }
+}
+
 async function inspectTarget(parent,baseName){
   const target=fdPath(parent,baseName);
   let stat;
@@ -131,7 +156,8 @@ export async function inspectPreimage({path,root=process.env.ZANA_WORKSPACE_ROOT
 }
 
 export async function atomicWorkspaceEffect({path,content,deleteFile=false,expectedPreSha256,
-  root=process.env.ZANA_WORKSPACE_ROOT,anchors={},beforeEffect=()=>{}}){
+  root=process.env.ZANA_WORKSPACE_ROOT,anchors={},beforeEffect=()=>{},
+  temporaryName,afterTempSync=()=>{}}){
   const home=await workspaceRoot(root);
   const fd=await traverse(home,path,{anchors});
   let temp=null;
@@ -152,7 +178,8 @@ export async function atomicWorkspaceEffect({path,content,deleteFile=false,expec
     }else{
       const buffer=Buffer.from(content,'utf8');
       bytes=buffer.length;postHash=hash(buffer);
-      temp='.zana-effect-'+randomUUID();
+      temp=temporaryName??('.zana-effect-'+randomUUID());
+      if(!effectTempName.test(temp))fail('Invalid durable temporary filename');
       const writer=await open(fdPath(fd.current,temp),writeFlags,0o600);
       try{
         await writer.writeFile(buffer);
@@ -161,6 +188,8 @@ export async function atomicWorkspaceEffect({path,content,deleteFile=false,expec
         await writer.chmod(postMode);
         await writer.sync();
       }finally{await writer.close();}
+      // Internal test hook: SIGKILL after durable temp sync but before rename.
+      await afterTempSync();
       // Re-validate before replacement. rename() never follows a destination
       // symlink; it replaces the directory entry itself.
       const recheck=await inspectTarget(fd.current,basename);

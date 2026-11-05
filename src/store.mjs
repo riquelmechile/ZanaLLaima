@@ -5,6 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { operatorPublicKey, verifySignedAction, verifyStoredGrant } from './operator.mjs';
 import { reconcileWrite, revokeRunningWrites } from './lifecycle.mjs';
+import {inspectEffectTemporary} from './write-effect.mjs';
 
 const SCHEMA_VERSION = 6;
 const MAX_EVENTS = 2000;
@@ -366,6 +367,24 @@ export async function readReviewArchive({limit=25,before=null}={},file=statePath
   } finally {db.close();}
 }
 
+async function pendingTemporary(unit,{remove=false}={}){
+  const run=unit?.run, intent=run?.effectIntent;
+  if(!intent?.tempName)return null; // old records cannot be safely inferred
+  if(run.effectReceipt)return null;
+  const anchors=run.pathAnchors;
+  if(!anchors?.workspaceRoot)fail('Effect intent lost workspace anchors');
+  return inspectEffectTemporary({path:intent.path,tempName:intent.tempName,
+    root:anchors.workspaceRoot,anchors:anchors.anchors,remove});
+}
+export async function cleanupEffectTemporaries(mission){
+  const cleaned=[];
+  for(const unit of mission?.units??[]){
+    const temp=await pendingTemporary(unit,{remove:true});
+    if(temp)cleaned.push({unitId:unit.id,...temp});
+  }
+  return cleaned;
+}
+
 export async function storageStatus(file=statePath()) {
   await refuseInterruptedRestore(file);
   const path=databasePath(file);
@@ -373,9 +392,15 @@ export async function storageStatus(file=statePath()) {
   const db=connect(path,true);
   try {
     assertHealthy(db);
-    return {backend:'SQLITE_WAL',databasePath:path,schemaVersion:db.prepare('PRAGMA user_version').get().user_version,
+    const live=load(db);
+    const effectTemporaries=[];
+    for(const u of live?.units??[]){
+      const temp=await pendingTemporary(u);
+      if(temp)effectTemporaries.push({unitId:u.id,...temp});
+    }
+    return {backend:'SQLITE_WAL',databasePath:path,effectTemporaries,schemaVersion:db.prepare('PRAGMA user_version').get().user_version,
       journalMode:db.prepare('PRAGMA journal_mode').get().journal_mode,
-      integrity:'ok',activeMission:load(db)?.id??null,
+      integrity:'ok',activeMission:live?.id??null,
       events:db.prepare('SELECT COUNT(*) AS n FROM state_events').get().n,
       archivedReviews:db.prepare('SELECT COUNT(*) AS n FROM review_archive').get().n,
       workReceipts:db.prepare('SELECT COUNT(*) AS n FROM work_receipts').get().n,
@@ -505,7 +530,9 @@ export async function applyOperatorAction(envelope,file=statePath()){
         db.prepare('UPDATE operator_grants SET revoked=1 WHERE grant_id=?').run(p.grantId);
         revokeRunningWrites(next);
       }else{
-        reconcileWrite(next,p);
+        const affected=next.units.find(u=>u.id===p.unitId);
+        reconcileWrite(next,p); // first verify signed attempt identity
+        await pendingTemporary(affected,{remove:true});
       }
       next.revision++;
       persist(db,previous,next,'OPERATOR_'+p.kind);

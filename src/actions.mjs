@@ -1,6 +1,6 @@
 import { createMission, nextBatch, startBatch, completeUnit, publicStatus, HOST_REQUEST } from './core.mjs';
 import { readState, transact, readHistory, readReviewArchive, storageStatus, migrateLegacy, backupState, restoreBackup,
-  authorizationStatus, archiveMission, readMissionArchive } from './store.mjs';
+  authorizationStatus, archiveMission, readMissionArchive, cleanupEffectTemporaries } from './store.mjs';
 import { openReview, reviewStatus, nextReviewBatch, startReviewBatch, submitReview, checkCandidate } from './review.mjs';
 import { heartbeatUnit, expireUnits, retryRead, cancelMission, closeMission } from './lifecycle.mjs';
 import { verifyWorkspacePaths } from './paths.mjs';
@@ -163,12 +163,14 @@ export const operations = {
   },
   recoverExpired: async () => {
     let changed;
-    await transact(existing=>{
+    let cleanedTemps=[];
+    await transact(async existing=>{
       if(!existing)throw Error('No active mission');
       changed=expireUnits(existing);
+      cleanedTemps=await cleanupEffectTemporaries(existing);
       return existing;
     });
-    return {changed};
+    return {changed,cleanedTemps};
   },
   retry: async ({unitId}) => {
     let status;

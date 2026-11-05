@@ -49,6 +49,7 @@ export async function applyWriteEffect(args,file=statePath(),hooks={}){
       'Signed operator grant identity required');
     const id=randomUUID();
     intent={effectId:id,grantId,path,operation:request.operation,
+      tempName:deleteFile?null:'.zana-effect-'+randomUUID(),
       preSha256:existing.hash,expectedPostSha256:deleteFile?null:hash(Buffer.from(content,'utf8')),
       bytes:request.bytes,claimedAt:new Date().toISOString()};
     u.run.effectIntent={...intent,status:'INTENT_DURABLE'};
@@ -86,6 +87,8 @@ export async function applyWriteEffect(args,file=statePath(),hooks={}){
       Date.now()-effectStartedAt<maxEffectLockMs,'Effect lock deadline exceeded');
     const effect=await atomicWorkspaceEffect({
       path,content,deleteFile,
+      temporaryName:intent.tempName,
+      afterTempSync:hooks?.afterTempSync,
       expectedPreSha256:intent.preSha256,
       root:u.run.pathAnchors.workspaceRoot,
       anchors:u.run.pathAnchors.anchors,

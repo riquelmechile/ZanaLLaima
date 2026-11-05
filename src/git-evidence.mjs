@@ -19,11 +19,14 @@ const safeRef=ref=>typeof ref==='string' && ref.startsWith('refs/heads/') &&
   /^[A-Za-z0-9_./-]{12,200}$/.test(ref) && !ref.includes('..') &&
   !ref.endsWith('/') && !ref.includes('//') && !ref.includes('@{');
 const gitEnv=()=>{
-  const result={...process.env,GIT_OPTIONAL_LOCKS:'0',
-    GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_ATTR_NOSYSTEM:'1'};
+  const result={...process.env};
   for(const name of Object.keys(result)){
     if(name.startsWith('GIT_') && name!=='GIT_OPTIONAL_LOCKS')delete result[name];
   }
+  result.GIT_OPTIONAL_LOCKS='0';
+  result.GIT_CONFIG_NOSYSTEM='1';
+  result.GIT_CONFIG_GLOBAL='/dev/null';
+  result.GIT_ATTR_NOSYSTEM='1';
   return result;
 };
 
@@ -65,12 +68,17 @@ export function observeGit({
         timeout:10000,maxBuffer:1048576
       }).trimEnd();}catch{deny('Git submodule index inspection failed');}
     };
-    // `status` can invoke configured clean/process filters while
-    // comparing working-tree bytes. Fail closed rather than executing arbitrary
-    // filter commands inherited from a local or included Git config.
+    // Fail closed on executable filters from local or included config.
     const configuredFilters=spawnSync('git',[
       ...SAFE_GIT_ARGS,'-C',worktree,'config','--local','--includes',
-      '--name-only','--get-regexp','^filter[.].*[.](clean|smudge|process) A top-level
+      '--name-only','--get-regexp','^filter[.].*[.](clean|smudge|process)'
+    ],{env:gitEnv(),encoding:'utf8',stdio:['ignore','pipe','pipe'],
+      timeout:10000,maxBuffer:1048576});
+    if(configuredFilters.error || ![0,1].includes(configuredFilters.status))
+      deny('Git filter configuration inspection failed');
+    if(configuredFilters.status===0 && configuredFilters.stdout.trim())
+      deny('Git worktree contains executable filter configuration');
+    // Every nested worktree has its own ignore configuration. A top-level
     // status override does not propagate reliably to grandchildren.
     let dirty=nestedCall('status','--porcelain=v1','--untracked-files=all',
       '--ignore-submodules=none').length>0;

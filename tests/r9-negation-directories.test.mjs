@@ -22,7 +22,7 @@ for(const [label,rules,path] of cases){
      git(repo,'config','user.email','test@example.invalid');
      writeFileSync(join(repo,'.gitignore'),rules);
      writeFileSync(join(repo,'tracked.txt'),'original');
-     git(repo,'add','.');git(repo,'commit','-qm','base');git(repo,'checkout','-qb','feature/neg');
+     git(repo,'add','-f','.gitignore','tracked.txt');git(repo,'commit','-qm','base');git(repo,'checkout','-qb','feature/neg');
      mkdirSync(dirname(join(repo,path)),{recursive:true});
      writeFileSync(join(repo,path),'untracked\n');
      const output=git(repo,'status','--porcelain=v1','-uall','--ignore-submodules=none');

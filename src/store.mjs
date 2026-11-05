@@ -562,7 +562,7 @@ function readLedger(db){
 // database still proves; the caller reports ledgerRebuilt.
 function budgetFacts(db,{rebuild=false}={}){
   let ledger,rebuilt=false;
-  const corruptArchive=[];
+  const corruptArchive=[],damagedUnits=[];
   try{ledger=readLedger(db);}
   catch(error){
     if(!rebuild||error.code!=='INVALID_LEDGER')throw error;
@@ -576,7 +576,7 @@ function budgetFacts(db,{rebuild=false}={}){
   // --force-data-loss is always possible.
   if(mission)for(const u of mission.units){
     try{raise(ledger,mission.id,u.id,u.attempts||0,u.run?.leaseGeneration||0);}
-    catch(error){if(!rebuild||error.code!=='INVALID_LEDGER')throw error;rebuilt=true;}
+    catch(error){if(!rebuild||error.code!=='INVALID_LEDGER')throw error;rebuilt=true;damagedUnits.push(u.id);}
   }
   for(const row of db.prepare('SELECT seq,mission_id,snapshot FROM mission_archive').all()){
     let archived;
@@ -599,7 +599,7 @@ function budgetFacts(db,{rebuild=false}={}){
     }
   }
   return {revision:mission?.revision??null,running:!!mission?.units.some(u=>u.status==='RUNNING'),
-    ledger,rebuilt,corruptArchive};
+    ledger,rebuilt,corruptArchive,damagedUnits};
 }
 function refuseConsumedBudget(backupMission,liveBudget){
   if(liveBudget.running)
@@ -869,6 +869,24 @@ export async function storageAdoptQuarantine(id,file=statePath(),{confirm=false,
         // Write the chosen copy's own (validated or rebuilt) ledger first: an
         // empty fact set makes mergeBudgetFacts persist ownLedger unchanged.
         mergeBudgetFacts(db,{revision:null,ledger:Object.create(null)},{ownLedger:own.ledger});
+        // A unit whose counters were damaged has unknown consumption: publish
+        // it exhausted (never with credit such as attempts=-1) and with a
+        // sane generation, and record that in the ledger.
+        if(own.damagedUnits.length){
+          const limits=mission.budget;
+          const cap=Number.isSafeInteger(limits?.maxUnitAttempts)?limits.maxUnitAttempts:3;
+          const read=db.prepare('SELECT run FROM units WHERE mission_id=? AND id=?');
+          const write=db.prepare('UPDATE units SET attempts=?,run=? WHERE mission_id=? AND id=?');
+          const ledger=readLedger(db);
+          for(const unitId of own.damagedUnits){
+            const run=parse(read.get(mission.id,unitId)?.run??'null');
+            const gen=Number.isSafeInteger(run?.leaseGeneration)&&run.leaseGeneration>=0?run.leaseGeneration:0;
+            write.run(cap,json(run?{...run,leaseGeneration:gen}:run),mission.id,unitId);
+            raise(ledger,mission.id,unitId,cap,gen);
+          }
+          db.prepare('INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+            .run(CONSUMED_BUDGET_KEY,json(ledger));
+        }
         // Heal what the rebuild skipped: corrupt archive rows move to their
         // own table (kept for inspection) so later restores need no force.
         if(own.corruptArchive.length){

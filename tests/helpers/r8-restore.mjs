@@ -26,14 +26,15 @@ export async function restoreFixture(){
  };
  const grant=signed('GRANT_WRITE',{paths:['docs']});
  await applyOperatorAction(grant,file);await backupState(backup,file);
- await applyOperatorAction(signed('REVOKE_WRITE',{grantId:grant.payload.nonce}),file);
+ const revocation=signed('REVOKE_WRITE',{grantId:grant.payload.nonce});
+ await applyOperatorAction(revocation,file);
  if((await authorizationStatus(file)).valid)throw Error('Fixture revocation failed');
  const events=()=>{
   const db=new DatabaseSync(databasePath(file),{readOnly:true});
   try{return db.prepare('SELECT COUNT(*) AS n FROM state_events').get().n;}
   finally{db.close();}
  };
- return {dir,file,backup,grant,signed,events,close:async()=>{
+ return {dir,file,backup,grant,revocation,signed,events,close:async()=>{
   for(const [k,v] of Object.entries(saved)){
    if(v===undefined)delete process.env[k];else process.env[k]=v;
   }

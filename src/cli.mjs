@@ -5,11 +5,12 @@ import {pathToFileURL} from 'node:url';
 import {operations} from './actions.mjs';
 import {applyOperatorAction,storageRestoreAbort,storageCleanupArtifacts,storageAdoptQuarantine,readState} from './store.mjs';
 
-const usage='Commands: operator-import, heartbeat, recover-expired, retry, cancel, close, archive, mission-history, authorization-status, storage-status, storage-history, storage-reviews, storage-migrate, storage-backup, storage-restore, storage-restore-abort, storage-cleanup-artifacts, storage-adopt-quarantine, reconcile-view, profile, init, status, next, start, complete, apply-write, review-open, review-next, review-start, review-submit, review-check, review-status, delivery-check';
+const usage='Commands: remote-serve, remote-enroll, remote-enroll-close, remote-clients, remote-revoke, remote-audit, remote-merge, operator-import, heartbeat, recover-expired, retry, cancel, close, archive, mission-history, authorization-status, storage-status, storage-history, storage-reviews, storage-migrate, storage-backup, storage-restore, storage-restore-abort, storage-cleanup-artifacts, storage-adopt-quarantine, reconcile-view, profile, init, status, next, start, complete, apply-write, review-open, review-next, review-start, review-submit, review-check, review-status, delivery-check';
 const readJson=async path=>JSON.parse(await readFile(path,'utf8'));
 const readText=async path=>readFile(path,'utf8');
 const noArgs=new Set(['status','profile','review-status','review-check','storage-status',
-  'storage-migrate','storage-restore-abort','reconcile-view','authorization-status','recover-expired','cancel','close','archive']);
+  'storage-migrate','storage-restore-abort','reconcile-view','authorization-status','recover-expired','cancel','close','archive',
+  'remote-serve','remote-enroll-close','remote-clients']);
 
 const aliases={
   'review-open':'reviewOpen','review-submit':'reviewSubmit',
@@ -73,12 +74,48 @@ export async function parseCliCommand(command,args=[],{json=readJson,text=readTe
       throw Error('Only --force-data-loss is allowed for offline restore');
     input={source:args[0],offline:true,forceDataLoss:args[1]==='--force-data-loss'};
   }
+  else if(command==='remote-enroll'){
+    const minutes=Number(args[0]);
+    if(args.length!==1||!Number.isInteger(minutes)||minutes<1||minutes>60)
+      throw Error('remote-enroll requires <minutes> between 1 and 60');
+    input={minutes};
+  }
+  else if(command==='remote-revoke'){
+    if(args.length!==1)throw Error('remote-revoke requires <clientId>');
+    input={clientId:args[0]};
+  }
+  else if(command==='remote-merge'){
+    if(args.length!==1)throw Error('remote-merge requires <missionId>');
+    input={missionId:args[0]};
+  }
+  else if(command==='remote-audit')
+    input={limit:args[0]?Number(args[0]):50,...(args[1]?{missionId:args[1]}:{})};
   else if(!noArgs.has(command))throw Error(usage);
   return {command,action:aliases[command]??command,input};
 }
 
+// Operator-only remote commands, run on the server. The OAuth enrollment
+// window and client revocation are never exposed as MCP tools.
+async function runRemoteCommand({command,input}){
+  const {httpSettings,startRemote}=await import('./http.mjs');
+  const {setEnrollment,listClients,revokeClient}=await import('./oauth.mjs');
+  const db=httpSettings().oauthDb;
+  if(command==='remote-serve'){const {settings}=await startRemote();return {listening:settings.bind+':'+settings.port};}
+  if(command==='remote-enroll')return setEnrollment(db,input.minutes);
+  if(command==='remote-enroll-close')return setEnrollment(db,0);
+  if(command==='remote-clients')return listClients(db);
+  if(command==='remote-revoke')return revokeClient(db,input.clientId);
+  const {createRemoteRuntime}=await import('./remote.mjs');
+  const runtime=createRemoteRuntime();
+  try{
+    if(command==='remote-audit')return {items:await runtime.readAudit(input)};
+    return await runtime.ops.zana_merge(input,{operator:true,host:'operator',sessionId:'operator-cli'});
+  }finally{await runtime.close();}
+}
+
 export async function runCli(command,args=[],{json,text}={}){
   const parsed=await parseCliCommand(command,args,{json,text});
+  if(parsed.command.startsWith('remote-'))return runRemoteCommand(parsed);
   if(parsed.command==='operator-import')return applyOperatorAction(parsed.input.envelope);
   if(parsed.command==='storage-restore-abort')return storageRestoreAbort();
   if(parsed.command==='storage-cleanup-artifacts')return storageCleanupArtifacts(undefined,parsed.input);

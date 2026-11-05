@@ -1,0 +1,19 @@
+# systemd --user unit for the ZanaLLaima remote MCP (zana-main).
+# Install: see docs/deploy-remote.md. The operator deploys; agents do not.
+[Unit]
+Description=ZanaLLaima remote MCP (Streamable HTTP on 127.0.0.1)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/zanallaima
+EnvironmentFile=%h/.config/zanallaima/zanallaima.env
+ExecStart=/usr/bin/env node src/http.mjs
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

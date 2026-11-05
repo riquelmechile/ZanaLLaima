@@ -1,4 +1,4 @@
-import {validateRelativePath} from './paths.mjs';
+import {validateRelativePath,assertWorkspaceRootIsolated} from './paths.mjs';
 export {validateRelativePath} from './paths.mjs';
 import {constants} from 'node:fs';
 import {open, lstat, realpath, rename, unlink} from 'node:fs/promises';
@@ -33,6 +33,7 @@ export async function workspaceRoot(root=process.env.ZANA_WORKSPACE_ROOT){
   if(process.platform!=='linux')fail('Anchored directory descriptors require Linux /proc/self/fd');
   const path=resolve(root),actual=await realpath(path);
   if(path!==actual)fail('Workspace root cannot be a symlink');
+  assertWorkspaceRootIsolated(path);
   return path;
 }
 

@@ -18,12 +18,14 @@ async function fixture({budget={}}={}){
   const publicPath=join(dir,'public.pem'),file=join(dir,'state.json');
   const {publicKey,privateKey}=generateKeyPairSync('ed25519');
   await writeFile(publicPath,publicKey.export({type:'spki',format:'pem'}));
-  await mkdir(join(dir,'docs'));
+  const workspace=join(dir,'workspace');
+  await mkdir(workspace);
+  await mkdir(join(workspace,'docs'));
   const old={state:process.env.ZANA_STATE_FILE,operator:process.env.ZANA_OPERATOR_PUBLIC_KEY_PATH,
     root:process.env.ZANA_WORKSPACE_ROOT};
   process.env.ZANA_STATE_FILE=file;
   process.env.ZANA_OPERATOR_PUBLIC_KEY_PATH=publicPath;
-  process.env.ZANA_WORKSPACE_ROOT=dir;
+  process.env.ZANA_WORKSPACE_ROOT=workspace;
   const mission=await transact(()=>createMission({
     objective:'Apply one signed filesystem effect',
     authorization:{writesAllowed:true,allowedPaths:['docs']},budget,
@@ -39,7 +41,7 @@ async function fixture({budget={}}={}){
   const grant=signed('GRANT_WRITE',{paths:['docs']});
   await applyOperatorAction(grant,file);
   const packet=(await operations.start({})).packets[0];
-  return {dir,file,signed,grant,packet,
+  return {dir:workspace,file,signed,grant,packet,
     args:(overrides={})=>({unitId:'write',token:packet.token,leaseGeneration:packet.leaseGeneration,
       path:'docs/guide.txt',content:'first safe content',...overrides}),
     cleanup:async()=>{

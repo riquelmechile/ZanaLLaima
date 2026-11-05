@@ -18,9 +18,11 @@ async function setup(){
   const {privateKey,publicKey}=generateKeyPairSync('ed25519');
   const publicPath=join(dir,'operator-public.pem');
   await writeFile(publicPath,publicKey.export({type:'spki',format:'pem'}));
-  await mkdir(join(dir,'docs'));
+  const workspace=join(dir,'workspace');
+  await mkdir(workspace);
+  await mkdir(join(workspace,'docs'));
   process.env.ZANA_OPERATOR_PUBLIC_KEY_PATH=publicPath;
-  process.env.ZANA_WORKSPACE_ROOT=dir;
+  process.env.ZANA_WORKSPACE_ROOT=workspace;
   const cleanup=async()=>{
     delete process.env.ZANA_OPERATOR_PUBLIC_KEY_PATH;
     delete process.env.ZANA_WORKSPACE_ROOT;
@@ -32,7 +34,7 @@ async function setup(){
       expiresAt:new Date(Date.now()+600000).toISOString(),...additional};
     return {payload,signature:sign(null,Buffer.from(JSON.stringify(payload)),privateKey).toString('base64')};
   };
-  return {dir,file,signed,cleanup};
+  return {dir:workspace,file,signed,cleanup};
 }
 const proposal=()=>({objective:'Write an operator-approved guide',
   authorization:{writesAllowed:true,allowedPaths:['docs']},

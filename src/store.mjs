@@ -679,7 +679,7 @@ export async function restoreBackup(source,file=statePath(),
         candidate.exec('COMMIT');
       }catch(error){rollbackIfOpen(candidate);throw error;}
     }finally{candidate.close();}
-    return swapAtomically({path,temp,marker,quarantine,sourceLive,afterQuarantine});
+    return await swapAtomically({path,temp,marker,quarantine,sourceLive,afterQuarantine});
   }finally{
     for(const suffix of ['','-wal','-shm'])
       await rm(temp+suffix,{force:true}).catch(()=>{});

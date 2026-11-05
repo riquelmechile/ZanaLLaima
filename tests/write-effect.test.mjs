@@ -261,3 +261,40 @@ test('WARNING W6 prolonged locked effect aborts before rename and remains uncert
     assert.equal(m.units[0].run.effectReceipt,undefined);
   }finally{await f.cleanup();}
 });
+
+test('WARNING W7 SIGKILL after temporary sync leaves tracked orphan, recover-expired cleans it',async()=>{
+  const f=await fixture();
+  try{
+    const code="import {applyWriteEffect} from './src/write-operations.mjs'; await applyWriteEffect(JSON.parse(process.argv[1]),process.argv[2],{afterTempSync:()=>process.kill(process.pid,'SIGKILL')});";
+    const child=spawnSync(process.execPath,['--input-type=module','-e',code,
+      JSON.stringify(f.args({content:'uncommitted temp bytes'})),f.file],{
+        cwd:process.cwd(),encoding:'utf8',env:{...process.env}});
+    assert.equal(child.signal,'SIGKILL',child.stderr);
+    const pending=await storageStatus(f.file);
+    assert.equal(pending.effectTemporaries.length,1);
+    assert.match(pending.effectTemporaries[0].tempName,/^\.zana-effect-/);
+    assert.equal((await readState(f.file)).units[0].status,'OUTCOME_UNKNOWN');
+    await operations.recoverExpired();
+    assert.equal((await storageStatus(f.file)).effectTemporaries.length,0);
+    await absent(join(f.dir,'docs','guide.txt'));
+    const m=await readState(f.file);
+    assert.equal(m.units[0].status,'OUTCOME_UNKNOWN');
+  }finally{await f.cleanup();}
+});
+
+test('WARNING W7 signed reconciliation removes a tracked orphaned effect temp',async()=>{
+  const f=await fixture();
+  try{
+    const code="import {applyWriteEffect} from './src/write-operations.mjs'; await applyWriteEffect(JSON.parse(process.argv[1]),process.argv[2],{afterTempSync:()=>process.kill(process.pid,'SIGKILL')});";
+    const child=spawnSync(process.execPath,['--input-type=module','-e',code,
+      JSON.stringify(f.args({content:'uncommitted content'})),f.file],{
+        cwd:process.cwd(),encoding:'utf8',env:{...process.env}});
+    assert.equal(child.signal,'SIGKILL',child.stderr);
+    assert.equal((await storageStatus(f.file)).effectTemporaries.length,1);
+    await applyOperatorAction(f.signed('RECONCILE_WRITE',{
+      unitId:'write',token:f.packet.token,leaseGeneration:f.packet.leaseGeneration,
+      decision:'CONFIRMED_NO_EFFECT',
+      evidence:['Inspected target and confirmed the temporary bytes were never renamed']}),f.file);
+    assert.equal((await storageStatus(f.file)).effectTemporaries.length,0);
+  }finally{await f.cleanup();}
+});

@@ -7,6 +7,21 @@
 
 - Permanece pendiente una nueva 4R independiente y gates externos del anfitrión/CI firmado.
 
+## Ronda 10 · versión 0.5.1 (candidata sin publicar)
+
+- Gramática `*` exacta de Python y directorios `.git` anidados fail-closed.
+- Adopt suma revocaciones y nonces de cuarentenas legibles y obliga a una autorización nueva tras epoch ciego.
+- Parser Git config/atributos, flock fail-stop, epoch persistido y benchmark con `.gitignore` rastreado.
+
+<!-- HISTORICAL_VERSIONS_START -->
+## Historial de versiones (no vigente)
+
+- 0.3.1: contratos iniciales SOLO y guías del ejecutor.
+- 0.4.1: endurecimiento de permisos y Git anterior al rediseño.
+- 0.4.2: integridad Git, recuperación tras crash y checklist.
+- 0.5.0: verificación Git del worktree y diario SQLite por UUID.
+<!-- HISTORICAL_VERSIONS_END -->
+
 # Roadmap técnico de ZanaLLaima
 
 **Estado:** seguimiento vivo de fases implementadas localmente y gates pendientes de integración.

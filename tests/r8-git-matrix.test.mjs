@@ -7,7 +7,8 @@ import {tmpdir} from 'node:os';
 import {observeGit} from '../src/git-evidence.mjs';
 
 const git=(repo,...args)=>execFileSync('git',['-C',repo,...args],{
- encoding:'utf8',stdio:['ignore','pipe','pipe'],timeout:30000}).trim();
+ encoding:'utf8',stdio:['ignore','pipe','pipe'],timeout:30000,
+ env:{...process.env,GIT_CONFIG_GLOBAL:'/dev/null',GIT_CONFIG_NOSYSTEM:'1'}}).trim();
 const put=(root,path,data='extra\n')=>{
  const target=join(root,path);mkdirSync(dirname(target),{recursive:true});writeFileSync(target,data);
 };
@@ -71,6 +72,23 @@ for(const name of ['.venv','.pytest_cache'])
    put(r,name+'/.gitignore','*\n');
    put(r,name+'/cache.bin','untracked but ignored\n');
  });
+// R10-C1: cada gramática inválida es un escenario diferente contra porcelain.
+for(const [label,pattern] of [
+ ['ASCII-leading',' *'],['tab-leading','\t*'],['tab-trailing','*\t'],
+ ['vertical-tab','*\v'],['form-feed','*\f'],['NBSP','*\u00a0'],
+ ['unicode-leading','\u2002*'],['CR-leading','\r*\n'],
+ ['BOM-double','\ufeff\ufeff*\n'],['CR-double','*\r\r\n']
+])add('R10 autoignore inválido '+label,r=>{
+ put(r,'v/.gitignore',pattern);put(r,'v/secret.test.mjs','export const leak=1;\n');
+});
+for(const branch of ['v1+fix','v1@fix','rama-ñ'])
+ add('R10 Git anidado rama '+branch,r=>{
+  const nest=join(r,'nest');mkdirSync(nest);git(nest,'init','-qb',branch);
+ });
+add('R10 Git anidado sin config',r=>{
+ const nest=join(r,'nest');mkdirSync(nest);git(nest,'init','-qb','main');
+ rmSync(join(nest,'.git','config'));
+});
 add('repositorio anidado válido',r=>{
  const nested=join(r,'nested');mkdirSync(nested);git(nested,'init','-qb','main');
  git(nested,'config','user.name','Nested');git(nested,'config','user.email','nested@example.invalid');

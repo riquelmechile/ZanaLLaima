@@ -247,11 +247,14 @@ const privateIgnoreDir=(repo,index)=>{
 };
 const ignoredNames=(repo,gitdir,paths)=>{
   if(!paths.length)return new Set();
-  const data=Buffer.from(paths.join('\0')+'\0');
+  // check-ignore interprets colon-leading stdin paths as pathspec magic.
+  // './' forces a literal relative path even for ':build' and ':!x'.
+  const data=Buffer.from(paths.map(path=>'./'+path).join('\0')+'\0');
   const out=gitCall(['--git-dir='+gitdir,'--work-tree='+repo,'check-ignore',
     '--no-index','--stdin','-z'],{input:data,maxBuffer:Math.max(data.length*2,1024*1024),
       allowNoMatch:true});
-  return new Set(out.toString('utf8').split('\0').filter(Boolean));
+  return new Set(out.toString('utf8').split('\0').filter(Boolean).map(path=>
+    path.startsWith('./')?path.slice(2):path));
 };
 const safeFile=(path,stat)=>{
   let fd;

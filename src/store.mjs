@@ -6,6 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { operatorPublicKey, verifySignedAction, verifyStoredGrant } from './operator.mjs';
 import { reconcileWrite, revokeRunningWrites } from './lifecycle.mjs';
 import {inspectEffectTemporary} from './write-effect.mjs';
+import {beginRestoreMoves,abortRestoreMoves,classifyRestoreArtifacts,cleanupRestoreArtifacts,interruptedRestoreJournal,RestoreJournalError} from './restore-journal.mjs';
 
 const SCHEMA_VERSION = 6;
 const MAX_EVENTS = 2000;
@@ -393,24 +394,12 @@ export async function cleanupEffectTemporaries(mission){
   return cleaned;
 }
 
-async function listRestoreArtifacts(path){
-  const entries=await readdir(dirname(path)).catch(error=>{
-    if(error?.code==='ENOENT')return [];
-    throw error;
-  });
-  const prefix=basename(path);
-  const bases=entries.filter(x=>
-    (x.startsWith(prefix+'.restoring.')||x.startsWith(prefix+'.quarantine.'))&&
-    !x.endsWith('-wal')&&!x.endsWith('-shm'));
-  return {
-    restoring:bases.filter(x=>x.startsWith(prefix+'.restoring.')).map(x=>join(dirname(path),x)),
-    quarantines:bases.filter(x=>x.startsWith(prefix+'.quarantine.')).map(x=>join(dirname(path),x))
-  };
-}
 export async function storageStatus(file=statePath()) {
-  await refuseInterruptedRestore(file);
   const path=databasePath(file);
-  const restoreArtifacts=await listRestoreArtifacts(path);
+  const restoreArtifacts=await classifyRestoreArtifacts(path);
+  if(await interruptedRestoreJournal(path))
+    return {backend:'RESTORE_PENDING',databasePath:path,restoreArtifacts,
+      integrity:'NOT_INSPECTED_RESTORE_IN_PROGRESS'};
   if (!await exists(path)) return {backend:'LEGACY_OR_EMPTY',databasePath:path,restoreArtifacts,legacyExists:await exists(legacyPath(file))};
   const db=connect(path,true);
   try {
@@ -457,35 +446,14 @@ class RestoreGuardError extends Error {
   constructor(code,message){super(message);this.name='RestoreGuardError';this.code=code;}
 }
 const guardRestore=(code,message)=>{throw new RestoreGuardError(code,message);};
-async function latestQuarantine(path){
-  const directory=dirname(path),prefix=basename(path)+'.quarantine.';
-  const entries=await readdir(directory);
-  const candidates=[];
-  for(const name of entries){
-    if(!name.startsWith(prefix)||!/^[0-9a-f-]{36}$/i.test(name.slice(prefix.length)))continue;
-    const candidate=join(directory,name);
-    const info=await lstat(candidate);
-    if(info.isSymbolicLink()||!info.isFile())
-      guardRestore('UNSAFE_QUARANTINE','Restore quarantine is not a regular file');
-    candidates.push({path:candidate,mtimeMs:(await stat(candidate)).mtimeMs});
-  }
-  candidates.sort((a,b)=>b.mtimeMs-a.mtimeMs||b.path.localeCompare(a.path));
-  return {path:candidates[0]?.path??null,orphanRestoring:entries.some(x=>
-    x.startsWith(basename(path)+'.restoring.'))};
-}
-async function previousLiveDatabase(path,currentRestoreTemp=null){
+// A quarantine not identified by the durable journal is NOT live state.
+// Never infer authority from mtime. Without a journal, an old quarantine is
+// evidence for manual recovery, not a candidate to auto-install.
+async function previousLiveDatabase(path){
   if(await exists(path))return {path,quarantine:false};
-  const pending=await latestQuarantine(path);
-  if(pending.path)return {path:pending.path,quarantine:true};
-  // The current restore itself has a .restoring.UUID working copy; it is
-  // not evidence of an earlier interrupted restore.
-  const directoryEntries=await readdir(dirname(path));
-  const oldOrphans=directoryEntries.some(name=>name.startsWith(basename(path)+'.restoring.') &&
-    join(dirname(path),name)!==currentRestoreTemp &&
-    join(dirname(path),name)!==currentRestoreTemp+'-wal' &&
-    join(dirname(path),name)!==currentRestoreTemp+'-shm');
-  if(oldOrphans)
-    guardRestore('ORPHAN_RESTORING','Orphaned restore candidate without live database; use offline recovery');
+  const artifacts=await classifyRestoreArtifacts(path);
+  if(artifacts.quarantines.length||artifacts.restoring.length)
+    guardRestore('UNOWNED_ARTIFACTS','Previous restore artifacts exist without a journal; explicit manual inspection required');
   return {path:null,quarantine:false};
 }
 function inspectLive(candidate,source,forceDataLoss){
@@ -551,35 +519,44 @@ function mergeSecurityFacts(db,security){
   // if a nonce was never stored in the lost live database.
   const existing=db.prepare("SELECT value FROM metadata WHERE key='restore_epoch'").get()?.value;
   const floor=security.blind?new Date().toISOString():security.epoch;
-  const epoch=[existing,floor].filter(Boolean).sort().at(-1);
+  const parsed=[existing,floor].filter(x=>x!==null&&x!==undefined).map(value=>{
+    // Malformed legacy epochs fail closed at "now"; do NOT sort strings.
+    if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(value)||
+       !Number.isFinite(Date.parse(value)))return Date.now();
+    return Date.parse(value);
+  });
+  const epoch=parsed.length?new Date(Math.max(...parsed)).toISOString():null;
   if(epoch)db.prepare("INSERT INTO metadata(key,value) VALUES('restore_epoch',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(epoch);
 }
-export async function storageRestoreAbort(file=statePath()){
+async function checkpointExclusive(path,{allowMissing=false}={}){
+  if(!await exists(path)){
+    if(allowMissing)return {missing:true};
+    guardRestore('CHECKPOINT_MISSING','No database available for WAL checkpoint');
+  }
+  // Exclusive lock before the FIRST rename. If another connection holds a
+  // WAL snapshot, TRUNCATE must be able to complete or the operation fails.
+  const db=new DatabaseSync(path);
+  try{
+    db.exec('PRAGMA busy_timeout=10000; PRAGMA locking_mode=EXCLUSIVE;');
+    assertHealthy(db);
+    const result=db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
+    if(!result||result.busy!==0)
+      guardRestore('CHECKPOINT_BUSY','Exclusive WAL checkpoint failed; close other SQLite clients');
+  }finally{db.close();}
+  if(await exists(path+'-wal')&&(await stat(path+'-wal')).size!==0)
+    guardRestore('CHECKPOINT_NONEMPTY','WAL is not empty after checkpoint; refusing to move database');
+  return {checkpointed:true};
+}
+export async function storageRestoreAbort(file=statePath(),{afterRename}={}){
   if(process.env.ZANA_RESTORE_OFFLINE!=='1')
     guardRestore('OFFLINE_REQUIRED','storage-restore-abort requires explicit offline operator mode');
-  const path=databasePath(file),marker=path+'.restore-pending';
-  if(!await exists(marker))guardRestore('NO_MARKER','No interrupted restore marker');
-  const previous=await latestQuarantine(path);
-  if(!previous.path)guardRestore('NO_QUARANTINE','No readable quarantine available to abort restore');
-  const live=connect(previous.path,true);
-  try{assertHealthy(live);}finally{live.close();}
-  // Keep marker until all files are back. Readers and writers refuse to open
-  // a partly recovered database.
-  const displaced=path+'.aborted.'+randomUUID();
-  const moved=[];
-  try{
-    for(const suffix of ['','-wal','-shm']){
-      if(await exists(path+suffix)){await rename(path+suffix,displaced+suffix);moved.push(suffix);}
-    }
-    for(const suffix of ['-wal','-shm','']){
-      if(await exists(previous.path+suffix))await rename(previous.path+suffix,path+suffix);
-    }
-    await rm(marker,{force:true});
-    return {aborted:true,databasePath:path,displacedPath:moved.length?displaced:null};
-  }catch(error){
-    // Preserve the marker and every available quarantine for manual recovery.
-    guardRestore('ABORT_INCOMPLETE','Offline restore abort incomplete; inspect marker and quarantine: '+error.message);
-  }
+  const path=databasePath(file);
+  return abortRestoreMoves(path,{checkpoint:checkpointExclusive,afterRename});
+}
+export async function storageCleanupArtifacts(file=statePath(),{confirm=false}={}){
+  if(process.env.ZANA_RESTORE_OFFLINE!=='1')
+    guardRestore('OFFLINE_REQUIRED','Artifact cleanup requires offline operator mode');
+  return cleanupRestoreArtifacts(databasePath(file),{confirm});
 }
 
 // An offline restore must not erase later receipts or an uncertain WRITE.
@@ -601,77 +578,39 @@ function receiptIdentitySet(db){
 // The marker is the reader/writer fence around a multi-file SQLite swap.
 // Failure restores the quarantined live files; it never clears the marker
 // until recovery has been completed or rolled back safely.
-async function swapAtomically({path,temp,marker,quarantine,sourceLive,afterQuarantine}){
-  const moved=[];
-  let installed=false;
-  const lock=await open(marker,'wx',0o600);
-  await lock.close();
-  try{
-    for(const suffix of ['','-wal','-shm']){
-      if(await exists(path+suffix)){
-        await rename(path+suffix,quarantine+suffix);
-        moved.push(suffix);
-      }
-    }
-    if(afterQuarantine)await afterQuarantine(); // internal fault injection only
-    await rename(temp,path);installed=true;
-    await rm(marker);
-    return {restored:true,databasePath:path,quarantinePath:moved.length?quarantine:sourceLive.path&&sourceLive.quarantine?sourceLive.path:null,
-      note:'Operator must retain the quarantined database and reconcile historical receipts'};
-  }catch(error){
-    try{
-      if(installed)await rm(path,{force:true});
-      for(const suffix of moved){
-        await rename(quarantine+suffix,path+suffix);
-      }
-      await rm(marker,{force:true});
-    }catch(rollbackError){
-      fail('Restore rollback failed; inspect quarantine and restore marker: '+
-        error.message+'; '+rollbackError.message);
-    }
-    throw error;
-  }
-
-}
-
 export async function restoreBackup(source,file=statePath(),
-  {offline=false,forceDataLoss=false,afterQuarantine}={}){
+  {offline=false,forceDataLoss=false,afterQuarantine,afterRename,afterJournalReady}={}){
   if(!offline||process.env.ZANA_RESTORE_OFFLINE!=='1')
-    fail('Restoration requires an explicit offline operator mode');
+    guardRestore('OFFLINE_REQUIRED','Restoration requires an explicit offline operator mode');
   const path=databasePath(file),src=resolve(source);
-  if(src===path)fail('Backup source cannot be the active database');
-  if(forceDataLoss!==false&&forceDataLoss!==true)
-    fail('forceDataLoss must be an explicit boolean');
-  await refuseInterruptedRestore(file);
+  if(src===path)guardRestore('SAME_SOURCE','Backup source cannot be the active database');
+  if(typeof forceDataLoss!=='boolean')guardRestore('INVALID_FORCE','forceDataLoss must be a boolean');
   await mkdir(dirname(path),{recursive:true,mode:0o700});
+  // After SIGKILL, replay the EXACT journal to abort the partial restore
+  // first; then inspect the recovered live DB and merge its monotone facts.
+  if(await interruptedRestoreJournal(path))
+    await storageRestoreAbort(file);
   const temp=path+'.restoring.'+randomUUID();
-  const marker=path+'.restore-pending',quarantine=path+'.quarantine.'+randomUUID();
+  const quarantine=path+'.quarantine.'+randomUUID();
   try{
-    // Read the source *without* the current-version-only connect(readonly)
-    // restriction; never mutate the operator's source backup.
     const sourceDb=new DatabaseSync(src,{readOnly:true});
     try{
       assertHealthy(sourceDb);
       const version=sourceDb.prepare('PRAGMA user_version').get().user_version;
-      if(version<1||version>SCHEMA_VERSION)fail('Unsupported backup schema');
+      if(version<1||version>SCHEMA_VERSION)guardRestore('SCHEMA','Unsupported backup schema');
       await backup(sourceDb,temp);
     }finally{sourceDb.close();}
     await chmod(temp,0o600);
-    // Run the same ordered, transactional migrations as ordinary connect().
-    const migrating=connect(temp);
-    migrating.close();
-    // A backup may be older than a WRITE revocation or a consumed operator
-    // nonce. Merge those security facts before the atomic replacement.
-    // forceDataLoss never authorizes a rollback of signed permissions.
-    const sourceLive=await previousLiveDatabase(path,temp);
+    const migrating=connect(temp);migrating.close();
+    const sourceLive=await previousLiveDatabase(path);
     const candidate=connect(temp);
     try{
       assertHealthy(candidate);
       const m=load(candidate);
-      if(!m)fail('Backup has no mission');
+      if(!m)guardRestore('EMPTY_BACKUP','Backup has no mission');
       if(m.units.some(x=>x.status==='RUNNING')||
-         m.review?.lenses?.some(x=>x.state==='RUNNING'))
-        fail('Backup contains running work; reconcile it before restoring');
+          m.review?.lenses?.some(x=>x.state==='RUNNING'))
+        guardRestore('BUSY_BACKUP','Backup contains running work');
       const security=inspectLive(candidate,sourceLive,forceDataLoss);
       candidate.exec('BEGIN IMMEDIATE');
       try{
@@ -679,13 +618,19 @@ export async function restoreBackup(source,file=statePath(),
         candidate.exec('COMMIT');
       }catch(error){rollbackIfOpen(candidate);throw error;}
     }finally{candidate.close();}
-    return await swapAtomically({path,temp,marker,quarantine,sourceLive,afterQuarantine});
+    const result=await beginRestoreMoves({path,temp,quarantine,
+      checkpoint:checkpointExclusive,afterQuarantine,afterRename,afterJournalReady});
+    return {...result,quarantinePath:result.quarantinePath??(
+      sourceLive.quarantine?sourceLive.path:null)};
   }finally{
-    for(const suffix of ['','-wal','-shm'])
-      await rm(temp+suffix,{force:true}).catch(()=>{});
+    // Never remove candidate bytes still referenced by an interrupted journal:
+    // those are essential to an idempotent rerun or abort after a crash.
+    if(!await interruptedRestoreJournal(path)){
+      for(const suffix of ['','-wal','-shm'])
+        await rm(temp+suffix,{force:true}).catch(()=>{});
+    }
   }
 }
-
 
 async function readEffectiveGrant(db,mission){
   if(!process.env.ZANA_OPERATOR_PUBLIC_KEY_PATH)return null;
@@ -723,8 +668,13 @@ export async function applyOperatorAction(envelope,file=statePath()){
       const {key,fingerprint}=await operatorPublicKey();
       const p=verifySignedAction(envelope,previous,key);
       const epoch=db.prepare("SELECT value FROM metadata WHERE key='restore_epoch'").get()?.value;
-      if(epoch&&Date.parse(p.issuedAt)<=Date.parse(epoch))
-        fail('Operator action issuedAt precedes restore epoch; obtain a new signature');
+      if(epoch){
+        const cutoff=typeof epoch==='string'&&
+          /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(epoch)&&
+          Number.isFinite(Date.parse(epoch))?Date.parse(epoch):Date.now();
+        if(!Number.isFinite(Date.parse(p.issuedAt))||Date.parse(p.issuedAt)<=cutoff)
+          fail('Operator action issuedAt precedes restore epoch; obtain a new signature');
+      }
 
       if(db.prepare('SELECT nonce FROM operator_actions WHERE nonce=?').get(p.nonce))
         fail('Operator action nonce already consumed');

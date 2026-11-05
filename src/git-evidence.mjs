@@ -308,12 +308,12 @@ const selfIgnoredUntrackedDirectory=dir=>{
   // Leading whitespace, tabs, NBSP, control whitespace, repeated BOM/CR and
   // negations never grant the exception (which suppresses untracked entries).
   let bytes=asUtf8(safeFile(ignore,st),'Python autoignore');
-  if(bytes.startsWith('\\uFEFF'))bytes=bytes.slice(1);
+  if(bytes.startsWith('\uFEFF'))bytes=bytes.slice(1);
   let stars=0;
-  for(let line of bytes.split('\\n')){
-    if(line.endsWith('\\r'))line=line.slice(0,-1);
+  for(let line of bytes.split('\n')){
+    if(line.endsWith('\r'))line=line.slice(0,-1);
     if(line===''||line.startsWith('#'))continue;
-    if(!/^\\* *$/.test(line))return false;
+    if(!/^\* *$/.test(line))return false;
     if(++stars>1)return false;
   }
   return stars===1;

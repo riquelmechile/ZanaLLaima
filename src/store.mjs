@@ -515,11 +515,11 @@ function inspectLive(candidate,source,forceDataLoss){
 // restore and adoption merge like nonces and never shrink.
 const CONSUMED_BUDGET_KEY='consumed_budget';
 // Ledger keys come from database bytes an operator may have been handed, so
-// they are validated against the same shapes createMission produces and kept
-// in null-prototype maps: a key like "__proto__" can never reach
-// Object.prototype or silently drop consumption.
-const LEDGER_MISSION_ID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const LEDGER_UNIT_ID=/^[a-z][a-z0-9-]{0,63}$/;
+// they live in null-prototype maps (a key like "__proto__" is an ordinary own
+// key there and can never reach Object.prototype) and must be bounded
+// strings. Any id the store itself accepts (including legacy snapshots with
+// non-UUID mission ids) stays valid.
+const ledgerKey=k=>typeof k==='string'&&k.length>=1&&k.length<=200&&k!=='__proto__';
 const invalidLedger=()=>guardRestore('INVALID_LEDGER','Consumed-budget ledger is malformed; preserve the database and inspect it');
 const counter=v=>{
   if(v===undefined)return 0;
@@ -527,7 +527,7 @@ const counter=v=>{
   return v;
 };
 function raise(ledger,missionId,unitId,attempts,leaseGeneration){
-  if(!LEDGER_MISSION_ID.test(missionId)||!LEDGER_UNIT_ID.test(unitId))invalidLedger();
+  if(!ledgerKey(missionId)||!ledgerKey(unitId))invalidLedger();
   const mission=Object.hasOwn(ledger,missionId)?ledger[missionId]:(ledger[missionId]=Object.create(null));
   const old=Object.hasOwn(mission,unitId)?mission[unitId]:{attempts:0,leaseGeneration:0};
   mission[unitId]={attempts:Math.max(old.attempts,counter(attempts)),
@@ -559,6 +559,7 @@ function readLedger(db){
 // database still proves; the caller reports ledgerRebuilt.
 function budgetFacts(db,{rebuild=false}={}){
   let ledger,rebuilt=false;
+  const corruptArchive=[];
   try{ledger=readLedger(db);}
   catch(error){
     if(!rebuild||error.code!=='INVALID_LEDGER')throw error;
@@ -568,28 +569,30 @@ function budgetFacts(db,{rebuild=false}={}){
   const consume=m=>{for(const u of m?.units??[])
     raise(ledger,m.id,u.id,u.attempts||0,u.run?.leaseGeneration||0);};
   consume(mission);
-  for(const row of db.prepare('SELECT snapshot FROM mission_archive').all()){
+  for(const row of db.prepare('SELECT seq,snapshot FROM mission_archive').all()){
     let archived;
     try{archived=JSON.parse(row.snapshot);}catch{archived=null;}
-    if(!archived||typeof archived.id!=='string'||!Array.isArray(archived.units)){
-      if(rebuild){rebuilt=true;continue;}
-      guardRestore('INVALID_LEDGER','Archived mission snapshot is malformed; preserve the database and inspect it');
+    try{
+      if(!archived||typeof archived.id!=='string'||!Array.isArray(archived.units))
+        guardRestore('INVALID_LEDGER','Archived mission snapshot is malformed; preserve the database and inspect it');
+      consume(archived);
+    }catch(error){
+      if(!rebuild||error.code!=='INVALID_LEDGER')throw error;
+      rebuilt=true;corruptArchive.push(row.seq);
     }
-    try{consume(archived);}
-    catch(error){if(!rebuild||error.code!=='INVALID_LEDGER')throw error;rebuilt=true;}
   }
-  return {revision:mission?.revision??null,running:!!mission?.units.some(u=>u.status==='RUNNING'),ledger,rebuilt};
+  return {revision:mission?.revision??null,running:!!mission?.units.some(u=>u.status==='RUNNING'),
+    ledger,rebuilt,corruptArchive};
 }
 function refuseConsumedBudget(backupMission,liveBudget){
   if(liveBudget.running)
     guardRestore('CONSUMED_BUDGET','Live database has RUNNING work; restore refused. With --force-data-loss the consumed attempts are kept as max(live, backup)');
   const consumed=backupMission&&Object.hasOwn(liveBudget.ledger,backupMission.id)?liveBudget.ledger[backupMission.id]:null;
   if(!consumed)return;
-  const candidate=backupMission;
-  for(const u of candidate.units){
+  for(const u of backupMission.units){
     const used=Object.hasOwn(consumed,u.id)?consumed[u.id]:null;
     if(used&&(used.attempts>(u.attempts||0)||used.leaseGeneration>(u.run?.leaseGeneration||0)))
-      guardRestore('CONSUMED_BUDGET','Unit '+u.id+' of mission '+candidate.id+' consumed attempts not present in the backup; restore refused. With --force-data-loss they are kept as max(live, backup)');
+      guardRestore('CONSUMED_BUDGET','Unit '+u.id+' of mission '+backupMission.id+' consumed attempts not present in the backup; restore refused. With --force-data-loss they are kept as max(live, backup)');
   }
 }
 // Fuse facts into the candidate database. The ledger and the revision are
@@ -758,7 +761,7 @@ async function otherQuarantineSecurity(base,selected){
       // Only legible, integrity-checked sources can contribute facts. Unreadable
       // sources never authorize writes (blind fencing revokes ALL grants), but
       // their consumed budget is unknown, so callers must surface them.
-      skipped.push({path,reason:'UNREADABLE'});
+      skipped.push({path,reason:error?.code==='INVALID_LEDGER'?'INVALID_LEDGER':'UNREADABLE'});
     }finally{if(db)db.close();}
   }
   return {sources,skipped};
@@ -789,7 +792,16 @@ export async function storageAdoptQuarantine(id,file=statePath(),{confirm=false,
           await rm(quarantine);
           const fd=await open(dirname(path),'r');
           try{await fd.sync();}finally{await fd.close();}
-          return {adopted:true,recovered:true,quarantineId:id,databasePath:path};
+          // Return what the completed adoption recorded, so a rerun after a
+          // crash shows the same skipped sources and rebuild as the first run.
+          let recorded={};
+          const done=connect(path,true);
+          try{
+            const row=done.prepare("SELECT detail FROM state_events WHERE category='QUARANTINE_ADOPTED' ORDER BY seq DESC LIMIT 1").get();
+            if(row)recorded=parse(row.detail)??{};
+          }finally{done.close();}
+          return {adopted:true,recovered:true,quarantineId:id,databasePath:path,
+            skippedSources:recorded.skippedSources??[],ledgerRebuilt:!!recorded.ledgerRebuilt};
         }
       }
       guardRestore('LIVE_PRESENT','No se puede adoptar: existe una DB viva');
@@ -818,11 +830,21 @@ export async function storageAdoptQuarantine(id,file=statePath(),{confirm=false,
       const own=budgetFacts(db,{rebuild:forceDataLoss});
       const detail={quarantineId:id,source:'OPERATOR_EXPLICIT_CONFIRMATION',
         securitySources:securitySources.map(x=>x.path),skippedSources:skipped,
-        ledgerRebuilt:own.rebuilt,blindFence:true};
+        ledgerRebuilt:own.rebuilt,corruptArchiveRows:own.corruptArchive.length,blindFence:true};
       ledgerRebuilt=own.rebuilt;
       db.exec('BEGIN IMMEDIATE');
       try{
+        // Write the chosen copy's own (validated or rebuilt) ledger first: an
+        // empty fact set makes mergeBudgetFacts persist ownLedger unchanged.
         mergeBudgetFacts(db,{revision:null,ledger:Object.create(null)},{ownLedger:own.ledger});
+        // Heal what the rebuild skipped: corrupt archive rows move to their
+        // own table (kept for inspection) so later restores need no force.
+        if(own.corruptArchive.length){
+          db.exec('CREATE TABLE IF NOT EXISTS mission_archive_corrupt (seq INTEGER PRIMARY KEY, mission_id TEXT NOT NULL, snapshot TEXT NOT NULL, archived_at TEXT NOT NULL, moved_at TEXT NOT NULL)');
+          const move=db.prepare('INSERT OR REPLACE INTO mission_archive_corrupt(seq,mission_id,snapshot,archived_at,moved_at) SELECT seq,mission_id,snapshot,archived_at,? FROM mission_archive WHERE seq=?');
+          const drop=db.prepare('DELETE FROM mission_archive WHERE seq=?');
+          for(const seq of own.corruptArchive){move.run(now(),seq);drop.run(seq);}
+        }
         // Merge monotone revocations, consumed nonces and consumed work budget
         // from every readable quarantine and aborted DB, then revoke all grants because a lost
         // live DB cannot prove its absent authorization history.
@@ -914,6 +936,9 @@ async function restoreBackupUnlocked(source,file=statePath(),
       if(m.units.some(x=>x.status==='RUNNING')||
           m.review?.lenses?.some(x=>x.state==='RUNNING'))
         guardRestore('BUSY_BACKUP','Backup contains running work');
+      // The backup's own ledger and archive must be valid in EVERY restore,
+      // blind included; a corrupt backup is never published (pick another).
+      budgetFacts(candidate);
       const security=inspectLive(candidate,sourceLive,forceDataLoss);
       // A blind restore cannot read the live history. Merge what readable
       // aborted copies still prove; consumption only the lost DB knew is the

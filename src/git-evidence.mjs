@@ -5,6 +5,7 @@ import {dirname,isAbsolute,resolve,sep} from 'node:path';
 // Git config belongs to the candidate's author. No subprocess may execute
 // worktree filters, attributes drivers, fsmonitor, hooks or network transports.
 const SAFE_GIT_ARGS=[
+  '--no-replace-objects',
   '-c','core.fsmonitor=false',
   '-c','core.untrackedCache=false',
   '-c','core.hooksPath=/dev/null',
@@ -25,6 +26,7 @@ const gitEnv=()=>{
   result.GIT_CONFIG_NOSYSTEM='1';
   result.GIT_CONFIG_GLOBAL='/dev/null';
   result.GIT_ATTR_NOSYSTEM='1';
+  result.GIT_NO_REPLACE_OBJECTS='1';
   return result;
 };
 const call=(worktree,args,options={})=>{

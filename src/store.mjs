@@ -1,12 +1,12 @@
 import { DatabaseSync, backup } from 'node:sqlite';
 import { constants } from 'node:fs';
-import { access, chmod, copyFile, link, mkdir, open, readFile, readdir, rename, rm, stat, lstat } from 'node:fs/promises';
-import { basename, dirname, join, resolve } from 'node:path';
+import { access, chmod, copyFile, link, mkdir, open, readFile, rename, rm, stat, lstat } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { operatorPublicKey, verifySignedAction, verifyStoredGrant } from './operator.mjs';
 import { reconcileWrite, revokeRunningWrites } from './lifecycle.mjs';
 import {inspectEffectTemporary} from './write-effect.mjs';
-import {beginRestoreMoves,abortRestoreMoves,classifyRestoreArtifacts,cleanupRestoreArtifacts,interruptedRestoreJournal,RestoreJournalError} from './restore-journal.mjs';
+import {beginRestoreMoves,abortRestoreMoves,classifyRestoreArtifacts,cleanupRestoreArtifacts,interruptedRestoreJournal} from './restore-journal.mjs';
 import {withRestoreLock} from './restore-lock.mjs';
 
 const SCHEMA_VERSION = 6;
@@ -486,7 +486,7 @@ function inspectLive(candidate,source,forceDataLoss){
     return {blind:false,
       actions:live.prepare('SELECT nonce,mission_id,kind,created_at FROM operator_actions').all(),
       revoked:live.prepare('SELECT grant_id,mission_id,payload,signature,fingerprint,revoked,created_at FROM operator_grants WHERE revoked=1').all(),
-      epoch:live.prepare("SELECT value FROM metadata WHERE key='restore_epoch'").get()?.value??null};
+      epoch:live.prepare('SELECT value FROM metadata WHERE key=?').get(RESTORE_EPOCH_KEY)?.value??null};
   }catch(error){
     if(error instanceof RestoreGuardError)throw error;
     if(source.quarantine)
@@ -526,13 +526,13 @@ function mergeSecurityFacts(db,security){
   }
   // On blind recovery revoke every grant and fence old signed actions, even
   // if a nonce was never stored in the lost live database.
-  const existing=db.prepare("SELECT value FROM metadata WHERE key='restore_epoch'").get()?.value;
+  const existing=db.prepare('SELECT value FROM metadata WHERE key=?').get(RESTORE_EPOCH_KEY)?.value;
   const floor=security.blind?new Date().toISOString():security.epoch;
   const currentTime=Date.now();
   const parsed=[existing,floor].filter(x=>x!==null&&x!==undefined)
     .map(x=>parseEpoch(x,currentTime));
   const epoch=parsed.length?new Date(Math.max(...parsed)).toISOString():null;
-  if(epoch)db.prepare("INSERT INTO metadata(key,value) VALUES('restore_epoch',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(epoch);
+  if(epoch)db.prepare('INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(RESTORE_EPOCH_KEY,epoch);
 }
 async function checkpointExclusive(path,{allowMissing=false,allowUnreadable=false}={}){
   if(!await exists(path)){
@@ -771,7 +771,7 @@ export async function applyOperatorAction(envelope,file=statePath()){
       if(!previous)fail('No active mission to authorize');
       const {key,fingerprint}=await operatorPublicKey();
       const p=verifySignedAction(envelope,previous,key);
-      const epoch=db.prepare("SELECT value FROM metadata WHERE key='restore_epoch'").get()?.value;
+      const epoch=db.prepare('SELECT value FROM metadata WHERE key=?').get(RESTORE_EPOCH_KEY)?.value;
       if(epoch){
         const cutoff=parseEpoch(epoch);
         if(!Number.isFinite(Date.parse(p.issuedAt))||Date.parse(p.issuedAt)<=cutoff)

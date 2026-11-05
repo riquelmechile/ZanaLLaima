@@ -7,8 +7,6 @@ import {pathToFileURL} from 'node:url';
 const SHA=/^[a-f0-9]{40}$/;
 const BRANCH=/^refs\/heads\/[a-zA-Z0-9._/-]{1,200}$/;
 const ensure=(test,message)=>{if(!test)throw Error('CI attestation refused: '+message);};
-const git=(...args)=>execFileSync('git',args,{encoding:'utf8',
-  stdio:['ignore','pipe','pipe'],timeout:10000}).trim();
 export function buildCiPayload({candidateSha,treeSha,baseSha,branchRef,targetRef,
   runId,conclusion='success',issuedAt=new Date().toISOString(),
   expiresAt=new Date(Date.now()+30*60000).toISOString()}){

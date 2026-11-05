@@ -14,8 +14,12 @@ if [[ -n "$(printenv ZANA_OPERATOR_PUBLIC_KEY_PATH || true)" ]]; then
 fi
 PUBLIC_FILE="$ROOT/keys/ci-verifier.pub"
 TMP_PUBLIC=''
+TMP_PRIVATE=''
 fail() { printf 'Configuración CI rechazada: %s\n' "$*" >&2; exit 1; }
-cleanup() { if [[ -n "$TMP_PUBLIC" ]]; then rm -f -- "$TMP_PUBLIC"; fi; }
+cleanup() {
+  if [[ -n "$TMP_PUBLIC" ]]; then rm -f -- "$TMP_PUBLIC"; fi
+  if [[ -n "$TMP_PRIVATE" ]]; then rm -f -- "$TMP_PRIVATE"; fi
+}
 trap cleanup EXIT
 
 if [[ "${1:-}" == '--dry-run' && "$#" -eq 1 ]]; then
@@ -45,9 +49,18 @@ umask 077
 mkdir -p -- "$KEY_DIR"
 if [[ -L "$PRIVATE_KEY" ]]; then fail 'La ruta de la llave CI no puede ser symlink.'; fi
 if [[ ! -e "$PRIVATE_KEY" ]]; then
-  # La llave privada solo se genera en la máquina de Zana y nunca se sobrescribe.
-  openssl genpkey -algorithm Ed25519 -out "$PRIVATE_KEY" >/dev/null ||
-    fail 'No se pudo crear la llave CI.'
+  # Generar, validar y mover sin sobrescribir. SIGKILL no deja una llave privada truncada.
+  TMP_PRIVATE="$(mktemp "$KEY_DIR/.ci-private.XXXXXXXX")" ||
+    fail 'No se pudo crear el temporal privado en KEY_DIR.'
+  chmod 0600 "$TMP_PRIVATE"
+  openssl genpkey -algorithm Ed25519 -out "$TMP_PRIVATE" >/dev/null ||
+    fail 'Falló genpkey; revisar el sistema local y eliminar el temporal antes de reintentar.'
+  openssl pkey -in "$TMP_PRIVATE" -noout >/dev/null 2>&1 ||
+    fail 'Llave Ed25519 temporal inválida. No publicar ni cargar un secreto.'
+  mv -n -- "$TMP_PRIVATE" "$PRIVATE_KEY" ||
+    fail 'No se pudo mover llave CI temporal a su destino.'
+  [[ ! -e "$TMP_PRIVATE" ]] || fail 'Otra llave CI apareció concurrentemente; no se sobrescribe.'
+  TMP_PRIVATE=''
 fi
 [[ -f "$PRIVATE_KEY" && ! -L "$PRIVATE_KEY" ]] || fail 'Llave CI inválida.'
 [[ "$(stat -c '%a' "$PRIVATE_KEY")" == '600' ]] ||
@@ -55,7 +68,7 @@ fi
 TMP_PUBLIC="$(mktemp "$ROOT/keys/.ci-public.XXXXXXXX")"
 chmod 0600 "$TMP_PUBLIC"
 openssl pkey -in "$PRIVATE_KEY" -pubout -out "$TMP_PUBLIC" >/dev/null ||
-  fail 'No se pudo derivar la llave pública CI.'
+  fail 'No se pudo derivar llave pública CI: comprobar PEM Ed25519, modo 0600 y regenerar localmente solo si está dañada.'
 ci_fp="$(openssl pkey -pubin -in "$TMP_PUBLIC" -pubout -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1)" ||
   fail 'No se pudo calcular la huella pública CI.'
 [[ "$ci_fp" =~ ^[[:xdigit:]]{64}$ ]] || fail 'Huella pública CI inválida.'

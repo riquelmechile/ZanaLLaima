@@ -30,13 +30,15 @@ for(const corrupt of ['zzzz','~']){
   }finally{await f.close();}
  });
 }
-test('R8-W1 future valid ISO epoch wins numerically over invalid backup epoch',async()=>{
+test('R9-W4 epoch futuro ISO se acota a ahora',async()=>{
  const f=await restoreFixture();try{
-  const future=new Date(Date.now()+86400000).toISOString();
+  const start=Date.now(),future=new Date(start+86400000).toISOString();
   putEpoch(f.backup,'zzzz');
   putEpoch(databasePath(f.file),future);
   await restoreBackup(f.backup,f.file,{offline:true});
-  assert.equal(getEpoch(databasePath(f.file)),future);
+  const epoch=Date.parse(getEpoch(databasePath(f.file)));
+  assert.ok(epoch>=start-1000&&epoch<=Date.now(),
+   'Epoch futuro no puede bloquear autorizaciones para siempre');
  }finally{await f.close();}
 });
 test('R8-W6 scope pointing to a regular file stops anchor traversal safely',async()=>{

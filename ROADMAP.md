@@ -8,6 +8,7 @@
 
 - **RDD P1-a/P1-b:** reemplazar `git status` por comparación de entradas `git ls-files -s -z` frente a `git ls-tree -r -z HEAD`; comprobar blobs sin filtros con `git hash-object --no-filters`, permisos y symlinks, y archivos no rastreados con `git ls-files --others --exclude-standard -z`. Repetirlo en submódulos y exigir coincidencia de gitlinks. No ejecutar drivers de atributos ni confiar en `config.worktree`, `include` o `includeIf`.
 - **Persistencia P1-c:** unión monotónica de `operator_actions` y grants revocados desde la base viva al candidato de restauración. `forceDataLoss` no puede restaurar autorizaciones revocadas. Base viva ilegible: revocar todos los grants restaurados y exigir consentimiento explícito.
+- **P2 de Codex tras primera revisión:** comprobar mediante `lstat` cada componente intermedio de rutas rastreadas. Un directorio sustituido por symlink, incluso a un destino interno y con rutas excluidas del recuento de no rastreados, deja `clean:false`. Prueba con uno y dos niveles, fix `d14711e`.
 - **Evidencia:** tests negativos Git locales y cuatro negativos SQLite rojos en GitHub CI antes de aplicar el fix; después exigir cobertura sin bajar umbrales, suite, estrés, benchmark y auditoría en el SHA final.
 - **Gates:** nueva revisión Codex con recibo completado y nueva 4R independiente de `sebastianriquelme95-max`. Sin aprobación, firma CI real, merge ni despliegue.
 

@@ -240,7 +240,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     let outcome='OK',data=null;
     try{
       data=await fn(args??{},session);
-      if(data?.passthrough)return data.passthrough;
+      if(data?.passthrough)return redactDeep(data.passthrough,secrets());
       const safe=redactDeep(data,secrets());
       return {content:[{type:'text',text:JSON.stringify(safe)}],structuredContent:safe};
     }catch(error){

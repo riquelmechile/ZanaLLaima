@@ -82,8 +82,18 @@ const commonDirFor=gitDir=>{
 // Read config text WITHOUT asking Git to expand includes or invoke any
 // configured helper. Reject unknown extensions and fetch-capable settings
 // before the only object-reading subprocess (cat-file).
+// Git's info/attributes and core.attributesFile are untrusted inputs too:
+// they must not silently normalize observed bytes or execute filter drivers.
+function rejectUnsafeAttributeFile(path,label){
+  if(!existsSync(path))return;
+  const content=asUtf8(readRequired(path,label),label);
+  if(/(?:^|[ \t])(?:[-+]?text(?:=\S+)?|eol(?:=\S+)?|filter(?:=\S+)?|ident(?:=\S+)?|working-tree-encoding(?:=\S+)?)(?=[ \t]|$)/m.test(content))
+    deny('Unsafe '+label+' with text/eol/filter/ident/working-tree-encoding');
+}
 const validateConfig=gitDir=>{
   const common=commonDirFor(gitDir);
+  for(const attr of new Set([join(common,'info','attributes'),join(gitDir,'info','attributes')]))
+    rejectUnsafeAttributeFile(attr,'Git info/attributes');
   const files=[join(common,'config'),join(gitDir,'config.worktree')];
   if(common!==gitDir)files.push(join(gitDir,'config'));
   for(const file of new Set(files)){
@@ -91,6 +101,13 @@ const validateConfig=gitDir=>{
     const config=asUtf8(readRequired(file,'Git config'),'Git config').split(/\r?\n/);
     let section='',subsection='';
     for(let line of config){
+      // Git config allows an unescaped trailing backslash to continue the
+      // next line. Never parse just the visible physical line and accidentally
+      // permit a remote promisor/uploadpack in the joined logical line.
+      const physical=line.replace(/[ \t]+$/,'');
+      const trailing=/\\+$/.exec(physical);
+      if(trailing&&trailing[0].length%2===1)
+        deny('Unsafe Git config continuation (trailing unescaped backslash)');
       line=line.trim();
       if(!line||line.startsWith('#')||line.startsWith(';'))continue;
       if(line.startsWith('[')){
@@ -123,8 +140,22 @@ const validateConfig=gitDir=>{
       if(section==='extensions'&&key==='worktreeconfig'&&
           !['true','false','1','0'].includes(value.toLowerCase()))
         deny('Invalid worktreeConfig extension');
-      if(section==='remote'&&['promisor','uploadpack'].includes(key))
-        deny('Unsafe remote '+key+' configuration');
+      const qualified=[section,subsection,key].filter(Boolean).join('.');
+      if((section==='remote'&&['promisor','uploadpack'].includes(key))||
+         /^remote\.[^.]+\.(?:promisor|uploadpack)$/.test(qualified)||
+         /^remote\.[^.]+\.(?:promisor|uploadpack)$/.test(key))
+        deny('Unsafe remote promisor/uploadpack configuration');
+      if((section==='core'&&key==='worktree')||key==='core.worktree')
+        deny('Unsafe core.worktree override');
+      if(section==='core'&&key==='attributesfile'){
+        if(value.includes('\0'))deny('Invalid core.attributesFile');
+        let attributePath=value;
+        if(attributePath.startsWith('~/')){
+          if(!process.env.HOME)deny('Cannot resolve core.attributesFile home path');
+          attributePath=join(process.env.HOME,attributePath.slice(2));
+        }else if(!isAbsolute(attributePath))attributePath=resolve(common,attributePath);
+        rejectUnsafeAttributeFile(attributePath,'core.attributesFile');
+      }
       if(section==='core'&&['sshcommand'].includes(key))
         deny('Unsafe Git command configuration');
       if(section==='protocol'&&key==='allow'&&value.toLowerCase()==='always')
@@ -237,7 +268,10 @@ const entryTree=entries=>{
   for(const [path,entry] of entries)insertTree(tree,path,entry.mode,entry.sha);
   return serializeTree(tree);
 };
-// A private ignore-only shadow eliminates uncommitted .gitignore files from
+// The ignore-only shadow excludes uncommitted .gitignore from rule evaluation.
+// The index-verified tracked rule files are its only authorization to skip.
+// The shadow must never hide an untracked payload through an unverified rule.
+//
 // Git's own directory walk. Reusing the candidate as --work-tree would let
 // .venv/.gitignore='*' suppress an otherwise untracked parent directory.
 const privateIgnoreDir=(repo,index)=>{

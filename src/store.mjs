@@ -484,7 +484,9 @@ function inspectLive(candidate,source,forceDataLoss){
         if(!retained.has(key))
           guardRestore('NEWER_RECEIPT','Restoring backup would discard newer durable receipt without --force-data-loss');
     }
-    return {blind:false,
+    const budget=budgetFacts(old);
+    if(!forceDataLoss)refuseConsumedBudget(load(candidate),budget);
+    return {blind:false,budget,
       actions:live.prepare('SELECT nonce,mission_id,kind,created_at FROM operator_actions').all(),
       revoked:live.prepare('SELECT grant_id,mission_id,payload,signature,fingerprint,revoked,created_at FROM operator_grants WHERE revoked=1').all(),
       epoch:live.prepare('SELECT value FROM metadata WHERE key=?').get(RESTORE_EPOCH_KEY)?.value??null};
@@ -496,6 +498,49 @@ function inspectLive(candidate,source,forceDataLoss){
       guardRestore('LIVE_UNREADABLE','Live database cannot be inspected; explicit --force-data-loss required');
     return {blind:true,actions:[],revoked:[],epoch:null};
   }finally{if(live)live.close();}
+}
+// Consumed work budget is a monotone fact, like a consumed nonce: attempts and
+// leaseGeneration per unit, total starts and the mission revision never move
+// backwards across restore or adoption. Otherwise an offline restore would
+// hand out fresh attempts without any operator signature (R11-C1).
+function budgetFacts(mission){
+  if(!mission)return null;
+  return {missionId:mission.id,revision:mission.revision,
+    units:mission.units.map(u=>({id:u.id,status:u.status,attempts:u.attempts||0,
+      leaseGeneration:u.run?.leaseGeneration||0}))};
+}
+function refuseConsumedBudget(candidate,live){
+  if(!live)return;
+  if(live.units.some(u=>u.status==='RUNNING'))
+    guardRestore('CONSUMED_BUDGET','Live database has RUNNING work; restore would drop consumed attempts without --force-data-loss');
+  if(!candidate||candidate.id!==live.missionId)return;
+  const backup=new Map(candidate.units.map(u=>[u.id,u]));
+  for(const u of live.units){
+    const b=backup.get(u.id);
+    if(u.attempts>(b?.attempts||0)||u.leaseGeneration>(b?.run?.leaseGeneration||0))
+      guardRestore('CONSUMED_BUDGET','Unit '+u.id+' consumed attempts after the backup; restore requires --force-data-loss');
+  }
+}
+// Merge max(live, candidate) into the candidate database. Revision always
+// lands strictly above every known source, so clients never see it go back.
+function mergeBudgetFacts(db,facts){
+  if(!facts)return;
+  const m=db.prepare('SELECT id,revision FROM active_mission WHERE slot=1').get();
+  if(!m)return;
+  if(facts.revision>=m.revision)
+    db.prepare('UPDATE active_mission SET revision=? WHERE slot=1').run(facts.revision+1);
+  if(m.id!==facts.missionId)return;
+  const read=db.prepare('SELECT attempts,run FROM units WHERE mission_id=? AND id=?');
+  const write=db.prepare('UPDATE units SET attempts=?,run=? WHERE mission_id=? AND id=?');
+  for(const u of facts.units){
+    const row=read.get(m.id,u.id);
+    if(!row)continue;
+    const run=parse(row.run);
+    const attempts=Math.max(row.attempts||0,u.attempts);
+    const generation=Math.max(run?.leaseGeneration||0,u.leaseGeneration);
+    if(attempts===(row.attempts||0)&&generation===(run?.leaseGeneration||0))continue;
+    write.run(attempts,json(generation?{...(run??{}),leaseGeneration:generation}:run),m.id,u.id);
+  }
 }
 function mergeSecurityFacts(db,security){
   if(security.blind){
@@ -619,7 +664,8 @@ async function otherQuarantineSecurity(base,selected){
         path,
         actions:db.prepare('SELECT nonce,mission_id,kind,created_at FROM operator_actions').all(),
         revoked:db.prepare('SELECT grant_id,mission_id,payload,signature,fingerprint,revoked,created_at FROM operator_grants WHERE revoked=1').all(),
-        epoch:db.prepare('SELECT value FROM metadata WHERE key=?').get(RESTORE_EPOCH_KEY)?.value??null
+        epoch:db.prepare('SELECT value FROM metadata WHERE key=?').get(RESTORE_EPOCH_KEY)?.value??null,
+        budget:budgetFacts(load(db))
       });
     }catch(error){
       // Only legible, integrity-checked sources can contribute facts. Even
@@ -675,10 +721,13 @@ export async function storageAdoptQuarantine(id,file=statePath(),{confirm=false}
         securitySources:securitySources.map(x=>x.path),blindFence:true};
       db.exec('BEGIN IMMEDIATE');
       try{
-        // Merge monotone revocations and consumed nonces from every readable
-        // quarantine and aborted DB, then revoke all grants because a lost
+        // Merge monotone revocations, consumed nonces and consumed work budget
+        // from every readable quarantine and aborted DB, then revoke all grants because a lost
         // live DB cannot prove its absent authorization history.
-        for(const security of securitySources)mergeSecurityFacts(db,{...security,blind:false});
+        for(const security of securitySources){
+          mergeSecurityFacts(db,{...security,blind:false});
+          mergeBudgetFacts(db,security.budget);
+        }
         mergeSecurityFacts(db,{blind:true,actions:[],revoked:[],epoch:null});
         const before=db.prepare(
           "SELECT 1 FROM state_events WHERE category='QUARANTINE_ADOPTED' AND detail=? LIMIT 1")
@@ -764,6 +813,7 @@ async function restoreBackupUnlocked(source,file=statePath(),
       candidate.exec('BEGIN IMMEDIATE');
       try{
         mergeSecurityFacts(candidate,security);
+        mergeBudgetFacts(candidate,security.budget);
         candidate.exec('COMMIT');
       }catch(error){rollbackIfOpen(candidate);throw error;}
     }finally{candidate.close();}

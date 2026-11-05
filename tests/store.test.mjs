@@ -108,9 +108,13 @@ test('backup and explicit offline restore retain integrity and reject running ba
     await transact(s=>{ startBatch(s);return s; },f.file);
     process.env.ZANA_RESTORE_OFFLINE='1';
     try{
-      const restore=await restoreBackup(dest,f.file,{offline:true});
+      // R11-C1: RUNNING live work consumed an attempt after the backup; a
+      // plain restore must refuse instead of silently refunding it.
+      await assert.rejects(restoreBackup(dest,f.file,{offline:true}),err=>err.code==='CONSUMED_BUDGET');
+      const restore=await restoreBackup(dest,f.file,{offline:true,forceDataLoss:true});
       assert.equal(restore.restored,true);
       assert.equal((await readState(f.file)).units[0].status,'PENDING');
+      assert.equal((await readState(f.file)).units[0].attempts,1,'attempts consumidos se conservan');
       assert.equal((await storageStatus(f.file)).integrity,'ok');
       assert.ok(restore.quarantinePath);
     }finally{delete process.env.ZANA_RESTORE_OFFLINE;}

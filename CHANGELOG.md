@@ -1,5 +1,10 @@
 # Registro de cambios
 
+## [0.5.2] - No publicado
+
+- **R11-C1 (restore):** el restore offline sin `--force-data-loss` se rechaza con `CONSUMED_BUDGET` si la DB viva tiene trabajo RUNNING o consumió intentos o generaciones de lease después del backup. Con `--force-data-loss`, y en `storage-adopt-quarantine`, se fusiona `max(viva, backup)` por unidad; la `revision` queda siempre por sobre todas las fuentes. Test negativo previo `d4f8de8` (hilo Codex `4485193503`).
+- Congelados por el cambio a MCP remoto: endurecimiento de `git-evidence`, `zana_apply_write`, grants de escritura y aislamiento de OS. Ver `ROADMAP.md`.
+
 ## [0.5.1] - No publicado
 
 Correcciones R10 sobre la revisión 4R de `7b6f3b1`: gramática exacta de autoignore Python, fusión monotónica de revocaciones y nonces durante adopción de cuarentena con cerco ciego, y repositorios `.git` anidados fail-closed. Hardening de config/atributos Git, epoch durable, crash de flock y benchmark con `.gitignore` rastreado. Candidato pendiente de revisión independiente, sin tag, merge ni deploy.

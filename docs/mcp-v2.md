@@ -71,7 +71,7 @@ La herramienta no garantiza que otras capacidades del host hayan sido deshabilit
 
 ## Emisor de atestación CI (workflow_run, main-only)
 
-**Versión del proyecto: ZanaLLaima 0.5.1.** El sobre Ed25519 `CI_RESULT` es producido por `scripts/ci-attest.mjs`, ejecutado por `.github/workflows/ci-attestation.yml` mediante `workflow_run` una vez que concluye `CI`. El script confiable se carga exclusivamente desde `main` (policy **main-only**) y consulta la API de GitHub para verificar los jobs, SHA, árbol, base, runId y conclusión. Jamás se ejecuta código o dependencias del HEAD del PR con `ZANA_CI_SIGNING_KEY`.
+**Versión del proyecto: ZanaLLaima 0.5.2.** El sobre Ed25519 `CI_RESULT` es producido por `scripts/ci-attest.mjs`, ejecutado por `.github/workflows/ci-attestation.yml` mediante `workflow_run` una vez que concluye `CI`. El script confiable se carga exclusivamente desde `main` (policy **main-only**) y consulta la API de GitHub para verificar los jobs, SHA, árbol, base, runId y conclusión. Jamás se ejecuta código o dependencias del HEAD del PR con `ZANA_CI_SIGNING_KEY`.
 
 El environment `ci-attestation` exige un reviewer requerido `sebastianriquelme95-max`, que pertenece al mismo dueño del autor; la separación de cuentas no constituye independencia organizacional. La configuración debe impedir self-review y mantener solo `main` como deployment policy. El workflow permanece desactivado hasta configurar el secreto, la llave pública real y `ZANA_CI_ATTESTATION_READY=true` con controles humanos. La llave `keys/ci-verifier.pub` sigue siendo placeholder hasta entonces.
 

@@ -1,17 +1,7 @@
-## Candidato 0.5.1 (sin publicar): verificación Git desde disco y restore transaccional
+## Candidato 0.5.2 (sin publicar): presupuesto monótono en restore y congelamiento
 
-- R8: rediseños A y B aceptados técnicamente en la 4R independiente del SHA `c2df20f`.
-- R9: seis correcciones puntuales sobre shadow/ignorados, diario inicial atómico y manual de operaciones. Test rojo previo por hallazgo, matriz y benchmarks; sin merge, tag ni deploy.
-- R9 W2/W3: `flock` offline para restore/abort/cleanup y `storage-adopt-quarantine <UUID> --confirm` con evento durable y preservación de revocaciones/nonces de la copia seleccionada.
-- Matriz R9: 66 escenarios Git únicos, cero discrepancias; benchmark 5000 archivos/3400 directorios <1 s; crash hooks tras diario, cuarentena y cada rename, además de pruebas anteriores de R8. Pendiente verificar kill por cada syscall de disco (no simular 62 puntos instrumentados).
-
-- Permanece pendiente una nueva 4R independiente y gates externos del anfitrión/CI firmado.
-
-## Ronda 10 · versión 0.5.1 (candidata sin publicar)
-
-- Gramática `*` exacta de Python y directorios `.git` anidados fail-closed.
-- Adopt suma revocaciones y nonces de cuarentenas legibles y obliga a una autorización nueva tras epoch ciego.
-- Parser Git config/atributos, flock fail-stop, epoch persistido y benchmark con `.gitignore` rastreado.
+- R11-C1: el restore offline y el `adopt` tratan `attempts`, `leaseGeneration`, total de starts y `revision` como hechos monótonos. Código nuevo `CONSUMED_BUDGET`; con `--force-data-loss` se fusiona `max(viva, backup)`.
+- **Cambio de rumbo:** ZanaLLaima pasa a ser un MCP remoto para la app de ChatGPT (fase siguiente, en otro PR). Quedan **congelados**: endurecimiento de `git-evidence`, gate `zana_apply_write`, grants de escritura Ed25519, aislamiento de OS (ZL-004) y los warnings pendientes de la ronda 11 (atributos y `crlf`, `**/.gitignore` del hilo Codex `4485193524`, lock con fd en Node, alias `nlink=2`, `skippedSources` del adopt, `setup-python` en CI, epoch clampeado). El código queda, sin más cambios.
 
 <!-- HISTORICAL_VERSIONS_START -->
 ## Historial de versiones (no vigente)
@@ -20,6 +10,7 @@
 - 0.4.1: endurecimiento de permisos y Git anterior al rediseño.
 - 0.4.2: integridad Git, recuperación tras crash y checklist.
 - 0.5.0: verificación Git del worktree y diario SQLite por UUID.
+- 0.5.1: gramática autoignore exacta, adopt con fusión de revocaciones y repos anidados fail-closed.
 <!-- HISTORICAL_VERSIONS_END -->
 
 # Roadmap técnico de ZanaLLaima

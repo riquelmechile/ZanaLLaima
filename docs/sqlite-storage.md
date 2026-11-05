@@ -88,6 +88,7 @@ Los tokens y generaciones de intento protegen de dobles completados. El heartbea
 | `CHECKPOINT_MISSING` | Base esperada no encontrada; revisar estado del diario. |
 | `CHECKPOINT_NONEMPTY` | WAL no vaciado; no mover SQLite hasta checkpoint completo. |
 | `CONFIRM_REQUIRED` | Revisar consecuencias y repetir con --confirm si está autorizado. |
+| `CONSUMED_BUDGET` | La DB viva consumió intentos, generaciones de lease o tiene trabajo RUNNING después del backup. Sin `--force-data-loss` el restore se rechaza; con él se fusiona `max(viva, backup)` por unidad, y el `adopt` hace lo mismo con todas las cuarentenas legibles. La `revision` nunca retrocede. |
 | `EMPTY_BACKUP` | Backup sin misión activa; escoger copia válida. |
 | `EMPTY_QUARANTINE` | No contiene misión activa; no adoptar. |
 | `GRANT_COLLISION` | Conflicto de identidad de grant: bloquear e inspeccionar firmas y origen. |

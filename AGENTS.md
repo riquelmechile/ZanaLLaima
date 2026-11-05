@@ -41,6 +41,6 @@ La rama \`main\` tiene checks y revisión externa obligatorios. No hacer merge, 
 
 ## Integración y límites
 
-Seguir \`docs/host-codex.md\` para configurar MCP stdio y \`docs/host-e2e.md\` para el E2E real. **PASO HUMANO:** Zana ejecuta y commitea el reporte; no afirmar capacidades observadas desde tests locales. El transporte HTTP OAuth para ChatGPT web es otra iniciativa (ZL-020), fuera de la versión 0.5.1.
+Seguir \`docs/host-codex.md\` para configurar MCP stdio y \`docs/host-e2e.md\` para el E2E real. **PASO HUMANO:** Zana ejecuta y commitea el reporte; no afirmar capacidades observadas desde tests locales. El transporte HTTP OAuth para ChatGPT web es otra iniciativa (ZL-020), fuera de la versión 0.5.2.
 
 Mantener secretos, datos y artefactos dentro del repositorio/workspace autorizado. No introducir referencias a otros sistemas de coordinación en código o documentación. Ante incertidumbre de permisos o estado, bloquear y reportar en vez de simular cumplimiento.

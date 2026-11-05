@@ -827,6 +827,19 @@ export async function authorizationStatus(file=statePath()){
   }finally{db.close();}
 }
 
+// Future or malformed restore_epoch values are a deny-by-default fence,
+// but they must not remain in SQLite forever. Persist the clamped bound in
+// its own autocommitted statement before validating a new signed action;
+// even a rejected action must not roll the correction back.
+function clampPersistedEpoch(db){
+  const row=db.prepare('SELECT value FROM metadata WHERE key=?').get(RESTORE_EPOCH_KEY);
+  if(!row)return null;
+  const numeric=parseEpoch(row.value);
+  const clamped=new Date(numeric).toISOString();
+  if(clamped!==row.value)
+    db.prepare('UPDATE metadata SET value=? WHERE key=?').run(clamped,RESTORE_EPOCH_KEY);
+  return clamped;
+}
 export async function applyOperatorAction(envelope,file=statePath()){
   const path=databasePath(file);
   return queueLocalWrite(path,async()=>{
@@ -834,6 +847,7 @@ export async function applyOperatorAction(envelope,file=statePath()){
     if(!await exists(path))fail('No database to authorize');
     const db=connect(path);
   try{
+    clampPersistedEpoch(db);
     db.exec('BEGIN IMMEDIATE');
     try{
       const previous=load(db);

@@ -276,3 +276,79 @@ test('verified review correction count survives process reopen',async()=>{
     assert.equal((await storageStatus(f.file)).schemaVersion,6);
   }finally{await f.cleanup();}
 });
+
+test('WARNING W8 restore migrates pre-v6 SQLite snapshot via a temporary database',async()=>{
+  const f=await fixture();
+  try{
+    const original=await transact(()=>createMission(input()),f.file);
+    const backupFile=join(f.dir,'backup-v3.sqlite');
+    await backupState(backupFile,f.file);
+    const old=new DatabaseSync(backupFile);
+    try{old.exec('ALTER TABLE active_mission DROP COLUMN budget; PRAGMA user_version=3');}
+    finally{old.close();}
+    process.env.ZANA_RESTORE_OFFLINE='1';
+    try{
+      const outcome=await restoreBackup(backupFile,f.file,{offline:true});
+      assert.equal(outcome.restored,true);
+    }finally{delete process.env.ZANA_RESTORE_OFFLINE;}
+    assert.equal((await storageStatus(f.file)).schemaVersion,6);
+    assert.equal((await readState(f.file)).id,original.id);
+  }finally{await f.cleanup();}
+});
+test('WARNING W8 live uncertain WRITE and new durable receipts cannot be silently lost',async()=>{
+  const f=await fixture();
+  try{
+    await transact(()=>createMission(input()),f.file);
+    const backupFile=join(f.dir,'old.sqlite');
+    await backupState(backupFile,f.file);
+    await transact(s=>{
+      const packet=startBatch(s).batch.packets[0];
+      completeUnit(s,'scan',packet.token,{success:true,summary:'Completed after backup',
+        evidence:['Additional original receipt must be preserved']});
+      return s;
+    },f.file);
+    process.env.ZANA_RESTORE_OFFLINE='1';
+    try{
+      await assert.rejects(restoreBackup(backupFile,f.file,{offline:true}),
+        /receipt|data loss|newer/i);
+      const result=await restoreBackup(backupFile,f.file,{offline:true,forceDataLoss:true});
+      assert.equal(result.restored,true);
+    }finally{delete process.env.ZANA_RESTORE_OFFLINE;}
+  }finally{await f.cleanup();}
+  const g=await fixture();
+  try{
+    await transact(()=>createMission({
+      objective:'Preserve an uncertain signed write',
+      authorization:{writesAllowed:true,allowedPaths:['docs']},
+      units:[{id:'write',effect:'WRITE',paths:['docs'],instruction:'Write the selected file'}]
+    }),g.file);
+    const backupFile=join(g.dir,'before-unknown.sqlite');
+    await backupState(backupFile,g.file);
+    await transact(s=>{
+      s.units[0].status='OUTCOME_UNKNOWN';
+      s.units[0].run={token:'reserved-write',leaseGeneration:1,
+        effectIntent:{effectId:'unresolved',status:'INTENT_DURABLE',path:'docs/file.txt'}};
+      s.revision++;return s;
+    },g.file);
+    process.env.ZANA_RESTORE_OFFLINE='1';
+    try{
+      await assert.rejects(restoreBackup(backupFile,g.file,{offline:true}),/OUTCOME_UNKNOWN|uncertain/);
+    }finally{delete process.env.ZANA_RESTORE_OFFLINE;}
+  }finally{await g.cleanup();}
+});
+test('WARNING W8 interrupted restoration rolls back quarantine and leaves active state intact',async()=>{
+  const f=await fixture();
+  try{
+    const first=await transact(()=>createMission(input()),f.file);
+    const backupFile=join(f.dir,'snapshot.sqlite');
+    await backupState(backupFile,f.file);
+    process.env.ZANA_RESTORE_OFFLINE='1';
+    try{
+      await assert.rejects(restoreBackup(backupFile,f.file,{
+        offline:true,afterQuarantine:()=>{throw new Error('INJECTED_RESTORE_FAILURE');}
+      }),/INJECTED_RESTORE_FAILURE/);
+    }finally{delete process.env.ZANA_RESTORE_OFFLINE;}
+    assert.equal((await readState(f.file)).id,first.id);
+    assert.equal((await storageStatus(f.file)).integrity,'ok');
+  }finally{await f.cleanup();}
+});

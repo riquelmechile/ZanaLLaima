@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {execFileSync} from 'node:child_process';
-import {mkdtempSync,mkdirSync,writeFileSync,rmSync,chmodSync,symlinkSync,renameSync,appendFileSync} from 'node:fs';
+import {execFileSync,spawnSync} from 'node:child_process';
+import {mkdtempSync,mkdirSync,writeFileSync,rmSync,chmodSync,symlinkSync,renameSync,appendFileSync,existsSync} from 'node:fs';
 import {join,dirname} from 'node:path';
 import {tmpdir} from 'node:os';
 import {observeGit} from '../src/git-evidence.mjs';
@@ -156,4 +156,57 @@ test('R9: 60+ escenarios únicos contra git status porcelain -uall --ignore-subm
  console.log('R9_GIT_STATUS_MATRIX_CASES='+scenarios.length+
    ' FALSE_POSITIVES='+falsePositives+' FALSE_NEGATIVES='+falseNegatives);
  assert.deepEqual(discrepancies,[],'Discrepancias Git: '+JSON.stringify(discrepancies));
+});
+
+test('R10: clone real shallow por file:// y HEAD propio, sin historia completa',()=>{
+ const dir=mkdtempSync(join(tmpdir(),'zana-r10-shallow-'));
+ try{
+  const origin=join(dir,'origin'),shallow=join(dir,'shallow');
+  mkdirSync(origin);git(origin,'init','-qb','main');
+  git(origin,'config','user.name','Shallow');git(origin,'config','user.email','shallow@example.invalid');
+  writeFileSync(join(origin,'tracked.txt'),'safe\n');
+  git(origin,'add','.');git(origin,'commit','-qm','base shallow');
+  const result=spawnSync('git',['clone','--depth','1','file://'+origin,shallow],{
+    encoding:'utf8',env:{...process.env,GIT_CONFIG_GLOBAL:'/dev/null',GIT_CONFIG_NOSYSTEM:'1'}});
+  assert.equal(result.status,0,result.stderr);
+  git(shallow,'checkout','-qb','feature/shallow');
+  assert.equal(git(shallow,'rev-list','--count','HEAD'),'1');
+  assert.equal(git(shallow,'status','--porcelain=v1','-uall','--ignore-submodules=none'),'');
+  assert.equal(observeGit({repoPath:shallow}).clean,true);
+ }finally{rmSync(dir,{recursive:true,force:true});}
+});
+test('R10: python -m venv real cuando Python genera .gitignore de autoignore',t=>{
+ const dir=mkdtempSync(join(tmpdir(),'zana-r10-venv-real-')),repo=join(dir,'repo');
+ try{
+  mkdirSync(repo);git(repo,'init','-qb','main');git(repo,'config','user.name','Python');
+  git(repo,'config','user.email','python@example.invalid');writeFileSync(join(repo,'tracked.txt'),'safe');
+  git(repo,'add','.');git(repo,'commit','-qm','base');git(repo,'checkout','-qb','feature/python');
+  const proc=spawnSync('python3',['-m','venv','--without-pip',join(repo,'.venv')],{
+    encoding:'utf8',timeout:90000});
+  if(proc.status!==0){t.skip('python venv no disponible en este runner: '+proc.stderr?.slice(0,100));return;}
+  if(!existsSync(join(repo,'.venv','.gitignore'))){
+    t.skip('Esta versión de Python no crea .venv/.gitignore automáticamente');return;
+  }
+  const porcelain=git(repo,'status','--porcelain=v1','-uall','--ignore-submodules=none');
+  assert.equal(porcelain,'');assert.equal(observeGit({repoPath:repo}).clean,true);
+ }finally{rmSync(dir,{recursive:true,force:true});}
+});
+test('R10: plantilla pytest real .pytest_cache/.gitignore si pytest está instalado',t=>{
+ const dir=mkdtempSync(join(tmpdir(),'zana-r10-pytest-real-')),repo=join(dir,'repo');
+ try{
+  mkdirSync(repo);git(repo,'init','-qb','main');
+  git(repo,'config','user.name','Pytest');git(repo,'config','user.email','pytest@example.invalid');
+  writeFileSync(join(repo,'tracked.txt'),'safe');
+  git(repo,'add','.');git(repo,'commit','-qm','base');git(repo,'checkout','-qb','feature/pytest');
+  writeFileSync(join(dir,'test_real.py'),'def test_real():\n    assert 2 + 2 == 4\n');
+  const proc=spawnSync('python3',['-m','pytest','-q','-o',
+    'cache_dir='+join(repo,'.pytest_cache'),join(dir,'test_real.py')],{
+    cwd:repo,encoding:'utf8',timeout:90000,env:{...process.env,PYTHONDONTWRITEBYTECODE:'1'}});
+  if(proc.status!==0){t.skip('pytest no disponible o falló en runner: '+proc.stderr?.slice(0,100));return;}
+  if(!existsSync(join(repo,'.pytest_cache','.gitignore'))){
+    t.skip('Esta instalación de pytest no generó .pytest_cache/.gitignore');return;
+  }
+  assert.equal(git(repo,'status','--porcelain=v1','-uall','--ignore-submodules=none'),'');
+  assert.equal(observeGit({repoPath:repo}).clean,true);
+ }finally{rmSync(dir,{recursive:true,force:true});}
 });

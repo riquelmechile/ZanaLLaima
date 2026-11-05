@@ -7,15 +7,16 @@ import {tmpdir} from 'node:os';
 import {performance} from 'node:perf_hooks';
 import {observeGit} from '../src/git-evidence.mjs';
 
-const git=(repo,...args)=>execFileSync('git',['-C',repo,...args],{encoding:'utf8'}).trim();
+const git=(repo,...args)=>execFileSync('git',['-C',repo,...args],{encoding:'utf8',env:{...process.env,GIT_CONFIG_GLOBAL:'/dev/null',GIT_CONFIG_NOSYSTEM:'1'}}).trim();
 
-test('R9-W7: observeGit 5000 archivos en 3400 directorios en menos de 1 s',()=>{
+test('R9-W7: observeGit 5000 archivos en 3400 directorios con .gitignore rastreado en menos de 1 s',()=>{
   const dir=mkdtempSync(join(tmpdir(),'zana-r9-wide-bench-'));
   const repo=join(dir,'repo');
   try{
     mkdirSync(repo);git(repo,'init','-qb','main');
     git(repo,'config','user.name','R9 Benchmark');
     git(repo,'config','user.email','r9-benchmark@example.invalid');
+    writeFileSync(join(repo,'.gitignore'),'node_modules/\n'); // tracked ignore must exercise shadow
     for(let i=0;i<3400;i++)
       mkdirSync(join(repo,'bucket-'+String(i).padStart(4,'0')));
     for(let i=0;i<5000;i++){

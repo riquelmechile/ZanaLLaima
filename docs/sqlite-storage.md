@@ -54,7 +54,7 @@ Si la base viva se perdió y existe una `.quarantine.<UUID>` antigua sin diario,
 ZANA_RESTORE_OFFLINE=1 node src/cli.mjs storage-adopt-quarantine <UUID> --confirm
 ```
 
-La operación requiere que no exista DB viva ni `.restore-pending`, verifica SQLite y hace checkpoint de WAL antes de publicar la DB de forma exclusiva. Preserva los nonces y las revocaciones **presentes en la cuarentena seleccionada** y registra `QUARANTINE_ADOPTED` en el historial antes de publicarla. No puede reconstruir hechos que nunca estuvieron en esa copia: inspeccionar fecha, hash y antigüedad de la cuarentena antes de confirmar. Restore, abort y cleanup usan un archivo `.restore.lock` protegido con `flock` entre procesos Linux; el lock se libera al terminar o al morir el proceso.
+La operación requiere que no exista DB viva ni `.restore-pending`, verifica SQLite y hace checkpoint de WAL antes de publicar la DB de forma exclusiva. Fusiona las revocaciones y los nonces de **todas las cuarentenas y `.aborted.<UUID>` legibles** con las mismas comprobaciones monotónicas del restore. Después aplica una **barrera ciega**: revoca todos los grants y fija `restore_epoch` a la hora de adopción. Por eso la recuperación exige una **firma nueva del operador** para volver a autorizar WRITE: un GRANT previo no sirve aunque estuviera activo en la cuarentena antigua. La decisión queda registrada como `QUARANTINE_ADOPTED` antes de publicar. `storage-status` incluye revisión, fecha de actualización y cantidad de revocaciones por copia; inspeccionarlas antes de escoger UUID. Una copia ilegible puede contener historia no recuperable, y nunca se debe asumir que esa historia no existió. Restore, abort y cleanup comparten `.restore.lock` mediante `flock` entre procesos Linux. Si el guardia `flock` muere durante una operación, el operador termina con SIGKILL antes de continuar escribiendo; el diario permite recuperarlo. Si la DB y su cuarentena comparten dev/ino tras un crash entre `link` y `rm`, el siguiente adopt del mismo UUID solo completa el unlink y fsync.
 
 ## Recuperación de una restauración interrumpida
 
@@ -68,7 +68,7 @@ Los tokens y generaciones de intento protegen de dobles completados. El heartbea
 
 **Invariante:** nunca se instala una base que retroceda una revocación o permita reutilizar un nonce confirmado, ni se separan una base SQLite y su WAL con información pendiente. Antes de tocar la base viva o su cuarentena se exige el checkpoint exclusivo `PRAGMA wal_checkpoint(TRUNCATE)`: el WAL debe tener longitud cero, y una segunda conexión que impida el checkpoint bloquea la operación.
 
-`.restore-pending` contiene JSON durable con los campos `version:1`, `id` (UUID), `path`, `temp`, `quarantine`, `phase`, `restoreOps` y `abortOps`. Las rutas están limitadas al archivo de estado y sus sidecars `-wal`/`-shm`; `temp` debe tener el prefijo de restauración autorizado. El primer diario se escribe en un temporal `.restore-pending.new.<UUID>`, se hace fsync del contenido, se publica exclusivamente con enlace duro (`link`, falla si existe otro diario), se elimina el temporal y se hace fsync del directorio. Nunca se escribe primero un archivo marcador vacío. Un marcador legado vacío/truncado sin movimientos posibles y con la base viva intacta se puede abortar sin borrar archivos a mano.
+`.restore-pending` contiene JSON durable con los campos `version:1`, `id` (UUID), `path`, `temp`, `quarantine`, `phase`, `restoreOps` y `abortOps`. El campo booleano opcional `allowUnreadable` conserva el consentimiento de un restore forzado sobre DB corrupta y se reaplica durante abort después del crash; nunca autoriza desechar un WAL con datos sin checkpoint. Las rutas están limitadas al archivo de estado y sus sidecars `-wal`/`-shm`; `temp` debe tener el prefijo de restauración autorizado. El primer diario se escribe en un temporal `.restore-pending.new.<UUID>`, se hace fsync del contenido, se publica exclusivamente con enlace duro (`link`, falla si existe otro diario), se elimina el temporal y se hace fsync del directorio. Nunca se escribe primero un archivo marcador vacío. Un marcador legado vacío/truncado sin movimientos posibles y con la base viva intacta se puede abortar sin borrar archivos a mano.
 
 **Estados y transición:**
 
@@ -81,11 +81,41 @@ Los tokens y generaciones de intento protegen de dobles completados. El heartbea
 
 | Código | Acción segura |
 | --- | --- |
-| `INVALID_JOURNAL` | No modificar archivos a mano. Si la base sigue intacta y no hubo movimientos, usar abort offline; de lo contrario conservar evidencia y revisar. |
-| `LOST_RENAME` / `LOST_DATABASE` / `LOST_CANDIDATE` | Falta una ruta del diario. Preservar cuarentena y temporales, comparar identidad y no forzar instalación de una base incompleta. |
-| `AMBIGUOUS_RENAME` | Ambos extremos del rename existen: no sobrescribir ni elegir por fecha; inspección manual. |
-| `UNOWNED_ARTIFACTS` | Existen restos sin diario dueño. No se adoptan automáticamente ni se omiten las revocaciones. |
-| `JOURNAL_ACTIVE` | Detener procesos concurrentes y completar o abortar el diario antes de restaurar o limpiar. |
+| `AMBIGUOUS_RENAME` | Ambas rutas del movimiento existen: detenerse, no sobrescribir ninguna. |
+| `BLIND_RESTORE` | Sin DB previa, aceptar explícitamente --force-data-loss y revocación total. |
+| `BUSY_BACKUP` | Trabajo RUNNING en backup; cerrar/reconciliar primero. |
+| `CHECKPOINT_BUSY` | Otra conexión bloquea checkpoint exclusivo; cerrar clientes y reintentar. |
+| `CHECKPOINT_MISSING` | Base esperada no encontrada; revisar estado del diario. |
+| `CHECKPOINT_NONEMPTY` | WAL no vaciado; no mover SQLite hasta checkpoint completo. |
+| `CONFIRM_REQUIRED` | Revisar consecuencias y repetir con --confirm si está autorizado. |
+| `EMPTY_BACKUP` | Backup sin misión activa; escoger copia válida. |
+| `EMPTY_QUARANTINE` | No contiene misión activa; no adoptar. |
+| `GRANT_COLLISION` | Conflicto de identidad de grant: bloquear e inspeccionar firmas y origen. |
+| `INVALID_FORCE` | Pasar booleano forceDataLoss válido y explícito. |
+| `INVALID_JOURNAL` | Diario corrupto: no borrar archivos; abort offline solo si no hubo movimientos identificables. |
+| `INVALID_QUARANTINE` | UUID o identidad incompatible; no hacer renames manuales. |
+| `INVALID_UUID` | Elegir UUID válido exacto de storage-status. |
+| `JOURNAL_ACTIVE` | Completar o abortar diario activo, luego volver a operar. |
+| `LIVE_PRESENT` | DB viva existente: no sustituirla; solo se completa un hardlink idéntico tras crash. |
+| `LIVE_UNREADABLE` | DB viva corrupta: preservar y evaluar recuperación forzada con consentimiento. |
+| `LOST_CANDIDATE` | Candidato perdido: abort debe devolver cuarentena intacta antes de reintentar. |
+| `LOST_DATABASE` | Falta DB de cuarentena; preservar evidencia y no instalar una copia arbitraria. |
+| `LOST_RENAME` | Faltan ambos extremos del movimiento; preservar temporales y consultar diario. |
+| `NEWER_RECEIPT` | Backup omite recibos nuevos; escoger copia más completa o consentimiento de pérdida. |
+| `NONCE_COLLISION` | Conflicto en nonce consumido: bloquear hasta investigar la trazabilidad. |
+| `NOT_FOUND` | Cuarentena solicitada ausente; revisar el ID. |
+| `NO_JOURNAL` | No hay restore interrumpido que abortar; confirmar estado antes de actuar. |
+| `OFFLINE_REQUIRED` | Detener clientes y establecer ZANA_RESTORE_OFFLINE=1. |
+| `QUARANTINE_UNREADABLE` | Cuarentena ilegible; abort e inspección, nunca inferir revocaciones ausentes. |
+| `ROLLBACK_INCOMPLETE` | Abort incompleto: conservar diario, cerrar clientes y reintentar recuperación. |
+| `SAME_SOURCE` | Backup igual a DB activa; elegir un origen diferente. |
+| `SCHEMA` | Backup incompatible; usar versión migrable soportada. |
+| `UNCERTAIN_WRITE` | Resolver WRITE OUTCOME_UNKNOWN mediante reconciliación firmada antes del restore. |
+| `UNOWNED_ARTIFACTS` | No hay diario y faltó DB viva: inspeccionar las copias y adoptar manualmente UUID exacto con --confirm cuando corresponda. |
+| `UNREADABLE_WAL` | DB ilegible con WAL pendiente; preservar datos sin forzar descarte. |
+| `UNSAFE_QUARANTINE` | Symlink, hardlink o tipo inseguro; conservar y revisar archivo. |
+| `WAL_NOT_EMPTY` | WAL pendiente: cerrar conexiones y completar checkpoint, no separarlo de DB. |
+| `flock timeout` | Otro proceso retiene el lock: cerrar clientes y reintentar luego, no borrar el archivo de lock. |
 
 Comandos de operador, con todos los clientes cerrados:
 

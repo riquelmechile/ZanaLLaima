@@ -275,6 +275,20 @@ const safeFile=(path,stat)=>{
     deny('Unable to read worktree file without following symlink');
   }finally{if(fd!==undefined)closeSync(fd);}
 };
+// Python's venv/pytest create a self-ignoring, untracked .gitignore with
+// exactly one effective '*' pattern. Git considers such a completely
+// untracked directory clean. Never honor this in a tracked subtree or a
+// directory containing a nested Git worktree.
+const selfIgnoredUntrackedDirectory=dir=>{
+  if(existsSync(join(dir,'.git')))return false;
+  const ignore=join(dir,'.gitignore');
+  let st;
+  try{st=lstatSync(ignore);}catch(error){if(error.code==='ENOENT')return false;deny('Unreadable Python autoignore');}
+  if(!st.isFile()||st.isSymbolicLink())return false;
+  const effective=asUtf8(safeFile(ignore,st),'Python autoignore').split(/\r?\n/)
+    .map(x=>x.trim()).filter(x=>x&&!x.startsWith('#'));
+  return effective.length===1&&effective[0]==='*';
+};
 const matchesDangerousAttributes=bytes=>/(?:^|\s)(?:filter\s*=|eol\s*=|(?:-?text)(?:\s|=|$)|ident(?:\s|=|$))/m
   .test(bytes.toString('utf8'));
 function inspect(root,expectedSha,parentGitDir,depth=0){
@@ -312,6 +326,8 @@ function inspect(root,expectedSha,parentGitDir,depth=0){
         const tracked=index.has(path)||trackedDirs.has(path);
         if(!tracked&&ent.name!=='.gitignore'&&ignored.has(path))continue;
         if(isDir){
+          if(!tracked&&!trackedDirs.has(path)&&selfIgnoredUntrackedDirectory(abs))
+            continue; // Git also treats Python-generated private caches as ignored.
           if(index.get(path)?.mode==='160000'){
             const nested=realpathSync(abs);
             if(nested!==abs||!within(root,nested))

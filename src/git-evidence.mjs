@@ -301,9 +301,22 @@ const selfIgnoredUntrackedDirectory=dir=>{
   let st;
   try{st=lstatSync(ignore);}catch(error){if(error.code==='ENOENT')return false;deny('Unreadable Python autoignore');}
   if(!st.isFile()||st.isSymbolicLink())return false;
-  const effective=asUtf8(safeFile(ignore,st),'Python autoignore').split(/\r?\n/)
-    .map(x=>x.trim()).filter(x=>x&&!x.startsWith('#'));
-  return effective.length===1&&effective[0]==='*';
+  // R10-C1: match Git's narrow Python-generated autoignore grammar, NOT
+  // JS trim(). Exactly one '*' may have trailing ASCII spaces only; all other
+  // lines must be empty or comments with '#' in column zero. A single BOM
+  // is allowed only at byte zero; each LF-delimited line may end in one CR.
+  // Leading whitespace, tabs, NBSP, control whitespace, repeated BOM/CR and
+  // negations never grant the exception (which suppresses untracked entries).
+  let bytes=asUtf8(safeFile(ignore,st),'Python autoignore');
+  if(bytes.startsWith('\\uFEFF'))bytes=bytes.slice(1);
+  let stars=0;
+  for(let line of bytes.split('\\n')){
+    if(line.endsWith('\\r'))line=line.slice(0,-1);
+    if(line===''||line.startsWith('#'))continue;
+    if(!/^\\* *$/.test(line))return false;
+    if(++stars>1)return false;
+  }
+  return stars===1;
 };
 const matchesDangerousAttributes=bytes=>/(?:^|\s)(?:filter\s*=|eol\s*=\s*crlf(?:\s|$)|ident(?:\s|=|$)|working-tree-encoding\s*=)/m
   .test(bytes.toString('utf8'));

@@ -97,6 +97,10 @@ const trackedParentsAreRealDirectories=(worktree,path)=>{
   }
   return true;
 };
+// Git --stdin-paths understands C-quoted byte filenames, not NUL input.
+const quoteGitPath=path=>'"'+[...Buffer.from(path)].map(byte=>
+  byte===34?'\\"':byte===92?'\\\\':byte<32||byte>=127?
+    '\\'+byte.toString(8).padStart(3,'0'):String.fromCharCode(byte)).join('')+'"';
 const inspect=(worktree,depth=0)=>{
   if(depth>16)deny('Git submodule nesting exceeds inspection limit');
   // Verify actual bytes of all objects reachable from HEAD, including
@@ -141,6 +145,7 @@ const inspect=(worktree,depth=0)=>{
   }
   const tree=parseTree(call(worktree,['ls-tree','-r','-z','HEAD']));
   let dirty=hasConflict||index.size!==tree.size;
+  const regularFiles=[];
   for(const [path,entry] of index){
     const committed=tree.get(path);
     if(!committed||entry.mode!==committed.mode||entry.sha!==committed.sha)dirty=true;
@@ -167,13 +172,23 @@ const inspect=(worktree,depth=0)=>{
       dirty=true;continue;
     }
     if(honorFileMode&&!symlink&&Boolean(stat.mode&0o100)!==(entry.mode==='100755'))dirty=true;
-    const contentSha=symlink
-      ?call(worktree,['hash-object','--stdin'],{input:readlinkSync(full,{encoding:'buffer'})}).trim()
-      :call(worktree,['hash-object','--no-filters','--',path]).trim();
-    if(contentSha!==entry.sha)dirty=true;
+    if(symlink){
+      const contentSha=call(worktree,['hash-object','--stdin'],{
+        input:readlinkSync(full,{encoding:'buffer'})}).trim();
+      if(contentSha!==entry.sha)dirty=true;
+    }else regularFiles.push({path,sha:entry.sha});
   }
   // Only tracked .gitignore rules are eligible: a nested, untracked
   // .gitignore must itself invalidate the candidate even if it ignores '*'.
+  if(regularFiles.length){
+    const input=Buffer.from(regularFiles.map(e=>quoteGitPath(e.path)).join('\n')+'\n');
+    const hashes=call(worktree,['hash-object','--no-filters','--stdin-paths'],{input})
+      .trimEnd().split('\n');
+    if(hashes.length!==regularFiles.length||hashes.some(x=>!SHA.test(x)))
+      deny('Git hash batch returned invalid object IDs');
+    for(let i=0;i<regularFiles.length;i++)
+      if(hashes[i]!==regularFiles[i].sha)dirty=true;
+  }
   const allUntracked=records(call(worktree,['ls-files','--others','-z']));
   if(allUntracked.some(path=>path.split('/').at(-1)==='.gitignore'))dirty=true;
   // --exclude-standard would import .git/info/exclude and local/global

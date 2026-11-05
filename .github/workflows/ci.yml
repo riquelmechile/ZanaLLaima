@@ -51,32 +51,3 @@ jobs:
         if: matrix.node == '22.23.4'
         run: npm audit --omit=dev --audit-level=high
 
-  attest:
-    name: attest CI (trusted same-repository only)
-    needs: [test]
-    if: >-
-      ${{ vars.ZANA_CI_ATTESTATION_READY == 'true' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    environment: ci-attestation
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: '22.23.4'
-      - name: Attest exact successful GitHub run
-        env:
-          ZANA_CI_SIGNING_KEY: ${{ secrets.ZANA_CI_SIGNING_KEY }}
-        run: node scripts/ci-attest.mjs
-      - name: Upload signed CI envelope
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: ci-attestation-${{ github.event.pull_request.head.sha || github.sha }}
-          path: ${{ runner.temp }}/ci-attestation-*.json
-          retention-days: 7
-          if-no-files-found: error

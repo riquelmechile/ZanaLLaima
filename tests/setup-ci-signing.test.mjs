@@ -27,7 +27,7 @@ test('dry-run with simulated gh has no filesystem or remote side effects',async(
     const run=spawnSync('bash',[script,'--dry-run'],{encoding:'utf8',env:s.env});
     assert.equal(run.status,0,run.stderr);
     assert.match(run.stdout,/SIMULACIÓN/);
-    assert.match(run.stdout,/refs\/pull\/1\/merge/);
+    assert.match(run.stdout,/main con revisor independiente/);
     assert.equal(await missing(s.calls),true,'gh must not be invoked');
     assert.equal(await missing(join(s.home,'.config')),true,'key directory must not be created');
     assert.equal(await readFile('keys/ci-verifier.pub','utf8'),publicBefore);

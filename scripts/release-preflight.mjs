@@ -7,7 +7,7 @@ import {resolve,join} from 'node:path';
 import {pathToFileURL} from 'node:url';
 
 const fail=(errors,message)=>{if(!errors.includes(message))errors.push(message)};
-export function assessBuildPolicy({pkg,lock,workflow,trackedFiles=[],sourceFiles={}}){
+export function assessBuildPolicy({pkg,lock,workflow,attestationWorkflow='',trackedFiles=[],sourceFiles={}}){
   const errors=[];
   if(!pkg || !lock || !workflow) return {passed:false,errors:['Missing build manifest, lockfile, or CI workflow'],releaseAuthorized:false};
   if(lock.lockfileVersion!==3)fail(errors,'LOCKFILE_VERSION_UNSUPPORTED');
@@ -32,21 +32,33 @@ export function assessBuildPolicy({pkg,lock,workflow,trackedFiles=[],sourceFiles
   if(!/persist-credentials:\s*false/.test(workflow))
     fail(errors,'CHECKOUT_CREDENTIALS_PERSISTED');
   const actionRefs=[...workflow.matchAll(/^\s*(?:-\s*)?uses:\s*([^\s#]+)/gm)].map(m=>m[1]);
-  if(actionRefs.length<3 || actionRefs.some(ref=>!/@[a-f0-9]{40}$/.test(ref)) ||
+  const signerRefs=[...attestationWorkflow.matchAll(/^\s*(?:-\s*)?uses:\s*([^\s#]+)/gm)].map(m=>m[1]);
+  if(actionRefs.length<2 || [...actionRefs,...signerRefs].some(ref=>!/@[a-f0-9]{40}$/.test(ref)) ||
      !/actions\/checkout@[a-f0-9]{40}\b/.test(workflow) ||
      !/actions\/setup-node@[a-f0-9]{40}\b/.test(workflow))
     fail(errors,'UNPINNED_CI_ACTION');
-  const attest=workflow.split('\n  attest:\n')[1]||'';
-  if(!/needs:\s*\[test\]/.test(attest)||
-      !/environment:\s*ci-attestation/.test(attest)||
-      !/permissions:\s*\n\s*contents:\s*read/.test(attest)||
-      !/vars\.ZANA_CI_ATTESTATION_READY/.test(attest)||
-      !/github\.event\.pull_request\.head\.repo\.full_name == github\.repository/.test(attest)||
-      !/github\.event_name == 'push'/.test(attest)||
-      !/secrets\.ZANA_CI_SIGNING_KEY/.test(attest)||
-      !/node scripts\/ci-attest\.mjs/.test(attest)||
-      !/actions\/upload-artifact@[a-f0-9]{40}\b/.test(attest))
+  // The PR workflow must never receive a signing secret.
+  // The trusted signer runs on main via a separate workflow_run.
+  if(/ZANA_CI_SIGNING_KEY|^\s{2}attest:\s*$/m.test(workflow)||
+    !/workflow_run:\s*\n\s*workflows:\s*\['CI'\]/.test(attestationWorkflow)||
+    !/github\.ref == 'refs\/heads\/main'/.test(attestationWorkflow)||
+    !/environment:\s*ci-attestation/.test(attestationWorkflow)||
+    !/workflow_run\.conclusion == 'success'/.test(attestationWorkflow)||
+    !/ref:\s*\$\{\{\s*github\.sha\s*\}\}/.test(attestationWorkflow)||
+    !/path:\s*trusted/.test(attestationWorkflow)||
+    !/working-directory:\s*trusted/.test(attestationWorkflow)||
+    !/secrets\.ZANA_CI_SIGNING_KEY/.test(attestationWorkflow)||
+    !/run:\s*node scripts\/ci-attest\.mjs/.test(attestationWorkflow)||
+    !/actions\/upload-artifact@[a-f0-9]{40}\b/.test(attestationWorkflow)||
+    /npm ci|pull_request\.head\.sha|pull_request_target:/.test(attestationWorkflow))
     fail(errors,'CI_ATTESTATION_JOB_UNSAFE');
+  const setup=sourceFiles.setup||'';
+  if(!/REVIEWER='sebastianriquelme95-max'/.test(setup)||
+    !/reviewers\[0\]\[id\]/.test(setup)||
+    !/required_reviewers/.test(setup)||
+    !/\$verified\" == main/.test(setup)||
+    /refs\/pull\/1\/merge|PR_BRANCH=/.test(setup))
+    fail(errors,'CI_ENVIRONMENT_POLICY_UNSAFE');
   if(!/npm ci --ignore-scripts --no-audit --no-fund/.test(workflow))
     fail(errors,'DEPENDENCIES_NOT_REPRODUCIBLE');
   if(!/Verify exact commit/.test(workflow)||!/EXPECTED_SHA/.test(workflow)||
@@ -103,7 +115,9 @@ export function inspectRepository(root=process.cwd()){
   return assessBuildPolicy({
     pkg:JSON.parse(read('package.json')),
     lock:JSON.parse(read('package-lock.json')),
-    workflow:read('.github/workflows/ci.yml'),trackedFiles:tracked,
+    workflow:read('.github/workflows/ci.yml'),
+    attestationWorkflow:read('.github/workflows/ci-attestation.yml'),
+    trackedFiles:tracked,
     sourceFiles:{
       mcp:read('src/mcp.mjs'),
       actions:read('src/actions.mjs'),
@@ -111,6 +125,7 @@ export function inspectRepository(root=process.cwd()){
       tests:read('tests/write-effect.test.mjs'),
       coverage:read('scripts/check-source-coverage.mjs'),
       ciPublicKey:read('keys/ci-verifier.pub'),
+      setup:read('scripts/setup-ci-signing.sh'),
     }
   });
 }

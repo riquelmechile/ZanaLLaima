@@ -6,10 +6,12 @@ import {assessBuildPolicy} from '../scripts/release-preflight.mjs';
 const pkg=JSON.parse(readFileSync('package.json','utf8'));
 const lock=JSON.parse(readFileSync('package-lock.json','utf8'));
 const workflow=readFileSync('.github/workflows/ci.yml','utf8');
+const attestationWorkflow=readFileSync('.github/workflows/ci-attestation.yml','utf8');
+const setup=readFileSync('scripts/setup-ci-signing.sh','utf8');
 const coverage=readFileSync('scripts/check-source-coverage.mjs','utf8');
 const assess=(extras={})=>assessBuildPolicy({
-  pkg,lock,workflow,trackedFiles:[],
-  sourceFiles:{coverage},
+  pkg,lock,workflow,attestationWorkflow,trackedFiles:[],
+  sourceFiles:{coverage,setup},
   ...extras
 });
 
@@ -65,16 +67,23 @@ test('MCP enforcement gate only claims a local effect boundary when wiring and n
   assert.equal(assess({sourceFiles:sources}).releaseAuthorized,false);
 });
 
-test('attestation job must depend on successful matrix with scoped secret and pinned upload',()=>{
-  const modified=workflow.replace('environment: ci-attestation','environment: untrusted');
-  assert.ok(assess({workflow:modified}).errors.includes('CI_ATTESTATION_JOB_UNSAFE'));
-  const exposed=workflow.replace('github.event.pull_request.head.repo.full_name == github.repository','true');
+test('trusted CI signer rejects PR checkout and secret exposure',()=>{
+  assert.deepEqual(assess().errors,[]);
+  const exposed=workflow+"\n  attest:\n    ZANA_CI_SIGNING_KEY: token";
   assert.ok(assess({workflow:exposed}).errors.includes('CI_ATTESTATION_JOB_UNSAFE'));
-  const unsigned=workflow.replace('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02','actions/upload-artifact@v4');
-  assert.ok(assess({workflow:unsigned}).errors.includes('UNPINNED_CI_ACTION'));
-  assert.equal(assess().releaseAuthorized,false);
+  const unsafe=attestationWorkflow.replace('ref: '+'\x24'+'{{ github.sha }}',
+    'ref: '+'\x24'+'{{ github.event.pull_request.head.sha }}');
+  assert.ok(assess({attestationWorkflow:unsafe})
+    .errors.includes('CI_ATTESTATION_JOB_UNSAFE'));
+  assert.ok(assess({attestationWorkflow:attestationWorkflow+'\n      - run: npm ci'})
+    .errors.includes('CI_ATTESTATION_JOB_UNSAFE'));
+  const weakened=attestationWorkflow.replace('environment: ci-attestation',
+    'environment: unprotected');
+  assert.ok(assess({attestationWorkflow:weakened}).errors.includes('CI_ATTESTATION_JOB_UNSAFE'));
+  assert.ok(assess({sourceFiles:{coverage,setup:setup.replace(
+    'reviewers[0][id]','reviewers[0][wrong]')}})
+    .errors.includes('CI_ENVIRONMENT_POLICY_UNSAFE'));
 });
-
 
 test('placeholder CI public key cannot masquerade as configured attestation',()=>{
   const placeholder=readFileSync('keys/ci-verifier.pub','utf8');

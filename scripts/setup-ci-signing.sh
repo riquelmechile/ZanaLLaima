@@ -4,7 +4,7 @@ set -euo pipefail
 IFS=$'\n\t'
 REPO='riquelmechile/ZanaLLaima'
 ENVIRONMENT='ci-attestation'
-PR_BRANCH='feat/gpt-native-solo-engine'
+REVIEWER='sebastianriquelme95-max'
 ROOT="$(cd -- "$(dirname -- "$0")/.." && pwd -P)"
 KEY_DIR="$HOME/.config/zana-llaima"
 PRIVATE_KEY="$KEY_DIR/ci-attest-private.pem"
@@ -23,7 +23,7 @@ if [[ "${1:-}" == '--dry-run' && "$#" -eq 1 ]]; then
     'SIMULACIÓN: ningún archivo, llave, secreto ni configuración GitHub será modificado.' \
     '1. Validar pública del operador y que sea distinta de la pública CI.' \
     '2. Conservar la privada CI existente o generar Ed25519 local con modo 0600.' \
-    '3. Desactivar atestación y permitir main, la rama feature y refs/pull/1/merge (PR #1).' \
+    '3. Desactivar atestación y restringir firmas a main con revisor independiente.' \
     '4. Cargar el secreto CI únicamente por stdin; no mostrar su contenido.' \
     '5. Publicar solo la llave pública keys/ci-verifier.pub.' \
     '6. Requerir aprobación humana antes de activar la atestación.'
@@ -64,35 +64,34 @@ ci_fp="$(openssl pkey -pubin -in "$TMP_PUBLIC" -pubout -outform DER 2>/dev/null 
 
 # Desactivar antes de configurar. No se habilita automáticamente al terminar.
 gh variable set ZANA_CI_ATTESTATION_READY --repo "$REPO" --body false >/dev/null
+reviewer_id="$(gh api "users/$REVIEWER" --jq '.id')" ||
+  fail 'No se pudo consultar al revisor independiente.'
+[[ "$reviewer_id" =~ ^[0-9]+$ ]] || fail 'ID inválido de revisor.'
 gh api --method PUT "repos/$REPO/environments/$ENVIRONMENT" \
+  -F "reviewers[0][id]=$reviewer_id" \
+  -f 'reviewers[0][type]=User' \
   -F 'deployment_branch_policy[protected_branches]=false' \
   -F 'deployment_branch_policy[custom_branch_policies]=true' >/dev/null
 policy_api="repos/$REPO/environments/$ENVIRONMENT/deployment-branch-policies"
-existing="$(gh api --paginate "$policy_api" --jq '.branch_policies[].name')"
-while IFS= read -r policy; do
-  [[ -z "$policy" ]] && continue
-  case "$policy" in
-    main|feat/gpt-native-solo-engine|refs/pull/1/merge) ;;
-    *) fail "Política de rama no autorizada: $policy" ;;
-  esac
-done <<< "$existing"
-for branch in main "$PR_BRANCH" refs/pull/1/merge; do
-  if ! grep -Fxq -- "$branch" <<< "$existing"; then
-    gh api --method POST "$policy_api" -f "name=$branch" -f 'type=branch' >/dev/null
+existing="$(gh api --paginate "$policy_api" --jq '.branch_policies[] | [.id,.name] | @tsv')"
+while IFS=$'\t' read -r id policy; do
+  [[ -z "$id" ]] && continue
+  [[ "$id" =~ ^[0-9]+$ ]] || fail "ID de policy inválido: $id"
+  if [[ "$policy" != main ]]; then
+    gh api --method DELETE "$policy_api/$id" >/dev/null ||
+      fail "No se pudo eliminar policy insegura: $policy"
   fi
-done
+done <<< "$existing"
 verified="$(gh api --paginate "$policy_api" --jq '.branch_policies[].name')"
-for branch in main "$PR_BRANCH" refs/pull/1/merge; do
-  grep -Fxq -- "$branch" <<< "$verified" ||
-    fail "No se confirmó la política de rama: $branch"
-done
-while IFS= read -r policy; do
-  [[ -z "$policy" ]] && continue
-  case "$policy" in
-    main|feat/gpt-native-solo-engine|refs/pull/1/merge) ;;
-    *) fail "Política no autorizada tras configuración: $policy" ;;
-  esac
-done <<< "$verified"
+if ! grep -Fxq main <<< "$verified"; then
+  gh api --method POST "$policy_api" -f 'name=main' -f 'type=branch' >/dev/null
+fi
+verified="$(gh api --paginate "$policy_api" --jq '.branch_policies[].name')"
+[[ "$verified" == main ]] || fail "Branch policy insegura: $verified"
+reviewers="$(gh api "repos/$REPO/environments/$ENVIRONMENT" \
+  --jq '.protection_rules[] | select(.type=="required_reviewers") | .reviewers[]? | .reviewer.login')"
+grep -Fxq "$REVIEWER" <<< "$reviewers" ||
+  fail "El environment no requiere aprobación de $REVIEWER."
 
 # La llave privada se transmite al secreto exclusivamente por stdin.
 gh secret set ZANA_CI_SIGNING_KEY --repo "$REPO" --env "$ENVIRONMENT" < "$PRIVATE_KEY" >/dev/null
@@ -104,7 +103,7 @@ fi
 printf 'Huella SHA-256 de llave pública CI: %s\n' "$ci_fp"
 printf '%s\n' \
   'Siguientes pasos:' \
-  '1. Verificar reglas de aprobación humana del environment ci-attestation.' \
+  '1. Confirmar el reviewer requerido y la policy main-only del environment.' \
   '2. Commitear solo keys/ci-verifier.pub y ejecutar CI sobre el SHA nuevo.' \
   '3. Activar manualmente ZANA_CI_ATTESTATION_READY=true después de aprobar el código.' \
   '4. Comprobar artifact firmado y delivery-check; no realizar merge automático.'

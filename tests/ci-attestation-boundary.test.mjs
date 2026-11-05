@@ -14,7 +14,7 @@ test('CRITICAL C1: no PR-controlled CI job can access signing secret',()=>{
     'The signer must use a trusted workflow_run on the protected default branch');
   assert.match(attestation,/environment:\s*ci-attestation/,
     'A protected environment is mandatory for signing');
-  assert.match(attestation,/branches:\s*\[main\]/,
+  assert.match(attestation,/github\.ref == 'refs\/heads\/main'/,
     'The trusted signer is deployed only from main');
   assert.match(attestation,/github\.event\.workflow_run\.conclusion\s*==\s*'success'/);
   assert.doesNotMatch(attestation,/npm ci|pull_request\.head\.sha/,
@@ -24,6 +24,6 @@ test('CRITICAL C1: signing setup requires an independent reviewer and main-only 
   assert.match(setup,/required.reviewer|reviewers\[[0-9]+\]\[id\]/i);
   assert.doesNotMatch(setup,/for branch in main "\$PR_BRANCH"|refs\/pull\/1\/merge/,
     'Environment must not permit PR branches or synthetic PR merge refs');
-  assert.match(setup,/branch in main/,
+  assert.match(setup,/\[\[ "\$verified" == main \]\]/,
     'Only main can run the trusted signing workflow');
 });

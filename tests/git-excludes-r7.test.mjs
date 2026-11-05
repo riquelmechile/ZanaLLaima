@@ -26,7 +26,7 @@ for(const vector of ['info/exclude','core.excludesFile','gitignore-no-rastreado'
        writeFileSync(join(f.repo,'evil.mjs'),'payload\n');
      }else{
        mkdirSync(join(f.repo,'untracked'));
-       writeFileSync(join(f.repo,'untracked','.gitignore'),'*');
+       writeFileSync(join(f.repo,'untracked','.gitignore'),'*\n!evil.mjs\n');
        writeFileSync(join(f.repo,'untracked','evil.mjs'),'payload\n');
      }
      assert.equal(observeGit({repoPath:f.repo}).clean,false,

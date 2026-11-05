@@ -46,6 +46,16 @@ El backup debe ser válido, migrable al esquema actual (v1 a v6) y no contener t
 
 El almacenamiento es local: no usarlo como base compartida por filesystem de red ni asumir fiabilidad de locking remoto. Mantener copias externas y probar el procedimiento de restauración antes de una operación crítica.
 
+## Adopción extraordinaria de una cuarentena sin diario
+
+Si la base viva se perdió y existe una `.quarantine.<UUID>` antigua sin diario, el programa **nunca** la selecciona por mtime. Solo el operador, tras detener todos los clientes, puede escoger el UUID exacto:
+
+```sh
+ZANA_RESTORE_OFFLINE=1 node src/cli.mjs storage-adopt-quarantine <UUID> --confirm
+```
+
+La operación requiere que no exista DB viva ni `.restore-pending`, verifica SQLite y hace checkpoint de WAL antes de publicar la DB de forma exclusiva. Preserva los nonces y las revocaciones **presentes en la cuarentena seleccionada** y registra `QUARANTINE_ADOPTED` en el historial antes de publicarla. No puede reconstruir hechos que nunca estuvieron en esa copia: inspeccionar fecha, hash y antigüedad de la cuarentena antes de confirmar. Restore, abort y cleanup usan un archivo `.restore.lock` protegido con `flock` entre procesos Linux; el lock se libera al terminar o al morir el proceso.
+
 ## Recuperación de una restauración interrumpida
 
 Si se encuentra `.restore-pending`, los comandos de datos rechazan el almacén hasta completar o abortar el diario. El reintento de restore auto-aborta el diario anterior cuando su integridad es comprobable. **Nunca borrar el marcador ni mover cuarentenas a mano.**

@@ -580,6 +580,64 @@ export async function storageCleanupArtifacts(file=statePath(),{confirm=false}={
     ()=>cleanupRestoreArtifacts(databasePath(file),{confirm}));
 }
 
+// Opt-in disaster recovery ONLY when the live DB is missing and no journal
+// owns a quarantine. An exact operator-provided UUID replaces mtime heuristics.
+// The revocations and consumed nonces already present in that quarantine
+// become the live security history. Record the adoption event DURABLY before
+// publishing the checkpointed database; crash/retry cannot erase the event.
+export async function storageAdoptQuarantine(id,file=statePath(),{confirm=false}={}){
+  if(!confirm)guardRestore('CONFIRM_REQUIRED','storage-adopt-quarantine requires --confirm');
+  if(process.env.ZANA_RESTORE_OFFLINE!=='1')
+    guardRestore('OFFLINE_REQUIRED','Quarantine adoption requires offline operator mode');
+  if(typeof id!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))
+    guardRestore('INVALID_UUID','Invalid quarantine UUID');
+  const path=databasePath(file),quarantine=path+'.quarantine.'+id;
+  return withRestoreLock(path,async()=>{
+    if(await interruptedRestoreJournal(path))
+      guardRestore('JOURNAL_ACTIVE','Recovery journal active; run storage-restore-abort first');
+    if(await exists(path))
+      guardRestore('LIVE_PRESENT','No se puede adoptar: existe una DB viva');
+    if(!await exists(quarantine))
+      guardRestore('NOT_FOUND','No existe la cuarentena solicitada: '+id);
+    const st=await lstat(quarantine);
+    if(!st.isFile()||st.isSymbolicLink()||st.nlink!==1)
+      guardRestore('UNSAFE_QUARANTINE','Quarantine must be a unique regular SQLite database');
+    await checkpointExclusive(quarantine,{allowMissing:false});
+    const db=connect(quarantine);
+    try{
+      assertHealthy(db);
+      const mission=load(db);
+      if(!mission)guardRestore('EMPTY_QUARANTINE','Quarantine contains no active mission');
+      const detail={quarantineId:id,source:'OPERATOR_EXPLICIT_CONFIRMATION'};
+      db.exec('BEGIN IMMEDIATE');
+      try{
+        const before=db.prepare(
+          "SELECT 1 FROM state_events WHERE category='QUARANTINE_ADOPTED' AND detail=? LIMIT 1")
+          .get(json(detail));
+        if(!before)addEvent(db,mission,'QUARANTINE_ADOPTED',detail);
+        db.exec('COMMIT');
+      }catch(error){rollbackIfOpen(db);throw error;}
+    }finally{db.close();}
+    await checkpointExclusive(quarantine,{allowMissing:false});
+    // An empty WAL is never required to recover committed bytes; do not
+    // move sidecars without the main DB. Fail closed if it has pending data.
+    if(await exists(quarantine+'-wal')&&(await stat(quarantine+'-wal')).size!==0)
+      guardRestore('WAL_NOT_EMPTY','Quarantine WAL not fully checkpointed');
+    for(const suffix of ['-wal','-shm'])
+      await rm(quarantine+suffix,{force:true});
+    // link() publishes exclusively: unlike rename, it cannot overwrite
+    // a database another process created during offline recovery.
+    await link(quarantine,path);
+    const d=await open(dirname(path),'r');
+    try{await d.sync();}finally{await d.close();}
+    await rm(quarantine);
+    const d2=await open(dirname(path),'r');
+    try{await d2.sync();}finally{await d2.close();}
+    return {adopted:true,quarantineId:id,databasePath:path,
+      note:'Explicit quarantine adoption; audit event persisted before publication'};
+  });
+}
+
 // An offline restore must not erase later receipts or an uncertain WRITE.
 // Validate and migrate a temporary copy before quarantining the live database.
 function receiptIdentitySet(db){

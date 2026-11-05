@@ -7,6 +7,7 @@ import { operatorPublicKey, verifySignedAction, verifyStoredGrant } from './oper
 import { reconcileWrite, revokeRunningWrites } from './lifecycle.mjs';
 import {inspectEffectTemporary} from './write-effect.mjs';
 import {beginRestoreMoves,abortRestoreMoves,classifyRestoreArtifacts,cleanupRestoreArtifacts,interruptedRestoreJournal,RestoreJournalError} from './restore-journal.mjs';
+import {withRestoreLock} from './restore-lock.mjs';
 
 const SCHEMA_VERSION = 6;
 const MAX_EVENTS = 2000;
@@ -560,16 +561,23 @@ async function checkpointExclusive(path,{allowMissing=false,allowUnreadable=fals
     guardRestore('CHECKPOINT_NONEMPTY','WAL is not empty after checkpoint; refusing to move database');
   return {checkpointed:true};
 }
-export async function storageRestoreAbort(file=statePath(),{afterRename}={}){
-  if(process.env.ZANA_RESTORE_OFFLINE!=='1')
-    guardRestore('OFFLINE_REQUIRED','storage-restore-abort requires explicit offline operator mode');
+// Call this only while holding the same cross-process lock as restoreBackup.
+// The public entry points acquire it; restore's internal auto-abort must not
+// acquire it twice (flock is non-reentrant across child processes).
+async function abortRestoreUnlocked(file,{afterRename}={}){
   const path=databasePath(file);
   return abortRestoreMoves(path,{checkpoint:checkpointExclusive,afterRename});
+}
+export async function storageRestoreAbort(file=statePath(),options={}){
+  if(process.env.ZANA_RESTORE_OFFLINE!=='1')
+    guardRestore('OFFLINE_REQUIRED','storage-restore-abort requires explicit offline operator mode');
+  return withRestoreLock(databasePath(file),()=>abortRestoreUnlocked(file,options));
 }
 export async function storageCleanupArtifacts(file=statePath(),{confirm=false}={}){
   if(process.env.ZANA_RESTORE_OFFLINE!=='1')
     guardRestore('OFFLINE_REQUIRED','Artifact cleanup requires offline operator mode');
-  return cleanupRestoreArtifacts(databasePath(file),{confirm});
+  return withRestoreLock(databasePath(file),
+    ()=>cleanupRestoreArtifacts(databasePath(file),{confirm}));
 }
 
 // An offline restore must not erase later receipts or an uncertain WRITE.
@@ -591,7 +599,7 @@ function receiptIdentitySet(db){
 // The marker is the reader/writer fence around a multi-file SQLite swap.
 // Failure restores the quarantined live files; it never clears the marker
 // until recovery has been completed or rolled back safely.
-export async function restoreBackup(source,file=statePath(),
+async function restoreBackupUnlocked(source,file=statePath(),
   {offline=false,forceDataLoss=false,afterQuarantine,afterRename,afterJournalReady}={}){
   if(!offline||process.env.ZANA_RESTORE_OFFLINE!=='1')
     guardRestore('OFFLINE_REQUIRED','Restoration requires an explicit offline operator mode');
@@ -602,7 +610,7 @@ export async function restoreBackup(source,file=statePath(),
   // After SIGKILL, replay the EXACT journal to abort the partial restore
   // first; then inspect the recovered live DB and merge its monotone facts.
   if(await interruptedRestoreJournal(path))
-    await storageRestoreAbort(file);
+    await abortRestoreUnlocked(file);
   // Classify prior DB before generating a new .restoring.* candidate.
   const sourceLive=await previousLiveDatabase(path);
   const temp=path+'.restoring.'+randomUUID();
@@ -642,7 +650,7 @@ export async function restoreBackup(source,file=statePath(),
       // Ordinary thrown errors roll back through the journal. SIGKILL leaves
       // it intact and is reconciled by the next operator action.
       if(await interruptedRestoreJournal(path)){
-        try{await storageRestoreAbort(file);}
+        try{await abortRestoreUnlocked(file);}
         catch(rollbackError){
           guardRestore('ROLLBACK_INCOMPLETE',
             'Restore journal remains active; abort failed: '+rollbackError.message);
@@ -658,6 +666,16 @@ export async function restoreBackup(source,file=statePath(),
         await rm(temp+suffix,{force:true}).catch(()=>{});
     }
   }
+}
+
+// One flock covers the complete offline restore: source validation, checkpoint,
+// journal creation, every DB/WAL/SHM rename, rollback and artifact cleanup.
+// The lock is released automatically when the caller exits or is SIGKILLed.
+export async function restoreBackup(source,file=statePath(),options={}){
+  if(process.env.ZANA_RESTORE_OFFLINE!=='1'||options.offline!==true)
+    guardRestore('OFFLINE_REQUIRED','Restoration requires explicit offline operator mode');
+  return withRestoreLock(databasePath(file),
+    ()=>restoreBackupUnlocked(source,file,options));
 }
 
 async function readEffectiveGrant(db,mission){

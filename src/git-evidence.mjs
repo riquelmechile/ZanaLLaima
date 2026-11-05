@@ -146,8 +146,10 @@ const snapshot=(root,parentGitDir)=>{
   const gitDir=gitDirFor(root,parentGitDir),common=validateConfig(gitDir);
   const head=readRequired(join(gitDir,'HEAD'),'HEAD').toString('utf8').trim();
   const m=/^ref: (refs\/heads\/[A-Za-z0-9_.\/-]+)$/.exec(head);
-  if(!m||!safeRef(m[1]))deny('Detached or invalid local branch');
-  const branch=m[1],sha=reference(gitDir,common,branch);
+  if(!m&&!(parentGitDir&&SHA.test(head)))deny('Detached or invalid local branch');
+  if(m&&!safeRef(m[1]))deny('Detached or invalid local branch');
+  // Submodule checkouts are normally detached at a gitlink SHA.
+  const branch=m?m[1]:null,sha=m?reference(gitDir,common,branch):head;
   const commit=gitCall(['--git-dir='+gitDir,'--work-tree='+root,'cat-file','commit',sha],
     {maxBuffer:2*1024*1024});
   if(hash('commit',commit)!==sha)deny('Commit object hash mismatch; candidate object store is untrusted');
@@ -287,7 +289,7 @@ function inspect(root,expectedSha,parentGitDir,depth=0){
             if(nested!==abs||!within(root,nested))
               deny('Git submodule entry is not a real directory');
             const child=inspect(nested,index.get(path).sha,committed.common,depth+1);
-            observed.set(path,{mode:'160000',sha:child.candidateSha});
+            observed.set(path,{mode:'160000',sha:child.sha});
             if(!child.clean)nestedDirty.push({path,type:'submodule',detail:child.reason});
           }else walk(abs,path);
           continue;
@@ -305,6 +307,10 @@ function inspect(root,expectedSha,parentGitDir,depth=0){
     };
     walk(root);
   }finally{rmSync(ignoreGit,{recursive:true,force:true});}
+  for(const [path,entry] of index){
+    if(entry.mode==='160000'&&!observed.has(path))
+      deny('Submodule not initialized; inicializa con git submodule update --init: '+path);
+  }
   const tree=entryTree(observed);
   let reason=null;
   const paths=[...new Set([...observed.keys(),...index.keys()])].sort();

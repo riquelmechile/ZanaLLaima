@@ -115,6 +115,30 @@ const inspect=(worktree,depth=0)=>{
     deny('Git index contains hidden/unsupported tracked-file flags');
   const {result:index,hasConflict}=parseIndex(call(worktree,['ls-files','-s','-z']));
   const honorFileMode=call(worktree,['config','--bool','--default=true','--get','core.filemode']).trim()!=='false';
+  // Attribute lookup only parses metadata; it never applies content filters.
+  // Refuse normalization cases that make raw disk blobs incomparable to HEAD
+  // rather than silently saying the Git candidate is merely dirty.
+  const tracked=[...index.entries()].filter(([,entry])=>entry.mode!=='160000').map(([path])=>path);
+  if(tracked.length){
+    const attrs=records(call(worktree,
+      ['check-attr','-z','--stdin','filter','eol','text','ident'],
+      {input:Buffer.from(tracked.join('\0')+'\0')}));
+    if(attrs.length!==tracked.length*4*3)
+      deny('Git attribute inspection returned incomplete records');
+    const autocrlf=call(worktree,['config','--default=false','--get','core.autocrlf']).trim();
+    for(let i=0;i<attrs.length;i+=3){
+      const [,attribute,value]=attrs.slice(i,i+3);
+      if(attribute==='filter'&&!['unspecified','unset'].includes(value))
+        deny('Git filter attribute requires normalization not supported by raw RDD blobs');
+      if(attribute==='eol'&&!['unspecified','unset'].includes(value))
+        deny('Git eol normalization attribute requires explicit conversion');
+      if(attribute==='ident'&&value==='set')
+        deny('Git ident attribute changes working-tree bytes');
+      if(attribute==='text'&&value!=='unset'&&value!=='unspecified'&&
+         ['true','input'].includes(autocrlf))
+        deny('Git text/autocrlf normalization is unsupported for RDD clean evidence');
+    }
+  }
   const tree=parseTree(call(worktree,['ls-tree','-r','-z','HEAD']));
   let dirty=hasConflict||index.size!==tree.size;
   for(const [path,entry] of index){

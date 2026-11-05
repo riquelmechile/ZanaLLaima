@@ -512,7 +512,8 @@ function inspectLive(candidate,source,forceDataLoss){
 // The single active-mission slot is not enough to remember consumption: a
 // restore to another mission would drop it, and a later restore of an old
 // backup would refund it (A -> B -> A, R11-C1b). So every database carries a
-// ledger in metadata (CONSUMED_BUDGET_KEY), keyed by mission and unit, that
+// ledger in metadata (CONSUMED_BUDGET_KEY), keyed by mission and then by unit
+// or a reserved key (FENCE_UNIT, REVIEW_ROUNDS_KEY), that
 // restore and adoption merge like nonces and never shrink.
 const CONSUMED_BUDGET_KEY='consumed_budget';
 // Ledger keys come from database bytes an operator may have been handed, so
@@ -567,6 +568,7 @@ function readLedger(db){
 function budgetFacts(db,{rebuild=false}={}){
   let ledger,rebuilt=false;
   const corruptArchive=[],damagedUnits=[];
+  let damagedReview=false;
   try{ledger=readLedger(db);}
   catch(error){
     if(!rebuild||error.code!=='INVALID_LEDGER')throw error;
@@ -580,8 +582,16 @@ function budgetFacts(db,{rebuild=false}={}){
   // Damaged counters on the active mission: under rebuild keep every unit
   // that is still valid and drop only the damaged ones, so recovery under
   // --force-data-loss is always possible.
-  if(mission&&Number.isSafeInteger(mission.reviewCount)&&mission.reviewCount>0)
-    raise(ledger,mission.id,REVIEW_ROUNDS_KEY,mission.reviewCount,0);
+  if(mission){
+    const rounds=mission.reviewCount;
+    if(!(Number.isSafeInteger(rounds)&&rounds>=0)){
+      // Damaged review counter: unknown consumption. Never ignore it (a
+      // negative value would hand out rounds); under rebuild fence it.
+      if(!rebuild)invalidLedger();
+      rebuilt=true;damagedReview=true;
+      raise(ledger,mission.id,REVIEW_ROUNDS_KEY,reviewRoundCap(mission.budget),0);
+    }else if(rounds>0)raise(ledger,mission.id,REVIEW_ROUNDS_KEY,rounds,0);
+  }
   if(mission)for(const u of mission.units){
     try{raise(ledger,mission.id,u.id,u.attempts||0,u.run?.leaseGeneration||0);}
     catch(error){if(!rebuild||error.code!=='INVALID_LEDGER')throw error;rebuilt=true;damagedUnits.push(u.id);}
@@ -607,7 +617,7 @@ function budgetFacts(db,{rebuild=false}={}){
     }
   }
   return {revision:mission?.revision??null,running:!!mission?.units.some(u=>u.status==='RUNNING'),
-    ledger,rebuilt,corruptArchive,damagedUnits};
+    ledger,rebuilt,corruptArchive,damagedUnits,damagedReview};
 }
 function refuseConsumedBudget(backupMission,liveBudget){
   if(liveBudget.running)
@@ -642,9 +652,8 @@ function mergeBudgetFacts(db,facts,{ownLedger}={}){
     // Unknown consumption: exhaust every unit so nothing can start again.
     const cap=unitAttemptCap(parse(db.prepare('SELECT budget FROM active_mission WHERE slot=1').get()?.budget??'null'));
     db.prepare('UPDATE units SET attempts=MAX(attempts,?) WHERE mission_id=?').run(cap,m.id);
-    const rounds=limits=>Number.isSafeInteger(limits?.maxReviewRounds)?limits.maxReviewRounds:DEFAULT_BUDGET.maxReviewRounds;
     db.prepare('UPDATE active_mission SET review_count=MAX(review_count,?) WHERE slot=1')
-      .run(rounds(parse(db.prepare('SELECT budget FROM active_mission WHERE slot=1').get()?.budget??'null')));
+      .run(reviewRoundCap(parse(db.prepare('SELECT budget FROM active_mission WHERE slot=1').get()?.budget??'null')));
   }
   if(Object.hasOwn(own,REVIEW_ROUNDS_KEY))
     db.prepare('UPDATE active_mission SET review_count=MAX(review_count,?) WHERE slot=1').run(own[REVIEW_ROUNDS_KEY].attempts);
@@ -671,6 +680,7 @@ function mergeBudgetFacts(db,facts,{ownLedger}={}){
   }
 }
 // Per-unit attempt limit of a stored mission budget (grandfathered default).
+const reviewRoundCap=budget=>Number.isSafeInteger(budget?.maxReviewRounds)?budget.maxReviewRounds:DEFAULT_BUDGET.maxReviewRounds;
 const unitAttemptCap=budget=>Number.isSafeInteger(budget?.maxUnitAttempts)?budget.maxUnitAttempts:DEFAULT_BUDGET.maxUnitAttempts;
 // The monotone facts every restore and adoption source contributes.
 function securityFacts(db,{rebuild=false}={}){
@@ -913,6 +923,10 @@ export async function storageAdoptQuarantine(id,file=statePath(),{confirm=false,
           db.prepare('INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
             .run(CONSUMED_BUDGET_KEY,json(ledger));
         }
+        // A damaged review counter is published exhausted, written explicitly
+        // (MAX() would keep a text value, which sorts above integers).
+        if(own.damagedReview)
+          db.prepare('UPDATE active_mission SET review_count=? WHERE slot=1').run(reviewRoundCap(mission.budget));
         // Heal what the rebuild skipped: corrupt archive rows move to their
         // own table (kept for inspection) so later restores need no force.
         if(own.corruptArchive.length){

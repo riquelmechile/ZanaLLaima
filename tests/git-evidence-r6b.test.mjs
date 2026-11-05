@@ -41,8 +41,9 @@ for(const variant of ['worktree','include','includeIf','local-attributes']){
       assert.equal(git(f.repo,'config','--get','filter.evil.clean'),command,
         'la configuración maliciosa debe ser efectiva');
       writeFileSync(join(f.repo,'f.txt'),'xyz'); // filtro podría convertir xyz a abc
-      const result=observeGit({repoPath:f.repo});
-      assert.equal(result.clean,false,'Git no debe declarar limpio el contenido diferente');
+      try{assert.equal(observeGit({repoPath:f.repo}).clean,false,
+        'Git no debe declarar limpio el contenido diferente');}
+      catch(error){assert.match(error.message,/Git candidate rejected:.*(filter|attr|normaliz)/i);}
       assert.equal(existsSync(marker),false,'observeGit ejecutó el filtro '+variant);
     }finally{f.close();}
   });

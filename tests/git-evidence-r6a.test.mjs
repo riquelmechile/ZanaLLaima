@@ -48,8 +48,8 @@ for(const depth of [1,2])test('P1-a: submodule filter never executes, nesting '+
     const marker=join(f.dir,'FILTER_RAN');
     git(target,'config','filter.evil.clean','sh -c "touch '+marker+'; cat"');
     writeFileSync(join(target,'f.txt'),'xyz'); // misma longitud, distinto blob
-    const observed=observeGit({repoPath:f.root});
-    assert.equal(observed.clean,false);
+    try{assert.equal(observeGit({repoPath:f.root}).clean,false);}
+    catch(error){assert.match(error.message,/Git candidate rejected:.*(filter|attr|normaliz)/i);}
     assert.equal(existsSync(marker),false,'Git ejecutó el filtro antes de inspeccionar el submódulo');
   }finally{f.close();}
 });

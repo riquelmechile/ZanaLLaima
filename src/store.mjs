@@ -568,7 +568,13 @@ function budgetFacts(db,{rebuild=false}={}){
   const mission=load(db);
   const consume=m=>{for(const u of m?.units??[])
     raise(ledger,m.id,u.id,u.attempts||0,u.run?.leaseGeneration||0);};
-  consume(mission);
+  // Damaged counters on the active mission: under rebuild keep every unit
+  // that is still valid and drop only the damaged ones, so recovery under
+  // --force-data-loss is always possible.
+  if(mission)for(const u of mission.units){
+    try{raise(ledger,mission.id,u.id,u.attempts||0,u.run?.leaseGeneration||0);}
+    catch(error){if(!rebuild||error.code!=='INVALID_LEDGER')throw error;rebuilt=true;}
+  }
   for(const row of db.prepare('SELECT seq,snapshot FROM mission_archive').all()){
     let archived;
     try{archived=JSON.parse(row.snapshot);}catch{archived=null;}

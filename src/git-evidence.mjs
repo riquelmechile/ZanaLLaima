@@ -296,7 +296,7 @@ const safeFile=(path,stat)=>{
 // untracked directory clean. Never honor this in a tracked subtree or a
 // directory containing a nested Git worktree.
 const selfIgnoredUntrackedDirectory=dir=>{
-  if(existsSync(join(dir,'.git')))return false;
+  if(hasNestedGitEntry(dir))return false;
   const ignore=join(dir,'.gitignore');
   let st;
   try{st=lstatSync(ignore);}catch(error){if(error.code==='ENOENT')return false;deny('Unreadable Python autoignore');}
@@ -320,24 +320,15 @@ const selfIgnoredUntrackedDirectory=dir=>{
 };
 const matchesDangerousAttributes=bytes=>/(?:^|\s)(?:filter\s*=|eol\s*=\s*crlf(?:\s|$)|ident(?:\s|=|$)|working-tree-encoding\s*=)/m
   .test(bytes.toString('utf8'));
-// A nested repository is a real untracked unit, even if its own .gitignore
-// would hide all files. A random directory named .git is insufficient:
-// verify the metadata shape without executing Git or reading its objects.
-const nestedGitRepository=dir=>{
-  const dot=join(dir,'.git');
-  try{
-    const st=lstatSync(dot);
-    let gitdir=dot;
-    if(st.isFile()){
-      const m=/^gitdir:\s*(.+?)\s*$/i.exec(readRequired(dot,'nested .git pointer').toString('utf8'));
-      if(!m)return false;
-      gitdir=resolve(dir,m[1]);
-    }else if(!st.isDirectory())return false;
-    if(!existsSync(join(gitdir,'config'))||!existsSync(join(gitdir,'HEAD'))||
-       !existsSync(join(gitdir,'objects')))return false;
-    const head=readRequired(join(gitdir,'HEAD'),'nested Git HEAD').toString('utf8').trim();
-    return /^ref: refs\/heads\/[A-Za-z0-9_.\/-]+$/.test(head)||SHA.test(head);
-  }catch{return false;}
+// R10-C3 fail-closed boundary: ANY .git directory entry (dir, gitfile,
+// symlink, invalid/broken metadata) under an UNTRACKED directory is an extra.
+// Never parse HEAD/config here: Git's own status can omit unusual empty nested
+// repositories, and untrusted metadata must never hide a payload.
+// Tracked .gitignore rules take precedence: fully ignored dirs stay ignored.
+const hasNestedGitEntry=dir=>{
+  try{lstatSync(join(dir,'.git'));return true;}
+  catch(error){if(error?.code==='ENOENT')return false;
+    deny('Unable to inspect nested .git entry');}
 };
 function inspect(root,expectedSha,parentGitDir,depth=0){
   if(depth>16)deny('Git submodule nesting exceeds inspection limit');
@@ -390,7 +381,7 @@ function inspect(root,expectedSha,parentGitDir,depth=0){
             const child=inspect(nested,index.get(path).sha,committed.common,depth+1);
             observed.set(path,{mode:'160000',sha:child.sha});
             if(!child.clean)nestedDirty.push({path,type:'submodule',detail:child.reason});
-          }else if(!tracked&&nestedGitRepository(abs)){
+          }else if(!tracked&&hasNestedGitEntry(abs)){
             observed.set(path,{mode:'100644',sha:hash('blob',Buffer.alloc(0))});
           }else next.push({dir:abs,prefix:path});
           continue;

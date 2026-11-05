@@ -4,6 +4,12 @@
 **Corte de auditoría:** 2026-11-04. Base confirmada del cierre: `79ef90260768da3a606060a2213fb1e8db3599a6`; para el SHA final ver el HEAD del PR #1, pues escribirlo dentro de su propio commit cambiaría ese hash.
 **Objetivo:** un único anfitrión GPT que planifique, ejecute con sus capacidades nativas, se recupere de interrupciones y revise resultados con evidencia verificable, sin delegación entre cuentas ni llamadas a APIs de inferencia.
 
+## Candidato 0.4.2: re-revisión 4R y seguridad de recuperación
+
+- **CRITICAL R7:** verificar los bytes de los objetos Git hasta HEAD, actualizar instrucciones operativas de firma a `workflow_run` main-only, impedir restauración insegura tras SIGKILL y hacer best-effort la limpieza de temporales de efecto. Tests negativos por hallazgo antes de cada fix.
+- **WARNING R7:** `hash-object --no-filters --stdin-paths` en lote, ignores comprometidos, bits POSIX del dueño, normalización Git explícita, rutas NFKC/casefold, errores de restore tipados, sidecars, generación atómica de llave Ed25519, vista de reconciliación solo CLI y `prevent_self_review`.
+- **Revisión pendiente:** CI, preflight, cobertura, stress, benchmark y audit sobre SHA exacto; Codex completado y nueva 4R de `sebastianriquelme95-max`. No aprobar, mergear, etiquetar ni desplegar.
+
 ## Candidato 0.4.1: límites Git y restauración monotónica (sin release)
 
 - **RDD P1-a/P1-b:** reemplazar `git status` por comparación de entradas `git ls-files -s -z` frente a `git ls-tree -r -z HEAD`; comprobar blobs sin filtros con `git hash-object --no-filters`, permisos y symlinks, y archivos no rastreados con `git ls-files --others --exclude-standard -z`. Repetirlo en submódulos y exigir coincidencia de gitlinks. No ejecutar drivers de atributos ni confiar en `config.worktree`, `include` o `includeIf`.

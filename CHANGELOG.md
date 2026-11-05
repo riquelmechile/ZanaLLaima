@@ -1,5 +1,20 @@
 # Registro de cambios
 
+## [0.4.2] - No publicado
+
+Cierre técnico de hallazgos 4R sobre `79d4494`, sujeto a nueva revisión independiente y sin autorización de release.
+
+- **CRITICAL 1, integridad Git (`3159629`):** verificación completa de objetos alcanzables desde HEAD con `git fsck --full --strict`, sin `--connectivity-only`; submódulos incluidos. Bloqueo de grafts y shallow. Negativos `tests/git-object-integrity-r7.test.mjs` publicados en `b2d69dd`, ampliados con commit, árbol raíz y pack.
+- **CRITICAL 2, operador (`a6c7593`):** checklist CI `workflow_run` actualizado: firma exclusivamente desde `main`, reviewer requerido y `ci-attestation.yml`. Pruebas negativas documentales `0584e6b`.
+- **CRITICAL 3, restore (`877ba6c`, `d56f5ff`):** cuarentena más reciente como DB viva después de SIGKILL, fusión monotónica de revocaciones y nonces, restore ciego exige `forceDataLoss` y revoca todo, epoch de firmas; nuevo `storage-restore-abort` exclusivamente CLI. Negativos `247bc59`.
+- **CRITICAL 4, temporales (`cf9f8e1`):** inspección y limpieza best-effort que informa errores sin bloquear `storage-status`, `recover-expired` ni `RECONCILE_WRITE`. Negativos `71cdaaa`.
+- **WARNING Git (`ed6fe16`, `d762dc4`, `a9cfd92`, `72cc0ac`):** exclusiones limitadas a `.gitignore` comprometidos, comparación de bit propietario con `core.fileMode`, rechazo explícito de atributos de normalización y hashing en lote `--stdin-paths`. Benchmark 5.000 archivos en menos de un segundo, sin bajar umbrales.
+- **WARNING fronteras y recuperación (`27a5b3d`, `f239928`, `975bdfa`):** nombres reservados tras NFKC/casefold, inventario de restores huérfanos/sidecars y `reconcile-view` local que no expone tokens vía MCP.
+- **WARNING firma CI (`799714d`, `164d19e`):** Ed25519 generado a temporal en directorio privado y movimiento sin clobber; `prevent_self_review=true` y eliminación de helper muerto.
+- **WARNING restore (`2879814`, `7fec1af`):** separación de `inspectLive`, `mergeSecurityFacts`, `swapAtomically`; errores guard con código tipado. Política de W6 original sobre locks I/O se mantiene explícitamente documentada.
+- Sin merge, aprobación, tag, release ni despliegue; gates de firma CI real, aislamiento del host y revisión 4R independiente todavía pendientes.
+
+
 ## [0.4.1] - No publicado
 
 Correcciones P1 de la revisión Codex sobre `dc2c443`; la revisión 4R independiente sigue `CHANGES_REQUESTED` y requiere nueva evaluación del SHA.

@@ -35,7 +35,7 @@ Con todas las unidades terminadas y el árbol Git limpio, congelar HEAD, árbol,
 
 Una revisión de cuatro perspectivas en una sola sesión es **SELF_CHECK_COMPLETE_UNVERIFIED** y no es revisión independiente. Ni un reporte de contextos nativos ni un PASS propio autoriza merge, release o deploy.
 
-El gate \`delivery-check\` requiere dos llaves Ed25519 **distintas** para la atestación CI y la aprobación del operador, SHA y base exactos, revisión efectiva y CI real. El job \`attest\` permanece desactivado mientras Zana no configure su environment, secreto y llave pública. El preflight devuelve \`releaseAuthorized:false\`; no cambiar ese valor para conseguir un PASS.
+El gate \`delivery-check\` requiere dos llaves Ed25519 **distintas** para la atestación CI y la aprobación del operador, SHA y base exactos, revisión efectiva y CI real. El firmante de \`ci-attestation.yml\` mediante \`workflow_run\` permanece desactivado mientras Zana no configure su environment, secreto y llave pública. El preflight devuelve \`releaseAuthorized:false\`; no cambiar ese valor para conseguir un PASS.
 
 La rama \`main\` tiene checks y revisión externa obligatorios. No hacer merge, tag, release ni deploy por iniciativa del agente. Documentar el SHA exacto, checks, bloqueos y pasos humanos pendientes.
 

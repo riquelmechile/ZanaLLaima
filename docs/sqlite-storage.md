@@ -36,7 +36,7 @@ Para recuperar una base dañada o volver a un backup, **detener primero todos lo
 ZANA_RESTORE_OFFLINE=1 node src/cli.mjs storage-restore /ruta/backup.sqlite
 ```
 
-El backup debe ser válido, del mismo esquema y no contener trabajo `RUNNING`. Los archivos anteriores se mueven a una ruta de cuarentena recuperable. El proceso guarda un marcador durante la operación; cualquier interrupción en ese punto requiere inspección del operador antes de volver a iniciar el servidor.
+El backup debe ser válido, migrable al esquema actual (v1 a v6) y no contener trabajo `RUNNING`. Una restauración ciega sin base viva exige `--force-data-loss`, revoca todos los grants recuperados y registra un epoch que rechaza acciones firmadas antes de restaurar. Los archivos anteriores se mueven a una ruta de cuarentena recuperable. El proceso guarda un marcador durante la operación; cualquier interrupción en ese punto requiere inspección del operador antes de volver a iniciar el servidor. `storage-status` enumera `.restoring.*` y `.quarantine.*` huérfanos y reporta errores de temporales WRITE sin bloquear una reconciliación firmada.
 
 ## Pruebas y límites
 
@@ -48,9 +48,9 @@ El almacenamiento es local: no usarlo como base compartida por filesystem de red
 
 ## Recuperación de una restauración interrumpida
 
-Si se encuentra `.restore-pending`, **todos los comandos de lectura, historia y modificación rechazan el almacén**. El operador debe inspeccionar las rutas del archivo SQLite, sus posibles `-wal`/`-shm` y los archivos `.quarantine.*`, detener los clientes y validar una copia antes de retirar manualmente el marcador. No eliminar el marcador mientras haya un proceso activo o sin entender qué fase de restauración quedó pendiente.
+Si se encuentra `.restore-pending`, **todos los comandos de lectura, historia y modificación rechazan el almacén**. El operador debe inspeccionar las rutas del archivo SQLite, sus posibles `-wal`/`-shm` y los archivos `.quarantine.*`, detener los clientes y validar una copia antes de ejecutar la recuperación protegida. **No borrar el marcador a mano ni relanzar restore ignorando la cuarentena.** Con los clientes detenidos, ejecutar `ZANA_RESTORE_OFFLINE=1 node src/cli.mjs storage-restore-abort` para recuperar la base viva en cuarentena. Si el marcador ya no existe, el restore detecta cuarentenas y conserva revocaciones/nonces; si no existe una base anterior conocida, exige `--force-data-loss` y revoca todos los grants.
 
-Los tokens de ejecución se guardan en recibos internos. Los eventos de historial solo incluyen un resumen SHA-256 del token y las consultas de revisiones ocultan los tokens de paquetes. Las consultas MCP del almacén son de solo lectura; la restauración está reservada al CLI local.
+El comando **local** `node src/cli.mjs reconcile-view` muestra unidad, generación, ruta, SHA previo/esperado y token completo solo al operador. Ninguna herramienta MCP expone ese token. Los tokens de ejecución se guardan en recibos internos. Los eventos de historial solo incluyen un resumen SHA-256 del token y las consultas de revisiones ocultan los tokens de paquetes. Las consultas MCP del almacén son de solo lectura; la restauración está reservada al CLI local.
 
 Los tokens y generaciones de intento protegen de dobles completados. El heartbeat renovable y la recuperación controlada de READ están implementados. Ningún WRITE incierto se reintenta sin reconciliación firmada; su aplicación real por herramientas externas del anfitrión permanece pendiente de ZL-004.
 

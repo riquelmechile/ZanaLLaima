@@ -1,6 +1,6 @@
 # Fase 5: auditoría de CI, seguridad del repositorio y release
 
-**Versión del proyecto: ZanaLLaima 0.4.1.** Firma CI por `workflow_run` en `ci-attestation.yml`, política **main-only** y reviewer humano requerido en el environment `ci-attestation`.
+**Versión del proyecto: ZanaLLaima 0.4.2.** Firma CI por `workflow_run` en `ci-attestation.yml`, política **main-only** y reviewer humano requerido en el environment `ci-attestation`.
 
 ## Complemento de seguridad 0.4.1 (no publicado)
 

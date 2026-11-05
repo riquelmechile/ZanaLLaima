@@ -136,3 +136,20 @@ test('C4: a diff larger than one page cannot be approved without reading every p
     assert.equal((await f.call('zana_review_finalize',{ticket:t.ticket,execution:'PARALLEL_SUBAGENTS'},s)).event,'APPROVE');
   }finally{await f.cleanup();}
 });
+
+test('C5: with ZANA_DISTINCT_REVIEWER_CLIENT=true the reviewer must use another OAuth client',async()=>{
+  for(const flag of ['true','false']){
+    const f=await remoteFixture({envExtra:{ZANA_DISTINCT_REVIEWER_CLIENT:flag}});
+    try{
+      const {author,missionId}=await f.authorReady();
+      const t=await f.call('zana_review_request',{missionId},author);
+      const sameClient=await f.session('zana-chatgpt','zc_test');
+      const claim=await f.call('zana_review_claim',{ticket:t.ticket},sameClient);
+      if(flag==='true'){
+        assert.match(claim.error,/SAME_CLIENT/);
+        const other=await f.session('gpt-b','zc_other');
+        assert.equal((await f.call('zana_review_claim',{ticket:t.ticket},other)).state,'CLAIMED');
+      }else assert.equal(claim.state,'CLAIMED');
+    }finally{await f.cleanup();}
+  }
+});

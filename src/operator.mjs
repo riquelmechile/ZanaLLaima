@@ -1,3 +1,4 @@
+import {validReconciliationEvidence} from './reconciliation.mjs';
 import {validateRelativePath,inScope} from './paths.mjs';
 import { createHash, createPublicKey, verify } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -53,8 +54,7 @@ export function verifySignedAction(envelope,mission,operatorKey,at=Date.now()){
       Number.isInteger(p.leaseGeneration)&&p.leaseGeneration>=1,'Invalid reconciliation attempt');
     check(['CONFIRMED_DONE','CONFIRMED_NO_EFFECT'].includes(p.decision),
       'Invalid reconciliation decision');
-    check(Array.isArray(p.evidence)&&p.evidence.length>=1&&p.evidence.length<=20&&
-      p.evidence.every(x=>typeof x==='string'&&x.trim().length>=8&&x.length<=2000),
+    check(validReconciliationEvidence(p.evidence),
       'Operator reconciliation evidence is required');
   }
   return p;

@@ -1,3 +1,4 @@
+import {validReconciliationEvidence} from './reconciliation.mjs';
 import { grantPermits, missionSummary } from './core.mjs';
 import { budgetOf, budgetExpired, remainingStarts } from './budget.mjs';
 
@@ -63,8 +64,7 @@ export function reconcileWrite(m,{unitId,token,leaseGeneration,decision,evidence
     'Only an uncertain WRITE can be reconciled');
   check(u.run?.token===token && u.run?.leaseGeneration===leaseGeneration,
     'Stale write reconciliation');
-  check(Array.isArray(evidence)&&evidence.length>0&&evidence.length<=20&&
-    evidence.every(x=>typeof x==='string'&&x.length>=8&&x.length<=2000),
+  check(validReconciliationEvidence(evidence),
     'Actual operator evidence required');
   check(decision==='CONFIRMED_DONE'||decision==='CONFIRMED_NO_EFFECT','Invalid decision');
   // An exhausted uncertain write can still be reconciled as definitively

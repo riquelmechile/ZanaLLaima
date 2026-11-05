@@ -115,7 +115,13 @@ test('R9: 60+ escenarios únicos contra git status porcelain -uall --ignore-subm
      if(s.ignore)put(repo,'.gitignore',s.ignore);
      if(s.attrs)put(repo,'.gitattributes',s.attrs);
      if(s.seed)s.seed(repo,dir);
-     git(repo,'add','.');git(repo,'commit','-qm','baseline');git(repo,'checkout','-qb','feature/matrix');
+     git(repo,'add','.');
+     // Una whitelist `*` ignora archivos base aunque tengan que estar rastreados.
+     // Forzarlos en la línea base para que todas las fixtures tengan un commit real.
+     git(repo,'add','-f','--','f.txt','g.sh','docs/a.md','tracked-dir/keep.txt');
+     if(s.ignore)git(repo,'add','-f','--','.gitignore');
+     if(s.attrs)git(repo,'add','-f','--','.gitattributes');
+     git(repo,'commit','-qm','baseline');git(repo,'checkout','-qb','feature/matrix');
      s.mutate(repo);
      const status=git(repo,'status','--porcelain=v1','-uall','--ignore-submodules=none');
      const expectedClean=status.length===0;

@@ -73,12 +73,26 @@ export async function applyWriteEffect(args,file=statePath(),hooks={}){
     ensure(u.run.effectIntent?.effectId===intent.effectId&&
       u.run.effectIntent.status==='INTENT_DURABLE',
       'Write intent changed before effect');
+    // A long filesystem operation holds BEGIN IMMEDIATE intentionally to
+    // prevent grant revocation between final authorization and the rename.
+    // Bound that hold cooperatively and fail closed before the irreversible
+    // rename if the deadline has elapsed. A blocked kernel fsync may outlast
+    // the deadline, so this is not a hard syscall cancellation.
+    const maxEffectLockMs=hooks?.maxEffectLockMs??5000;
+    ensure(Number.isSafeInteger(maxEffectLockMs)&&maxEffectLockMs>=1&&
+      maxEffectLockMs<=10000,'Invalid effect lock timeout');
+    const effectStartedAt=Date.now();
+    const checkEffectDeadline=()=>ensure(
+      Date.now()-effectStartedAt<maxEffectLockMs,'Effect lock deadline exceeded');
     const effect=await atomicWorkspaceEffect({
       path,content,deleteFile,
       expectedPreSha256:intent.preSha256,
       root:u.run.pathAnchors.workspaceRoot,
       anchors:u.run.pathAnchors.anchors,
-      beforeEffect:()=>{
+      beforeEffect:async()=>{
+        checkEffectDeadline();
+        if(hooks?.beforeEffect)await hooks.beforeEffect();
+        checkEffectDeadline();
         ensure(Date.parse(u.run.expiresAt)>Date.now(),'Lease expired immediately before effect');
         ensure(Date.parse(ctx.writeGrant?.expiresAt)>Date.now(),
           'Operator grant expired immediately before effect');

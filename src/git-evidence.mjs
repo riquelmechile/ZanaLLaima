@@ -94,16 +94,30 @@ const validateConfig=gitDir=>{
       line=line.trim();
       if(!line||line.startsWith('#')||line.startsWith(';'))continue;
       if(line.startsWith('[')){
-        const m=/^\[\s*([-\w.]+)(?:\s+"([^"]+)")?\s*\](?:\s*[#;].*)?$/.exec(line);
+        // Both [remote "origin"] and legacy [remote.origin] must carry
+        // the SAME restrictions; neither may smuggle fetch commands.
+        const m=/^\[\s*([-\w]+)(?:\.([-\w.]+)|\s+"([^"]+)")?\s*\](?:\s*[#;].*)?$/.exec(line);
         if(!m)deny('Unrecognized Git configuration section');
-        section=m[1].toLowerCase();subsection=(m[2]??'').toLowerCase();
+        section=m[1].toLowerCase();subsection=(m[2]??m[3]??'').toLowerCase();
+        if(section==='protocol'||section==='url')
+          deny('Untrusted Git protocol/url section is forbidden');
         if(section==='include'||section==='includeif')
           deny('Git config include/includeIf is not permitted for isolated observation');
         continue;
       }
       const m=/^([-\w.]+)(?:\s*=\s*(.*))?$/.exec(line);
       if(!m)deny('Unsupported Git configuration syntax');
-      const key=m[1].toLowerCase(),value=(m[2]??'true').trim().replace(/^"(.*)"$/,'$1');
+      const key=m[1].toLowerCase();
+      let raw=(m[2]??'true').trim(),inQuotes=false,escaped=false,stop=raw.length;
+      for(let i=0;i<raw.length;i++){
+        const ch=raw[i];
+        if(escaped){escaped=false;continue;}
+        if(ch==='\\'&&inQuotes){escaped=true;continue;}
+        if(ch==='"'){inQuotes=!inQuotes;continue;}
+        if(!inQuotes&&(ch==='#'||ch===';')&&(i===0||/\s/.test(raw[i-1]))){stop=i;break;}
+      }
+      raw=raw.slice(0,stop).trim();
+      const value=raw.replace(/^"((?:\\.|[^"])*)"$/,'$1');
       if(section==='extensions'&&!['worktreeconfig'].includes(key))
         deny('Unsupported Git extension '+key);
       if(section==='extensions'&&key==='worktreeconfig'&&
@@ -289,8 +303,27 @@ const selfIgnoredUntrackedDirectory=dir=>{
     .map(x=>x.trim()).filter(x=>x&&!x.startsWith('#'));
   return effective.length===1&&effective[0]==='*';
 };
-const matchesDangerousAttributes=bytes=>/(?:^|\s)(?:filter\s*=|eol\s*=|(?:-?text)(?:\s|=|$)|ident(?:\s|=|$))/m
+const matchesDangerousAttributes=bytes=>/(?:^|\s)(?:filter\s*=|eol\s*=\s*crlf(?:\s|$)|ident(?:\s|=|$)|working-tree-encoding\s*=)/m
   .test(bytes.toString('utf8'));
+// A nested repository is a real untracked unit, even if its own .gitignore
+// would hide all files. A random directory named .git is insufficient:
+// verify the metadata shape without executing Git or reading its objects.
+const nestedGitRepository=dir=>{
+  const dot=join(dir,'.git');
+  try{
+    const st=lstatSync(dot);
+    let gitdir=dot;
+    if(st.isFile()){
+      const m=/^gitdir:\s*(.+?)\s*$/i.exec(readRequired(dot,'nested .git pointer').toString('utf8'));
+      if(!m)return false;
+      gitdir=resolve(dir,m[1]);
+    }else if(!st.isDirectory())return false;
+    if(!existsSync(join(gitdir,'config'))||!existsSync(join(gitdir,'HEAD'))||
+       !existsSync(join(gitdir,'objects')))return false;
+    const head=readRequired(join(gitdir,'HEAD'),'nested Git HEAD').toString('utf8').trim();
+    return /^ref: refs\/heads\/[A-Za-z0-9_.\/-]+$/.test(head)||SHA.test(head);
+  }catch{return false;}
+};
 function inspect(root,expectedSha,parentGitDir,depth=0){
   if(depth>16)deny('Git submodule nesting exceeds inspection limit');
   const committed=snapshot(root,parentGitDir);
@@ -304,30 +337,33 @@ function inspect(root,expectedSha,parentGitDir,depth=0){
   }
   const ignoreGit=privateIgnoreDir(root,index),observed=new Map(),nestedDirty=[];
   try{
-    const walk=(dir,prefix='')=>{
-      let listing;
-      try{listing=readdirSync(dir,{withFileTypes:true});}
-      catch{deny('Unable to enumerate worktree directory');}
-      // One isolated ignore-query per directory, not per file.
-      // check-ignore must see real shadow directories for negative patterns.
-      // Check each directory WITHOUT a trailing slash; Git then evaluates
-      // negations against its actual path type, not an absent shadow path.
-      const paths=listing.filter(e=>e.name!=='.git').map(e=>{
-        const p=prefix?prefix+'/'+e.name:e.name;
-        if(e.isDirectory())mkdirSync(join(ignoreGit.worktree,p),{recursive:true});
-        return p;
-      });
-      const ignored=ignoredNames(ignoreGit.worktree,ignoreGit.gitdir,paths);
-      for(const ent of listing){
-        if(ent.name==='.git')continue; // metadata is excluded, never trusted
-        const path=prefix?prefix+'/'+ent.name:ent.name;
-        if(!safePath(path))deny('Unsafe path in worktree');
-        const abs=join(root,path),st=lstatSync(abs),isDir=st.isDirectory();
+    // Breadth-first batches check-ignore by level: 3400 directories in one
+    // depth use ONE isolated Git process, not 3400 subprocesses. Never enter
+    // ignored directories, preserving performance for 150k generated files.
+    let level=[{dir:root,prefix:''}];
+    while(level.length){
+      const candidates=[];
+      for(const {dir,prefix} of level){
+        let listing;
+        try{listing=readdirSync(dir,{withFileTypes:true});}
+        catch{deny('Unable to enumerate worktree directory');}
+        for(const ent of listing){
+          if(ent.name==='.git')continue;
+          const path=prefix?prefix+'/'+ent.name:ent.name;
+          if(!safePath(path))deny('Unsafe path in worktree');
+          const abs=join(root,path),st=lstatSync(abs),isDir=st.isDirectory();
+          if(isDir)mkdirSync(join(ignoreGit.worktree,path),{recursive:true});
+          candidates.push({ent,path,abs,st,isDir});
+        }
+      }
+      const ignored=ignoredNames(ignoreGit.worktree,ignoreGit.gitdir,
+        candidates.map(x=>x.path));
+      const next=[];
+      for(const {ent,path,abs,st,isDir} of candidates){
         const tracked=index.has(path)||trackedDirs.has(path);
         if(!tracked&&ent.name!=='.gitignore'&&ignored.has(path))continue;
         if(isDir){
-          if(!tracked&&!trackedDirs.has(path)&&selfIgnoredUntrackedDirectory(abs))
-            continue; // Git also treats Python-generated private caches as ignored.
+          if(!tracked&&selfIgnoredUntrackedDirectory(abs))continue;
           if(index.get(path)?.mode==='160000'){
             const nested=realpathSync(abs);
             if(nested!==abs||!within(root,nested))
@@ -335,7 +371,9 @@ function inspect(root,expectedSha,parentGitDir,depth=0){
             const child=inspect(nested,index.get(path).sha,committed.common,depth+1);
             observed.set(path,{mode:'160000',sha:child.sha});
             if(!child.clean)nestedDirty.push({path,type:'submodule',detail:child.reason});
-          }else walk(abs,path);
+          }else if(!tracked&&nestedGitRepository(abs)){
+            observed.set(path,{mode:'100644',sha:hash('blob',Buffer.alloc(0))});
+          }else next.push({dir:abs,prefix:path});
           continue;
         }
         if(st.isSymbolicLink()){
@@ -345,11 +383,15 @@ function inspect(root,expectedSha,parentGitDir,depth=0){
         if(!st.isFile())deny('Unsupported non-regular worktree object: '+path);
         const body=safeFile(abs,st);
         if(ent.name==='.gitattributes'&&matchesDangerousAttributes(body))
-          deny('Git attribute filter/text/eol/ident normalization unsupported at '+path);
-        observed.set(path,{mode:(st.mode&0o100)?'100755':'100644',sha:hash('blob',body)});
+          deny('Git attribute filter/eol/ident/working-tree-encoding normalization unsupported at '+path);
+        const sha=hash('blob',body);
+        const normalized=body.includes(Buffer.from('\r\n'))?
+          hash('blob',Buffer.from(body.toString('utf8').replace(/\r\n/g,'\n'))):null;
+        observed.set(path,{mode:(st.mode&0o100)?'100755':'100644',
+          sha,normalizedSha:normalized});
       }
-    };
-    walk(root);
+      level=next;
+    }
   }finally{rmSync(ignoreGit.holder,{recursive:true,force:true});}
   for(const [path,entry] of index){
     if(entry.mode==='160000'&&!observed.has(path))
@@ -363,7 +405,8 @@ function inspect(root,expectedSha,parentGitDir,depth=0){
     if(!a){reason={path,type:'missing'};break;}
     if(!b){reason={path,type:'extra'};break;}
     if(a.mode!==b.mode){reason={path,type:'mode'};break;}
-    if(a.sha!==b.sha){reason={path,type:'content'};break;}
+    if(a.sha!==b.sha){reason={path,type:'content',
+      ...(a.normalizedSha===b.sha?{detail:'CRLF/LF normalization differs from committed bytes'}:{})};break;}
   }
   if(!reason&&nestedDirty.length)reason=nestedDirty[0];
   if(!reason&&stageSha!==committed.treeSha)

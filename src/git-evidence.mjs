@@ -247,8 +247,10 @@ const privateIgnoreDir=(repo,index)=>{
   mkdirSync(join(gitdir,'objects'));mkdirSync(join(gitdir,'refs'));
   writeFileSync(join(gitdir,'HEAD'),'ref: refs/heads/main\n',{mode:0o600});
   writeFileSync(join(gitdir,'config'),'[core]\n\trepositoryformatversion = 0\n\tbare = false\n',{mode:0o600});
+  let hasTrackedIgnores=false;
   for(const path of index.keys()){
     if(path.split('/').at(-1)!=='.gitignore')continue;
+    hasTrackedIgnores=true;
     const source=join(repo,path);
     let st;
     try{st=lstatSync(source);}catch{continue;}
@@ -263,7 +265,7 @@ const privateIgnoreDir=(repo,index)=>{
       deny('Tracked .gitignore differs from index during shadow construction: '+path);
     writeFileSync(target,ignoreBytes,{mode:0o600});
   }
-  return {holder,gitdir,worktree};
+  return {holder,gitdir,worktree,hasTrackedIgnores};
 };
 const ignoredNames=(repo,gitdir,paths)=>{
   if(!paths.length)return new Set();
@@ -352,12 +354,16 @@ function inspect(root,expectedSha,parentGitDir,depth=0){
           const path=prefix?prefix+'/'+ent.name:ent.name;
           if(!safePath(path))deny('Unsafe path in worktree');
           const abs=join(root,path),st=lstatSync(abs),isDir=st.isDirectory();
-          if(isDir)mkdirSync(join(ignoreGit.worktree,path),{recursive:true});
+          // No tracked ignore rules: avoid 3400 unnecessary shadow mkdirs.
+          // Python autoignore and nested repositories are checked separately.
+          if(isDir&&ignoreGit.hasTrackedIgnores)
+            mkdirSync(join(ignoreGit.worktree,path),{recursive:true});
           candidates.push({ent,path,abs,st,isDir});
         }
       }
-      const ignored=ignoredNames(ignoreGit.worktree,ignoreGit.gitdir,
-        candidates.map(x=>x.path));
+      const ignored=ignoreGit.hasTrackedIgnores
+        ?ignoredNames(ignoreGit.worktree,ignoreGit.gitdir,candidates.map(x=>x.path))
+        :new Set();
       const next=[];
       for(const {ent,path,abs,st,isDir} of candidates){
         const tracked=index.has(path)||trackedDirs.has(path);

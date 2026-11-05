@@ -33,8 +33,23 @@ export async function withRestoreLock(databasePath,operation){
     child.once('error',error=>finish(Error('Cannot acquire offline flock: '+error.message)));
     child.once('exit',code=>finish(Error('Restore flock unavailable or timed out (exit '+code+')')));
   });
+  // The journal is SIGKILL-safe, so an unexpected loss of the flock child
+  // requires process fail-stop. A rejected Promise would leave the asynchronous
+  // DB operation running without a lock; never allow that safety gap.
+  let running=true;
+  const failStop=()=>{
+    if(running){
+      process.stderr.write('FATAL: restore flock lease lost; terminating operator\n');
+      process.kill(process.pid,'SIGKILL');
+    }
+  };
+  child.once('exit',failStop);
+  child.once('error',failStop);
   try{return await operation();}
   finally{
+    running=false;
+    child.removeListener('exit',failStop);
+    child.removeListener('error',failStop);
     if(child.exitCode===null){
       child.stdin.end('RELEASE\n');
       await new Promise(resolve=>child.once('exit',resolve));

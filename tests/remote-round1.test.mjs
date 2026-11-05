@@ -113,3 +113,26 @@ test('C3: an orphaned CLAIMED ticket with a BLOCKER (server restart) does not bl
     assert.equal(merge.state,'MERGED',JSON.stringify(merge.blockers));
   }finally{await f.cleanup();}
 });
+
+test('C4: a diff larger than one page cannot be approved without reading every page',async()=>{
+  const f=await remoteFixture();
+  try{
+    const {author,missionId}=await f.authorReady();
+    const file=(name,kb)=>'diff --git a/'+name+' b/'+name+'\n--- a/'+name+'\n+++ b/'+name+'\n@@ -0,0 +1 @@\n'+
+      Array.from({length:kb*16},(_,i)=>'+line '+i+' '+'x'.repeat(50)).join('\n')+'\n';
+    f.api.state.diffText=file('src/big.mjs',200)+file('src/small.mjs',1)+file('test/big.test.mjs',90);
+    const t=await f.call('zana_review_request',{missionId},author);
+    const s=await f.session();
+    const claim=await f.call('zana_review_claim',{ticket:t.ticket},s);
+    assert.ok(claim.diffManifest.totalPages>3,'paged manifest');
+    assert.deepEqual(claim.diffManifest.files.map(x=>x.path),['src/big.mjs','src/small.mjs','test/big.test.mjs']);
+    for(const l of ['risk','readability','reliability','resilience'])
+      await f.call('zana_review_lens_submit',{ticket:t.ticket,...clean(l)},s);
+    const first=await f.call('zana_review_diff',{ticket:t.ticket,page:0},s);
+    assert.equal(first.page,0);
+    assert.match((await f.call('zana_review_finalize',{ticket:t.ticket,execution:'PARALLEL_SUBAGENTS'},s)).error,/DIFF_NOT_FULLY_READ/);
+    assert.equal((f.api.state.reviews[7]??[]).length,0,'nothing published');
+    await readDiff(f.call,t.ticket,s);
+    assert.equal((await f.call('zana_review_finalize',{ticket:t.ticket,execution:'PARALLEL_SUBAGENTS'},s)).event,'APPROVE');
+  }finally{await f.cleanup();}
+});

@@ -59,9 +59,10 @@ export async function parseCliCommand(command,args=[],{json=readJson,text=readTe
     input={limit:args[0]?Number(args[0]):25,before:args[1]?Number(args[1]):null};
   else if(command==='storage-backup')input={destination:args[0]};
   else if(command==='storage-adopt-quarantine'){
-    if(args.length!==2||args[1]!=='--confirm')
-      throw Error('storage-adopt-quarantine requires <UUID> --confirm');
-    input={id:args[0],confirm:true};
+    if(args.length<2||args.length>3||args[1]!=='--confirm'||
+       (args[2]!==undefined&&args[2]!=='--force-data-loss'))
+      throw Error('storage-adopt-quarantine requires <UUID> --confirm [--force-data-loss]');
+    input={id:args[0],confirm:true,forceDataLoss:args[2]==='--force-data-loss'};
   }
   else if(command==='storage-cleanup-artifacts'){
     if(args.length!==1||args[0]!=='--confirm')throw Error('storage-cleanup-artifacts requires --confirm');
@@ -82,7 +83,8 @@ export async function runCli(command,args=[],{json,text}={}){
   if(parsed.command==='storage-restore-abort')return storageRestoreAbort();
   if(parsed.command==='storage-cleanup-artifacts')return storageCleanupArtifacts(undefined,parsed.input);
   if(parsed.command==='storage-adopt-quarantine')
-    return storageAdoptQuarantine(parsed.input.id,undefined,{confirm:parsed.input.confirm});
+    return storageAdoptQuarantine(parsed.input.id,undefined,
+      {confirm:parsed.input.confirm,forceDataLoss:parsed.input.forceDataLoss});
   if(parsed.command==='reconcile-view'){
     const state=await readState();
     return {items:(state?.units??[]).filter(u=>
@@ -102,7 +104,7 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).hr
   const [command,...args]=process.argv.slice(2);
   runCli(command,args).then(value=>process.stdout.write(JSON.stringify(value,null,2)+'\n'))
     .catch(error=>{
-      process.stderr.write('Error: '+error.message+'\n');
+      process.stderr.write('Error: '+(error.code?'['+error.code+'] ':'')+error.message+'\n');
       process.exitCode=1;
     });
 }

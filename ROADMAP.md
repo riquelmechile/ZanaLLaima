@@ -1,6 +1,6 @@
 ## Candidato 0.5.2 (sin publicar): presupuesto monótono en restore y congelamiento
 
-- R11-C1: el restore offline y el `adopt` tratan `attempts`, `leaseGeneration`, total de starts y `revision` como hechos monótonos. Código nuevo `CONSUMED_BUDGET`; con `--force-data-loss` se fusiona `max(viva, backup)`.
+- R11-C1: el restore offline y el `adopt` tratan `attempts` y `leaseGeneration` por unidad como hechos monótonos (el total de starts es su suma) mediante un ledger por misión que sobrevive a cambios de misión y archivo. Código nuevo `CONSUMED_BUDGET`; con `--force-data-loss` se conserva `max(viva, backup)`. La `revision` se fusiona siempre.
 - **Cambio de rumbo:** ZanaLLaima pasa a ser un MCP remoto para la app de ChatGPT (fase siguiente, en otro PR). Quedan **congelados**: endurecimiento de `git-evidence`, gate `zana_apply_write`, grants de escritura Ed25519, aislamiento de OS (ZL-004) y los warnings pendientes de la ronda 11 (atributos y `crlf`, `**/.gitignore` del hilo Codex `4485193524`, lock con fd en Node, alias `nlink=2`, `skippedSources` del adopt, `setup-python` en CI, epoch clampeado). El código queda, sin más cambios.
 
 <!-- HISTORICAL_VERSIONS_START -->

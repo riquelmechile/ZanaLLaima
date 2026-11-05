@@ -51,7 +51,7 @@ El almacenamiento es local: no usarlo como base compartida por filesystem de red
 Si la base viva se perdió y existe una `.quarantine.<UUID>` antigua sin diario, el programa **nunca** la selecciona por mtime. Solo el operador, tras detener todos los clientes, puede escoger el UUID exacto:
 
 ```sh
-ZANA_RESTORE_OFFLINE=1 node src/cli.mjs storage-adopt-quarantine <UUID> --confirm
+ZANA_RESTORE_OFFLINE=1 node src/cli.mjs storage-adopt-quarantine <UUID> --confirm [--force-data-loss]
 ```
 
 La operación requiere que no exista DB viva ni `.restore-pending`, verifica SQLite y hace checkpoint de WAL antes de publicar la DB de forma exclusiva. Fusiona las revocaciones y los nonces de **todas las cuarentenas y `.aborted.<UUID>` legibles** con las mismas comprobaciones monotónicas del restore. Después aplica una **barrera ciega**: revoca todos los grants y fija `restore_epoch` a la hora de adopción. Por eso la recuperación exige una **firma nueva del operador** para volver a autorizar WRITE: un GRANT previo no sirve aunque estuviera activo en la cuarentena antigua. La decisión queda registrada como `QUARANTINE_ADOPTED` antes de publicar. `storage-status` incluye revisión, fecha de actualización y cantidad de revocaciones por copia; inspeccionarlas antes de escoger UUID. Una copia ilegible puede contener historia no recuperable, y nunca se debe asumir que esa historia no existió. Restore, abort y cleanup comparten `.restore.lock` mediante `flock` entre procesos Linux. Si el guardia `flock` muere durante una operación, el operador termina con SIGKILL antes de continuar escribiendo; el diario permite recuperarlo. Si la DB y su cuarentena comparten dev/ino tras un crash entre `link` y `rm`, el siguiente adopt del mismo UUID solo completa el unlink y fsync.
@@ -88,12 +88,13 @@ Los tokens y generaciones de intento protegen de dobles completados. El heartbea
 | `CHECKPOINT_MISSING` | Base esperada no encontrada; revisar estado del diario. |
 | `CHECKPOINT_NONEMPTY` | WAL no vaciado; no mover SQLite hasta checkpoint completo. |
 | `CONFIRM_REQUIRED` | Revisar consecuencias y repetir con --confirm si está autorizado. |
-| `CONSUMED_BUDGET` | La DB viva consumió intentos, generaciones de lease o tiene trabajo RUNNING después del backup. Sin `--force-data-loss` el restore se rechaza; con él se fusiona `max(viva, backup)` por unidad, y el `adopt` hace lo mismo con todas las cuarentenas legibles. La `revision` nunca retrocede. |
+| `CONSUMED_BUDGET` | La DB viva tiene trabajo RUNNING, o su ledger de presupuesto (misión activa, misiones archivadas y ledger heredado de restores anteriores) registra más intentos o generaciones de lease que el backup para la misión del backup. Sin `--force-data-loss` el restore se rechaza; con él se conserva `max(viva, backup)` por unidad. |
 | `EMPTY_BACKUP` | Backup sin misión activa; escoger copia válida. |
 | `EMPTY_QUARANTINE` | No contiene misión activa; no adoptar. |
 | `GRANT_COLLISION` | Conflicto de identidad de grant: bloquear e inspeccionar firmas y origen. |
 | `INVALID_FORCE` | Pasar booleano forceDataLoss válido y explícito. |
 | `INVALID_JOURNAL` | Diario corrupto: no borrar archivos; abort offline solo si no hubo movimientos identificables. |
+| `INVALID_LEDGER` | El ledger de presupuesto consumido o un snapshot archivado está corrupto: preservar la base e inspeccionarla; no forzar el restore. |
 | `INVALID_QUARANTINE` | UUID o identidad incompatible; no hacer renames manuales. |
 | `INVALID_UUID` | Elegir UUID válido exacto de storage-status. |
 | `JOURNAL_ACTIVE` | Completar o abortar diario activo, luego volver a operar. |
@@ -113,10 +114,15 @@ Los tokens y generaciones de intento protegen de dobles completados. El heartbea
 | `SCHEMA` | Backup incompatible; usar versión migrable soportada. |
 | `UNCERTAIN_WRITE` | Resolver WRITE OUTCOME_UNKNOWN mediante reconciliación firmada antes del restore. |
 | `UNOWNED_ARTIFACTS` | No hay diario y faltó DB viva: inspeccionar las copias y adoptar manualmente UUID exacto con --confirm cuando corresponda. |
+| `UNREADABLE_SOURCE` | Una cuarentena o `.aborted.*` hermana es ilegible o no es un archivo regular y podría tener presupuesto consumido más nuevo. Inspeccionarla; adoptar igual solo con `--confirm --force-data-loss`, que registra la fuente omitida en `skippedSources` del evento y del resultado. |
 | `UNREADABLE_WAL` | DB ilegible con WAL pendiente; preservar datos sin forzar descarte. |
 | `UNSAFE_QUARANTINE` | Symlink, hardlink o tipo inseguro; conservar y revisar archivo. |
 | `WAL_NOT_EMPTY` | WAL pendiente: cerrar conexiones y completar checkpoint, no separarlo de DB. |
 | `flock timeout` | Otro proceso retiene el lock: cerrar clientes y reintentar luego, no borrar el archivo de lock. |
+
+**Presupuesto consumido (R11).** Los `attempts` y la `leaseGeneration` de cada unidad son hechos monótonos, igual que los nonces: el total de starts es la suma de `attempts`, así que también lo es. Cada base guarda un ledger `consumed_budget` en `metadata`, por misión y unidad, que el restore y el `adopt` fusionan siempre con el de la DB viva y el de todas las fuentes legibles; nunca se achica. Eso cubre el cambio de misión: restaurar otra misión B y luego el backup viejo de A no devuelve los intentos de A. Sin `--force-data-loss`, el restore se rechaza con `CONSUMED_BUDGET` si el backup tiene menos consumo que el ledger para su misión o si hay trabajo RUNNING; con `--force-data-loss`, y en el `adopt`, las unidades del candidato suben a `max`. La `revision` de la misión se fusiona en **todo** restore o adopt: queda por sobre la de cada fuente, aunque no haya consumo nuevo.
+
+Límites: si alguna fuente hermana es ilegible, el `adopt` se rechaza con `UNREADABLE_SOURCE` salvo `--force-data-loss`. Un restore **ciego** (DB viva ausente o ilegible, solo con `--force-data-loss`) fusiona el ledger de las copias `.aborted.*` y cuarentenas legibles, pero el consumo que solo conocía la DB perdida se pierde: es parte de la pérdida que ese flag acepta, igual que la revocación total de grants.
 
 Comandos de operador, con todos los clientes cerrados:
 

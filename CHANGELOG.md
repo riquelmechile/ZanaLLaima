@@ -2,7 +2,9 @@
 
 ## [0.5.2] - No publicado
 
-- **R11-C1 (restore):** el restore offline sin `--force-data-loss` se rechaza con `CONSUMED_BUDGET` si la DB viva tiene trabajo RUNNING o consumió intentos o generaciones de lease después del backup. Con `--force-data-loss`, y en `storage-adopt-quarantine`, se fusiona `max(viva, backup)` por unidad; la `revision` queda siempre por sobre todas las fuentes. Test negativo previo `d4f8de8` (hilo Codex `4485193503`).
+- **R11-C1 (restore):** el restore offline sin `--force-data-loss` se rechaza con `CONSUMED_BUDGET` si la DB viva tiene trabajo RUNNING o si su ledger de presupuesto consumido registra más intentos o generaciones de lease que el backup. Test negativo previo `d4f8de8` (hilo Codex `4485193503`). Con `--force-data-loss`, y en `storage-adopt-quarantine`, se conserva `max(viva, backup)` por unidad. La `revision` se fusiona en todo restore y queda por sobre cada fuente.
+- **R11-C1b (restore):** ledger `consumed_budget` por misión y unidad, que incluye misiones archivadas y se fusiona en cada restore y adopt, para que pasar por otra misión (A→B→A) no reinicie el presupuesto. Test negativo previo `88de027` (lente R2 sobre `cc8f61e`). También cubre una misión archivada o reemplazada (test previo `bcea605`).
+- **R11-C1c (adopt):** una cuarentena o `.aborted.*` hermana ilegible rechaza el adopt con `UNREADABLE_SOURCE` salvo `--force-data-loss`; la fuente omitida queda en `skippedSources` del evento y del resultado. El restore ciego fusiona el ledger de las copias legibles. La CLI imprime el código de error (`[CODE] mensaje`).
 - Congelados por el cambio a MCP remoto: endurecimiento de `git-evidence`, `zana_apply_write`, grants de escritura y aislamiento de OS. Ver `ROADMAP.md`.
 
 ## [0.5.1] - No publicado

@@ -484,12 +484,9 @@ function inspectLive(candidate,source,forceDataLoss){
         if(!retained.has(key))
           guardRestore('NEWER_RECEIPT','Restoring backup would discard newer durable receipt without --force-data-loss');
     }
-    const budget=budgetFacts(old);
-    if(!forceDataLoss)refuseConsumedBudget(load(candidate),budget);
-    return {blind:false,budget,
-      actions:live.prepare('SELECT nonce,mission_id,kind,created_at FROM operator_actions').all(),
-      revoked:live.prepare('SELECT grant_id,mission_id,payload,signature,fingerprint,revoked,created_at FROM operator_grants WHERE revoked=1').all(),
-      epoch:live.prepare('SELECT value FROM metadata WHERE key=?').get(RESTORE_EPOCH_KEY)?.value??null};
+    const facts=securityFacts(live);
+    if(!forceDataLoss)refuseConsumedBudget(load(candidate),facts.budget);
+    return {blind:false,...facts};
   }catch(error){
     if(error instanceof RestoreGuardError)throw error;
     if(source.quarantine)
@@ -499,48 +496,103 @@ function inspectLive(candidate,source,forceDataLoss){
     return {blind:true,actions:[],revoked:[],epoch:null};
   }finally{if(live)live.close();}
 }
-// Consumed work budget is a monotone fact, like a consumed nonce: attempts and
-// leaseGeneration per unit, total starts and the mission revision never move
-// backwards across restore or adoption. Otherwise an offline restore would
-// hand out fresh attempts without any operator signature (R11-C1).
-function budgetFacts(mission){
-  if(!mission)return null;
-  return {missionId:mission.id,revision:mission.revision,
-    units:mission.units.map(u=>({id:u.id,status:u.status,attempts:u.attempts||0,
-      leaseGeneration:u.run?.leaseGeneration||0}))};
+// Consumed work budget is a monotone fact, like a consumed nonce. Per unit,
+// attempts and leaseGeneration never move backwards across restore or
+// adoption; total starts is derived as the sum of attempts, so it is monotone
+// too. The mission revision is always fused to land above every source.
+// Otherwise an offline restore would hand out fresh attempts without any
+// operator signature (R11-C1).
+//
+// The single active-mission slot is not enough to remember consumption: a
+// restore to another mission would drop it, and a later restore of an old
+// backup would refund it (A -> B -> A, R11-C1b). So every database carries a
+// ledger in metadata (CONSUMED_BUDGET_KEY), keyed by mission and unit, that
+// restore and adoption merge like nonces and never shrink.
+const CONSUMED_BUDGET_KEY='consumed_budget';
+function readLedger(db){
+  const raw=db.prepare('SELECT value FROM metadata WHERE key=?').get(CONSUMED_BUDGET_KEY)?.value;
+  if(raw===undefined)return {};
+  let value;
+  try{value=JSON.parse(raw);}catch{value=null;}
+  if(!value||typeof value!=='object'||Array.isArray(value))
+    guardRestore('INVALID_LEDGER','Consumed-budget ledger is malformed; preserve the database and inspect it');
+  return value;
+}
+function raise(ledger,missionId,unitId,attempts,leaseGeneration){
+  const mission=ledger[missionId]??={};
+  const old=mission[unitId]??{attempts:0,leaseGeneration:0};
+  mission[unitId]={attempts:Math.max(old.attempts||0,attempts||0),
+    leaseGeneration:Math.max(old.leaseGeneration||0,leaseGeneration||0)};
+}
+function mergeLedgers(target,source){
+  for(const [missionId,units] of Object.entries(source??{}))
+    for(const [unitId,u] of Object.entries(units??{}))
+      raise(target,missionId,unitId,u.attempts,u.leaseGeneration);
+  return target;
+}
+// Facts of one database: its ledger plus what its active and archived
+// missions consumed (an archived mission keeps its units in the snapshot).
+function budgetFacts(db){
+  const ledger=readLedger(db),mission=load(db);
+  const consume=m=>{for(const u of m?.units??[])
+    raise(ledger,m.id,u.id,u.attempts||0,u.run?.leaseGeneration||0);};
+  consume(mission);
+  for(const row of db.prepare('SELECT snapshot FROM mission_archive').all()){
+    let archived;
+    try{archived=JSON.parse(row.snapshot);}catch{archived=null;}
+    if(!archived||typeof archived.id!=='string'||!Array.isArray(archived.units))
+      guardRestore('INVALID_LEDGER','Archived mission snapshot is malformed; preserve the database and inspect it');
+    consume(archived);
+  }
+  return {revision:mission?.revision??null,running:!!mission?.units.some(u=>u.status==='RUNNING'),ledger};
 }
 function refuseConsumedBudget(candidate,live){
-  if(!live)return;
-  if(live.units.some(u=>u.status==='RUNNING'))
-    guardRestore('CONSUMED_BUDGET','Live database has RUNNING work; restore would drop consumed attempts without --force-data-loss');
-  if(!candidate||candidate.id!==live.missionId)return;
-  const backup=new Map(candidate.units.map(u=>[u.id,u]));
-  for(const u of live.units){
-    const b=backup.get(u.id);
-    if(u.attempts>(b?.attempts||0)||u.leaseGeneration>(b?.run?.leaseGeneration||0))
-      guardRestore('CONSUMED_BUDGET','Unit '+u.id+' consumed attempts after the backup; restore requires --force-data-loss');
+  if(live.running)
+    guardRestore('CONSUMED_BUDGET','Live database has RUNNING work; restore refused. With --force-data-loss the consumed attempts are kept as max(live, backup)');
+  const consumed=candidate&&live.ledger[candidate.id];
+  if(!consumed)return;
+  for(const u of candidate.units){
+    const used=consumed[u.id];
+    if(used&&(used.attempts>(u.attempts||0)||used.leaseGeneration>(u.run?.leaseGeneration||0)))
+      guardRestore('CONSUMED_BUDGET','Unit '+u.id+' of mission '+candidate.id+' consumed attempts not present in the backup; restore refused. With --force-data-loss they are kept as max(live, backup)');
   }
 }
-// Merge max(live, candidate) into the candidate database. Revision always
-// lands strictly above every known source, so clients never see it go back.
+// Fuse facts into the candidate database. The ledger and the revision are
+// fused on every restore or adoption. Attempts/leaseGeneration of the
+// candidate's own units are raised too; without --force-data-loss that is a
+// no-op because refuseConsumedBudget already proved they are not lower.
 function mergeBudgetFacts(db,facts){
   if(!facts)return;
+  const ledger=mergeLedgers(readLedger(db),facts.ledger);
+  db.prepare('INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+    .run(CONSUMED_BUDGET_KEY,json(ledger));
   const m=db.prepare('SELECT id,revision FROM active_mission WHERE slot=1').get();
   if(!m)return;
-  if(facts.revision>=m.revision)
+  if(facts.revision!==null&&facts.revision>=m.revision)
     db.prepare('UPDATE active_mission SET revision=? WHERE slot=1').run(facts.revision+1);
-  if(m.id!==facts.missionId)return;
   const read=db.prepare('SELECT attempts,run FROM units WHERE mission_id=? AND id=?');
   const write=db.prepare('UPDATE units SET attempts=?,run=? WHERE mission_id=? AND id=?');
-  for(const u of facts.units){
-    const row=read.get(m.id,u.id);
+  for(const [unitId,used] of Object.entries(ledger[m.id]??{})){
+    const row=read.get(m.id,unitId);
     if(!row)continue;
     const run=parse(row.run);
-    const attempts=Math.max(row.attempts||0,u.attempts);
-    const generation=Math.max(run?.leaseGeneration||0,u.leaseGeneration);
+    const attempts=Math.max(row.attempts||0,used.attempts);
+    const generation=Math.max(run?.leaseGeneration||0,used.leaseGeneration);
     if(attempts===(row.attempts||0)&&generation===(run?.leaseGeneration||0))continue;
-    write.run(attempts,json(generation?{...(run??{}),leaseGeneration:generation}:run),m.id,u.id);
+    // A non-RUNNING unit may carry a run object holding only leaseGeneration:
+    // startBatch reads run?.leaseGeneration to issue the next generation and
+    // nothing else reads run for PENDING/EXPIRED/FAILED units, so keeping the
+    // generation there is what makes stale lease tokens stay stale.
+    write.run(attempts,json(generation?{...(run??{}),leaseGeneration:generation}:run),m.id,unitId);
   }
+}
+// The monotone facts every restore and adoption source contributes.
+function securityFacts(db){
+  return {
+    actions:db.prepare('SELECT nonce,mission_id,kind,created_at FROM operator_actions').all(),
+    revoked:db.prepare('SELECT grant_id,mission_id,payload,signature,fingerprint,revoked,created_at FROM operator_grants WHERE revoked=1').all(),
+    epoch:db.prepare('SELECT value FROM metadata WHERE key=?').get(RESTORE_EPOCH_KEY)?.value??null,
+    budget:budgetFacts(db)};
 }
 function mergeSecurityFacts(db,security){
   if(security.blind){
@@ -652,36 +704,32 @@ async function otherQuarantineSecurity(base,selected){
   const artifacts=await classifyRestoreArtifacts(base);
   const paths=exactRestoreArtifacts(base,[...artifacts.quarantines,...artifacts.aborted])
     .filter(path=>path!==selected);
-  const sources=[];
+  const sources=[],skipped=[];
   for(const path of paths){
     let db;
     try{
       const st=await lstat(path);
-      if(!st.isFile()||st.isSymbolicLink())continue;
+      if(!st.isFile()||st.isSymbolicLink()){skipped.push({path,reason:'NOT_REGULAR'});continue;}
       db=connect(path,true);
       assertHealthy(db);
-      sources.push({
-        path,
-        actions:db.prepare('SELECT nonce,mission_id,kind,created_at FROM operator_actions').all(),
-        revoked:db.prepare('SELECT grant_id,mission_id,payload,signature,fingerprint,revoked,created_at FROM operator_grants WHERE revoked=1').all(),
-        epoch:db.prepare('SELECT value FROM metadata WHERE key=?').get(RESTORE_EPOCH_KEY)?.value??null,
-        budget:budgetFacts(load(db))
-      });
+      sources.push({path,...securityFacts(db)});
     }catch(error){
-      // Only legible, integrity-checked sources can contribute facts. Even
-      // unreadable sources never authorize writes: blind fencing below revokes
-      // ALL grants and rejects signatures issued before adoption.
+      // Only legible, integrity-checked sources can contribute facts. Unreadable
+      // sources never authorize writes (blind fencing revokes ALL grants), but
+      // their consumed budget is unknown, so callers must surface them.
+      skipped.push({path,reason:'UNREADABLE'});
     }finally{if(db)db.close();}
   }
-  return sources;
+  return {sources,skipped};
 }
 // Opt-in disaster recovery ONLY when the live DB is missing and no journal
 // owns a quarantine. An exact operator-provided UUID replaces mtime heuristics.
 // The revocations and consumed nonces already present in that quarantine
 // become the live security history. Record the adoption event DURABLY before
 // publishing the checkpointed database; crash/retry cannot erase the event.
-export async function storageAdoptQuarantine(id,file=statePath(),{confirm=false}={}){
+export async function storageAdoptQuarantine(id,file=statePath(),{confirm=false,forceDataLoss=false}={}){
   if(!confirm)guardRestore('CONFIRM_REQUIRED','storage-adopt-quarantine requires --confirm');
+  if(typeof forceDataLoss!=='boolean')guardRestore('INVALID_FORCE','forceDataLoss must be a boolean');
   if(process.env.ZANA_RESTORE_OFFLINE!=='1')
     guardRestore('OFFLINE_REQUIRED','Quarantine adoption requires offline operator mode');
   if(typeof id!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))
@@ -711,14 +759,19 @@ export async function storageAdoptQuarantine(id,file=statePath(),{confirm=false}
     if(!st.isFile()||st.isSymbolicLink()||st.nlink!==1)
       guardRestore('UNSAFE_QUARANTINE','Quarantine must be a unique regular SQLite database');
     await checkpointExclusive(quarantine,{allowMissing:false});
-    const securitySources=await otherQuarantineSecurity(path,quarantine);
+    const {sources:securitySources,skipped}=await otherQuarantineSecurity(path,quarantine);
+    // An unreadable sibling may hold newer consumed budget that adoption
+    // would silently refund; adopting past it is explicit data loss.
+    if(skipped.length&&!forceDataLoss)
+      guardRestore('UNREADABLE_SOURCE','Unreadable or irregular restore artifacts may hold newer consumed budget: '+
+        skipped.map(x=>x.path+' ('+x.reason+')').join(', ')+'; inspect them or repeat with --force-data-loss');
     const db=connect(quarantine);
     try{
       assertHealthy(db);
       const mission=load(db);
       if(!mission)guardRestore('EMPTY_QUARANTINE','Quarantine contains no active mission');
       const detail={quarantineId:id,source:'OPERATOR_EXPLICIT_CONFIRMATION',
-        securitySources:securitySources.map(x=>x.path),blindFence:true};
+        securitySources:securitySources.map(x=>x.path),skippedSources:skipped,blindFence:true};
       db.exec('BEGIN IMMEDIATE');
       try{
         // Merge monotone revocations, consumed nonces and consumed work budget
@@ -751,7 +804,7 @@ export async function storageAdoptQuarantine(id,file=statePath(),{confirm=false}
     await rm(quarantine);
     const d2=await open(dirname(path),'r');
     try{await d2.sync();}finally{await d2.close();}
-    return {adopted:true,quarantineId:id,databasePath:path,
+    return {adopted:true,quarantineId:id,databasePath:path,skippedSources:skipped,
       note:'Explicit quarantine adoption; audit event persisted before publication'};
   });
 }
@@ -810,10 +863,18 @@ async function restoreBackupUnlocked(source,file=statePath(),
           m.review?.lenses?.some(x=>x.state==='RUNNING'))
         guardRestore('BUSY_BACKUP','Backup contains running work');
       const security=inspectLive(candidate,sourceLive,forceDataLoss);
+      // A blind restore cannot read the live history. Merge what readable
+      // aborted copies still prove; consumption only the lost DB knew is the
+      // data loss --force-data-loss accepts (documented in sqlite-storage.md).
+      const siblings=security.blind?(await otherQuarantineSecurity(path,null)).sources:[];
       candidate.exec('BEGIN IMMEDIATE');
       try{
         mergeSecurityFacts(candidate,security);
         mergeBudgetFacts(candidate,security.budget);
+        for(const sibling of siblings){
+          mergeSecurityFacts(candidate,{...sibling,blind:false});
+          mergeBudgetFacts(candidate,sibling.budget);
+        }
         candidate.exec('COMMIT');
       }catch(error){rollbackIfOpen(candidate);throw error;}
     }finally{candidate.close();}

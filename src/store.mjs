@@ -679,6 +679,7 @@ export async function applyOperatorAction(envelope,file=statePath()){
       if(db.prepare('SELECT nonce FROM operator_actions WHERE nonce=?').get(p.nonce))
         fail('Operator action nonce already consumed');
       const next=structuredClone(previous);
+      let cleanup=null;
       if(p.kind==='GRANT_WRITE'){
         if(next.status!=='ACTIVE')fail('Mission must be active to grant writes');
         if(next.units.some(x=>x.effect==='WRITE'&&x.status==='RUNNING'))
@@ -695,7 +696,9 @@ export async function applyOperatorAction(envelope,file=statePath()){
       }else{
         const affected=next.units.find(u=>u.id===p.unitId);
         reconcileWrite(next,p); // first verify signed attempt identity
-        await pendingTemporary(affected,{remove:true});
+        const outcome=await pendingTemporary(affected,{remove:true});
+        cleanup={pending:Boolean(outcome?.pending),error:outcome?.error??null};
+        addEvent(db,next,'RECONCILE_WRITE_CLEANUP',{unitId:p.unitId,cleanup});
       }
       next.revision++;
       persist(db,previous,next,'OPERATOR_'+p.kind);
@@ -703,7 +706,8 @@ export async function applyOperatorAction(envelope,file=statePath()){
         .run(p.nonce,next.id,p.kind,now());
       db.exec('COMMIT');
       return {kind:p.kind,missionId:next.id,revision:next.revision,
-        actionId:p.nonce,writeGrant:await readEffectiveGrant(db,next)};
+        actionId:p.nonce,writeGrant:await readEffectiveGrant(db,next),
+        ...(p.kind==='RECONCILE_WRITE'?{cleanup}:{})};
     }catch(e){rollbackIfOpen(db);throw e;}
   }finally{db.close();}
   });

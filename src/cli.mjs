@@ -3,9 +3,9 @@ import {readFile} from 'node:fs/promises';
 import {resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {operations} from './actions.mjs';
-import {applyOperatorAction,storageRestoreAbort,readState} from './store.mjs';
+import {applyOperatorAction,storageRestoreAbort,storageCleanupArtifacts,readState} from './store.mjs';
 
-const usage='Commands: operator-import, heartbeat, recover-expired, retry, cancel, close, archive, mission-history, authorization-status, storage-status, storage-history, storage-reviews, storage-migrate, storage-backup, storage-restore, storage-restore-abort, reconcile-view, profile, init, status, next, start, complete, apply-write, review-open, review-next, review-start, review-submit, review-check, review-status, delivery-check';
+const usage='Commands: operator-import, heartbeat, recover-expired, retry, cancel, close, archive, mission-history, authorization-status, storage-status, storage-history, storage-reviews, storage-migrate, storage-backup, storage-restore, storage-restore-abort, storage-cleanup-artifacts, reconcile-view, profile, init, status, next, start, complete, apply-write, review-open, review-next, review-start, review-submit, review-check, review-status, delivery-check';
 const readJson=async path=>JSON.parse(await readFile(path,'utf8'));
 const readText=async path=>readFile(path,'utf8');
 const noArgs=new Set(['status','profile','review-status','review-check','storage-status',
@@ -58,6 +58,10 @@ export async function parseCliCommand(command,args=[],{json=readJson,text=readTe
   else if(command==='mission-history')
     input={limit:args[0]?Number(args[0]):25,before:args[1]?Number(args[1]):null};
   else if(command==='storage-backup')input={destination:args[0]};
+  else if(command==='storage-cleanup-artifacts'){
+    if(args.length!==1||args[0]!=='--confirm')throw Error('storage-cleanup-artifacts requires --confirm');
+    input={confirm:true};
+  }
   else if(command==='storage-restore'){
     if(args.length>2 || (args[1]!==undefined&&args[1]!=='--force-data-loss'))
       throw Error('Only --force-data-loss is allowed for offline restore');
@@ -71,6 +75,7 @@ export async function runCli(command,args=[],{json,text}={}){
   const parsed=await parseCliCommand(command,args,{json,text});
   if(parsed.command==='operator-import')return applyOperatorAction(parsed.input.envelope);
   if(parsed.command==='storage-restore-abort')return storageRestoreAbort();
+  if(parsed.command==='storage-cleanup-artifacts')return storageCleanupArtifacts(undefined,parsed.input);
   if(parsed.command==='reconcile-view'){
     const state=await readState();
     return {items:(state?.units??[]).filter(u=>

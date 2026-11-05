@@ -1,6 +1,6 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
-import {mkdtemp,writeFile,readFile,rm,stat} from 'node:fs/promises';
+import {mkdtemp,writeFile,readFile,rm,stat,rename} from 'node:fs/promises';
 import {tmpdir} from 'node:os';import {join} from 'node:path';
 import {restoreFixture} from './helpers/r8-restore.mjs';
 import {DatabaseSync} from 'node:sqlite';
@@ -79,5 +79,55 @@ test('R8 journal: no abrir un restore con artefactos sin diario y DB ausente',as
   await writeFile(base+'.quarantine.33333333-3333-4333-8333-333333333333','unowned');
   await assert.rejects(restoreBackup(f.backup,f.file,{offline:true,forceDataLoss:true}),
     {code:'UNOWNED_ARTIFACTS'});
+ }finally{await f.close();}
+});
+
+test('R8 journal: no marker y limpieza con journal activo se rechazan con código',async()=>{
+ const f=await restoreFixture();try{
+  await assert.rejects(storageRestoreAbort(f.file),{code:'NO_JOURNAL'});
+  const marker=databasePath(f.file)+'.restore-pending';
+  await writeFile(marker,'{}');
+  await assert.rejects(storageCleanupArtifacts(f.file,{confirm:true}),{code:'JOURNAL_ACTIVE'});
+ }finally{await f.close();}
+});
+test('R8 journal: rename pendiente detecta ambos extremos y bloquea un abort ambiguo',async()=>{
+ const f=await restoreFixture();try{
+  const path=databasePath(f.file),id='44444444-4444-4444-8444-444444444444';
+  const q=path+'.quarantine.'+id,temp=path+'.restoring.'+id;
+  await writeFile(q,'duplicate database');await writeFile(temp,'new candidate');
+  await writeFile(path+'.restore-pending',JSON.stringify({version:1,id,path,temp,
+   quarantine:q,phase:'restoring',restoreOps:[
+     {from:path,to:q,state:'intent'},
+     {from:temp,to:path,state:'pending'}],abortOps:null}));
+  await assert.rejects(storageRestoreAbort(f.file),{code:'AMBIGUOUS_RENAME'});
+ }finally{await f.close();}
+});
+test('R8 journal: SIGKILL después de mover DB y antes de escribir done es idempotente',async()=>{
+ const f=await restoreFixture();try{
+  const path=databasePath(f.file),id='55555555-5555-4555-8555-555555555555';
+  const q=path+'.quarantine.'+id,temp=path+'.restoring.'+id;
+  const n=f.events();
+  await writeFile(temp,'candidate retained');
+  await rename(path,q);
+  await writeFile(path+'.restore-pending',JSON.stringify({version:1,id,path,temp,
+    quarantine:q,phase:'restoring',restoreOps:[
+      {from:path,to:q,state:'intent'},
+      {from:temp,to:path,state:'pending'}],abortOps:null}));
+  const result=await storageRestoreAbort(f.file);
+  assert.equal(result.aborted,true);
+  assert.equal((await authorizationStatus(f.file)).valid,false);
+  assert.equal(f.events(),n);
+ }finally{await f.close();}
+});
+test('R8 journal: candidato perdido durante crash no autoriza recuperar datos arbitrarios',async()=>{
+ const f=await restoreFixture();try{
+  const path=databasePath(f.file),id='66666666-6666-4666-8666-666666666666';
+  const q=path+'.quarantine.'+id,temp=path+'.restoring.'+id;
+  await rename(path,q);
+  await writeFile(path+'.restore-pending',JSON.stringify({version:1,id,path,temp,
+    quarantine:q,phase:'restoring',restoreOps:[
+      {from:path,to:q,state:'done'},
+      {from:temp,to:path,state:'pending'}],abortOps:null}));
+  await assert.rejects(storageRestoreAbort(f.file),{code:'LOST_CANDIDATE'});
  }finally{await f.close();}
 });

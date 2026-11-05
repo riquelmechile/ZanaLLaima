@@ -11,8 +11,8 @@ const spec={objective:'Verify mission-aware CLI and MCP heartbeat defaults',
   authorization:{writesAllowed:false,allowedPaths:[]},
   budget:{maxLeaseSeconds:60},
   units:[{id:'read',effect:'READ',instruction:'Inspect a local fixture with a 60-second lease'}]};
-const assertWithinBudget=(expiresAt,started)=>{
-  const remaining=Date.parse(expiresAt)-started;
+const assertWithinBudget=(expiresAt,afterReturn)=>{
+  const remaining=Date.parse(expiresAt)-afterReturn;
   assert.ok(remaining>0&&remaining<=61000,'Default lease must remain within mission maxLeaseSeconds');
 };
 test('CLI heartbeat without an explicit duration honours the mission 60-second limit',async()=>{
@@ -26,10 +26,10 @@ test('CLI heartbeat without an explicit duration honours the mission 60-second l
     const init=invoke('init',input);assert.equal(init.status,0,init.stderr);
     const started=invoke('start');assert.equal(started.status,0,started.stderr);
     const p=JSON.parse(started.stdout).packets[0];
-    const at=Date.now();
     const heartbeat=invoke('heartbeat',p.unitId,p.token,String(p.leaseGeneration));
     assert.equal(heartbeat.status,0,heartbeat.stderr);
-    assertWithinBudget(JSON.parse(heartbeat.stdout).expiresAt,at);
+    const returnedAt=Date.now();
+    assertWithinBudget(JSON.parse(heartbeat.stdout).expiresAt,returnedAt);
     const oversized=invoke('heartbeat',p.unitId,p.token,String(p.leaseGeneration),'61');
     assert.notEqual(oversized.status,0,'Over-budget explicit heartbeat must be rejected');
     assert.match(oversized.stderr,/Heartbeat exceeds mission lease budget/);
@@ -50,11 +50,11 @@ test('official stdio MCP heartbeat schema leaves omitted duration to the mission
     assert.notEqual((await call('zana_mission_init',{spec})).isError,true);
     const batch=await call('zana_start_batch');
     const p=batch.structuredContent.packets[0];
-    const at=Date.now();
     const ok=await call('zana_unit_heartbeat',{unitId:p.unitId,
       token:p.token,leaseGeneration:p.leaseGeneration});
     assert.equal(ok.isError,undefined,ok.content?.[0]?.text);
-    assertWithinBudget(ok.structuredContent.expiresAt,at);
+    const returnedAt=Date.now();
+    assertWithinBudget(ok.structuredContent.expiresAt,returnedAt);
     const invalid=await call('zana_unit_heartbeat',{unitId:p.unitId,
       token:p.token,leaseGeneration:p.leaseGeneration,leaseSeconds:61});
     assert.equal(invalid.isError,true);

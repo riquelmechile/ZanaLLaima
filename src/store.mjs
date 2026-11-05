@@ -406,6 +406,7 @@ export async function cleanupEffectTemporaries(mission){
 export async function storageStatus(file=statePath()) {
   const path=databasePath(file);
   const restoreArtifacts=await classifyRestoreArtifacts(path);
+  restoreArtifacts.quarantineDetails=await describeQuarantines(path,restoreArtifacts.quarantines);
   if(await interruptedRestoreJournal(path))
     return {backend:'RESTORE_PENDING',databasePath:path,restoreArtifacts,
       integrity:'NOT_INSPECTED_RESTORE_IN_PROGRESS'};
@@ -580,6 +581,54 @@ export async function storageCleanupArtifacts(file=statePath(),{confirm=false}={
     ()=>cleanupRestoreArtifacts(databasePath(file),{confirm}));
 }
 
+// A quarantine status must expose enough chronology for an operator to choose
+// consciously. Never infer authority from a filename, mtime or malformed DB.
+const restoreArtifactUUID=/^\.(?:quarantine|aborted)\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const exactRestoreArtifacts=(base,paths)=>paths.filter(x=>
+  x.startsWith(base)&&restoreArtifactUUID.test(x.slice(base.length)));
+async function describeQuarantines(base,paths){
+  const output=[];
+  for(const path of exactRestoreArtifacts(base,paths)){
+    let db;
+    try{
+      const f=await lstat(path);
+      if(!f.isFile()||f.isSymbolicLink())throw Error('Not a regular quarantine file');
+      db=connect(path,true);
+      assertHealthy(db);
+      const m=db.prepare('SELECT revision,updated_at FROM active_mission LIMIT 1').get();
+      const revocations=db.prepare('SELECT COUNT(*) AS n FROM operator_grants WHERE revoked=1').get().n;
+      output.push({path,revision:m?.revision??null,updatedAt:m?.updated_at??null,revocations});
+    }catch(error){output.push({path,error:'UNREADABLE_QUARANTINE'});}
+    finally{if(db)db.close();}
+  }
+  return output;
+}
+async function otherQuarantineSecurity(base,selected){
+  const artifacts=await classifyRestoreArtifacts(base);
+  const paths=exactRestoreArtifacts(base,[...artifacts.quarantines,...artifacts.aborted])
+    .filter(path=>path!==selected);
+  const sources=[];
+  for(const path of paths){
+    let db;
+    try{
+      const st=await lstat(path);
+      if(!st.isFile()||st.isSymbolicLink())continue;
+      db=connect(path,true);
+      assertHealthy(db);
+      sources.push({
+        path,
+        actions:db.prepare('SELECT nonce,mission_id,kind,created_at FROM operator_actions').all(),
+        revoked:db.prepare('SELECT grant_id,mission_id,payload,signature,fingerprint,revoked,created_at FROM operator_grants WHERE revoked=1').all(),
+        epoch:db.prepare('SELECT value FROM metadata WHERE key=?').get(RESTORE_EPOCH_KEY)?.value??null
+      });
+    }catch(error){
+      // Only legible, integrity-checked sources can contribute facts. Even
+      // unreadable sources never authorize writes: blind fencing below revokes
+      // ALL grants and rejects signatures issued before adoption.
+    }finally{if(db)db.close();}
+  }
+  return sources;
+}
 // Opt-in disaster recovery ONLY when the live DB is missing and no journal
 // owns a quarantine. An exact operator-provided UUID replaces mtime heuristics.
 // The revocations and consumed nonces already present in that quarantine
@@ -595,22 +644,42 @@ export async function storageAdoptQuarantine(id,file=statePath(),{confirm=false}
   return withRestoreLock(path,async()=>{
     if(await interruptedRestoreJournal(path))
       guardRestore('JOURNAL_ACTIVE','Recovery journal active; run storage-restore-abort first');
-    if(await exists(path))
+    // After SIGKILL between publishing via link() and removing quarantine,
+    // both paths name the exact same inode. Safely complete unlink, never
+    // replace a different live database.
+    if(await exists(path)){
+      if(await exists(quarantine)){
+        const live=await stat(path),retained=await stat(quarantine);
+        if(live.dev===retained.dev&&live.ino===retained.ino){
+          await rm(quarantine);
+          const fd=await open(dirname(path),'r');
+          try{await fd.sync();}finally{await fd.close();}
+          return {adopted:true,recovered:true,quarantineId:id,databasePath:path};
+        }
+      }
       guardRestore('LIVE_PRESENT','No se puede adoptar: existe una DB viva');
+    }
     if(!await exists(quarantine))
       guardRestore('NOT_FOUND','No existe la cuarentena solicitada: '+id);
     const st=await lstat(quarantine);
     if(!st.isFile()||st.isSymbolicLink()||st.nlink!==1)
       guardRestore('UNSAFE_QUARANTINE','Quarantine must be a unique regular SQLite database');
     await checkpointExclusive(quarantine,{allowMissing:false});
+    const securitySources=await otherQuarantineSecurity(path,quarantine);
     const db=connect(quarantine);
     try{
       assertHealthy(db);
       const mission=load(db);
       if(!mission)guardRestore('EMPTY_QUARANTINE','Quarantine contains no active mission');
-      const detail={quarantineId:id,source:'OPERATOR_EXPLICIT_CONFIRMATION'};
+      const detail={quarantineId:id,source:'OPERATOR_EXPLICIT_CONFIRMATION',
+        securitySources:securitySources.map(x=>x.path),blindFence:true};
       db.exec('BEGIN IMMEDIATE');
       try{
+        // Merge monotone revocations and consumed nonces from every readable
+        // quarantine and aborted DB, then revoke all grants because a lost
+        // live DB cannot prove its absent authorization history.
+        for(const security of securitySources)mergeSecurityFacts(db,{...security,blind:false});
+        mergeSecurityFacts(db,{blind:true,actions:[],revoked:[],epoch:null});
         const before=db.prepare(
           "SELECT 1 FROM state_events WHERE category='QUARANTINE_ADOPTED' AND detail=? LIMIT 1")
           .get(json(detail));

@@ -528,21 +528,29 @@ function mergeSecurityFacts(db,security){
   const epoch=parsed.length?new Date(Math.max(...parsed)).toISOString():null;
   if(epoch)db.prepare("INSERT INTO metadata(key,value) VALUES('restore_epoch',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(epoch);
 }
-async function checkpointExclusive(path,{allowMissing=false}={}){
+async function checkpointExclusive(path,{allowMissing=false,allowUnreadable=false}={}){
   if(!await exists(path)){
     if(allowMissing)return {missing:true};
     guardRestore('CHECKPOINT_MISSING','No database available for WAL checkpoint');
   }
   // Exclusive lock before the FIRST rename. If another connection holds a
   // WAL snapshot, TRUNCATE must be able to complete or the operation fails.
-  const db=new DatabaseSync(path);
+  let db;
   try{
+    db=new DatabaseSync(path);
     db.exec('PRAGMA busy_timeout=10000; PRAGMA locking_mode=EXCLUSIVE;');
     assertHealthy(db);
     const result=db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
     if(!result||result.busy!==0)
       guardRestore('CHECKPOINT_BUSY','Exclusive WAL checkpoint failed; close other SQLite clients');
-  }finally{db.close();}
+  }catch(error){
+    if(!allowUnreadable)throw error;
+    // A known-corrupt live DB may be quarantined under explicit data-loss
+    // consent ONLY when it has no pending WAL to lose.
+    if(await exists(path+'-wal')&&(await stat(path+'-wal')).size>0)
+      guardRestore('UNREADABLE_WAL','Uncheckpointable WAL contains pending data; refusing data loss');
+    return {corruptLive:true};
+  }finally{if(db)db.close();}
   if(await exists(path+'-wal')&&(await stat(path+'-wal')).size!==0)
     guardRestore('CHECKPOINT_NONEMPTY','WAL is not empty after checkpoint; refusing to move database');
   return {checkpointed:true};
@@ -590,6 +598,8 @@ export async function restoreBackup(source,file=statePath(),
   // first; then inspect the recovered live DB and merge its monotone facts.
   if(await interruptedRestoreJournal(path))
     await storageRestoreAbort(file);
+  // Classify prior DB before generating a new .restoring.* candidate.
+  const sourceLive=await previousLiveDatabase(path);
   const temp=path+'.restoring.'+randomUUID();
   const quarantine=path+'.quarantine.'+randomUUID();
   try{
@@ -602,7 +612,6 @@ export async function restoreBackup(source,file=statePath(),
     }finally{sourceDb.close();}
     await chmod(temp,0o600);
     const migrating=connect(temp);migrating.close();
-    const sourceLive=await previousLiveDatabase(path);
     const candidate=connect(temp);
     try{
       assertHealthy(candidate);
@@ -618,10 +627,24 @@ export async function restoreBackup(source,file=statePath(),
         candidate.exec('COMMIT');
       }catch(error){rollbackIfOpen(candidate);throw error;}
     }finally{candidate.close();}
-    const result=await beginRestoreMoves({path,temp,quarantine,
-      checkpoint:checkpointExclusive,afterQuarantine,afterRename,afterJournalReady});
-    return {...result,quarantinePath:result.quarantinePath??(
-      sourceLive.quarantine?sourceLive.path:null)};
+    try{
+      const result=await beginRestoreMoves({path,temp,quarantine,
+        checkpoint:checkpointExclusive,allowUnreadable:forceDataLoss,
+        afterQuarantine,afterRename,afterJournalReady});
+      return {...result,quarantinePath:result.quarantinePath??(
+        sourceLive.quarantine?sourceLive.path:null)};
+    }catch(error){
+      // Ordinary thrown errors roll back through the journal. SIGKILL leaves
+      // it intact and is reconciled by the next operator action.
+      if(await interruptedRestoreJournal(path)){
+        try{await storageRestoreAbort(file);}
+        catch(rollbackError){
+          guardRestore('ROLLBACK_INCOMPLETE',
+            'Restore journal remains active; abort failed: '+rollbackError.message);
+        }
+      }
+      throw error;
+    }
   }finally{
     // Never remove candidate bytes still referenced by an interrupted journal:
     // those are essential to an idempotent rerun or abort after a crash.

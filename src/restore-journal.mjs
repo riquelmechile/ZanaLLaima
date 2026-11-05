@@ -107,11 +107,11 @@ const runOp=async(marker,j,op,ordinal,hook)=>{
  op.state='done';await stable(marker,j);
  if(hook)await hook({ordinal,from:op.from,to:op.to,phase:j.phase});
 };
-export async function beginRestoreMoves({path,temp,quarantine,checkpoint,afterJournalReady,
+export async function beginRestoreMoves({path,temp,quarantine,checkpoint,allowUnreadable=false,afterJournalReady,
   afterQuarantine,afterRename}){
  if(await has(journalPath(path)))
    refuse('JOURNAL_ACTIVE','Restore journal already exists; recover it before starting another restore');
- await checkpoint(path,{allowMissing:true});
+ await checkpoint(path,{allowMissing:true,allowUnreadable});
  await checkpoint(temp,{allowMissing:false});
  const id=quarantine.slice((path+'.quarantine.').length);
  if(!UUID.test(id))refuse('INVALID_QUARANTINE','Invalid quarantine identity');
@@ -137,9 +137,16 @@ export async function beginRestoreMoves({path,temp,quarantine,checkpoint,afterJo
    quarantinePath:ops.some(x=>x.to===quarantine)?quarantine:null,
    note:'Conserve la cuarentena como evidencia y verifique todos los recibos'};
 }
-const infer=async op=>{
+const infer=async (j,op)=>{
  const from=await has(op.from),to=await has(op.to);
  if(op.state==='done')return true;
+ // The install target can still hold the OLD live main DB while the
+ // candidate is waiting in temp. This is not an ambiguous rename.
+ if(op.from===j.temp){
+   if(from)return false;
+   if(to)return true;
+   refuse('LOST_CANDIDATE','Both candidate and installed database are missing');
+ }
  if(!from&&to)return true; // SIGKILL between rename and journal commit
  if(from&&!to)return false;
  refuse('AMBIGUOUS_RENAME','Cannot reconcile incomplete restore rename');
@@ -149,7 +156,7 @@ export async function abortRestoreMoves(path,{checkpoint,afterRename}={}){
  if(!j)refuse('NO_JOURNAL','No interrupted restore journal');
  if(j.phase==='restoring'){
   const moved=[];
-  for(const op of j.restoreOps)moved.push(await infer(op));
+  for(const op of j.restoreOps)moved.push(await infer(j,op));
   if(!moved.some(Boolean)){
    // A crash after creating the marker but before ANY rename must not
    // select old Q1 by mtime, and must leave the live database untouched.

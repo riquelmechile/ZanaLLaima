@@ -59,7 +59,7 @@ test('R8 invariant: historia shallow y grafts no afecta el contenido del snapsho
     assert.equal(observeGit({repoPath:f.repo}).clean,true);
   }finally{f.close();}
 });
-test('R8 invariant: alternates no se leen para calcular árboles'),()=>{
+test('R8 invariant: alternates no se leen para calcular árboles',()=>{
   const f=fixture();try{
     const oldBlob=git(f.repo,'rev-parse','HEAD:src/app.mjs');
     const alt=join(f.dir,'altobjects');mkdirSync(alt);

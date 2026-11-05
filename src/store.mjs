@@ -176,7 +176,12 @@ function persist(db, previous, next, kind = 'STATE_CHANGED') {
   if(activeWriters.length>1||(activeWriters.length&&activeReaders.length))
     fail('Exclusive WRITE invariant violated: concurrent read/write or multiple writers');
   const allowedStarts=next.budget?.maxWorkStarts;
-  if(allowedStarts!==undefined && next.units.reduce((n,u)=>n+(u.attempts||0),0)>allowedStarts)
+  // Reject only a write that RAISES total starts above the limit. Restore can
+  // fuse divergent histories (max per unit) above it; such a mission must still
+  // be cancellable, expirable and archivable, it just can never start again.
+  const startsOf=m=>m.units.reduce((n,u)=>n+(u.attempts||0),0);
+  if(allowedStarts!==undefined && startsOf(next)>allowedStarts &&
+     (!previous || startsOf(next)>startsOf(previous)))
     fail('Mission work-start budget exceeded');
   if (!previous) {
     db.prepare('INSERT INTO active_mission(slot,id,objective,authorization,revision,created_at,updated_at,lifecycle,closed_at,review_count,budget) VALUES(1,?,?,?,?,?,?,?,?,?,?)')
@@ -484,7 +489,7 @@ function inspectLive(candidate,source,forceDataLoss){
         if(!retained.has(key))
           guardRestore('NEWER_RECEIPT','Restoring backup would discard newer durable receipt without --force-data-loss');
     }
-    const facts=securityFacts(live);
+    const facts=securityFacts(live,{rebuild:forceDataLoss});
     if(!forceDataLoss)refuseConsumedBudget(load(candidate),facts.budget);
     return {blind:false,...facts};
   }catch(error){
@@ -509,50 +514,80 @@ function inspectLive(candidate,source,forceDataLoss){
 // ledger in metadata (CONSUMED_BUDGET_KEY), keyed by mission and unit, that
 // restore and adoption merge like nonces and never shrink.
 const CONSUMED_BUDGET_KEY='consumed_budget';
-function readLedger(db){
-  const raw=db.prepare('SELECT value FROM metadata WHERE key=?').get(CONSUMED_BUDGET_KEY)?.value;
-  if(raw===undefined)return {};
-  let value;
-  try{value=JSON.parse(raw);}catch{value=null;}
-  if(!value||typeof value!=='object'||Array.isArray(value))
-    guardRestore('INVALID_LEDGER','Consumed-budget ledger is malformed; preserve the database and inspect it');
-  return value;
-}
+// Ledger keys come from database bytes an operator may have been handed, so
+// they are validated against the same shapes createMission produces and kept
+// in null-prototype maps: a key like "__proto__" can never reach
+// Object.prototype or silently drop consumption.
+const LEDGER_MISSION_ID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const LEDGER_UNIT_ID=/^[a-z][a-z0-9-]{0,63}$/;
+const invalidLedger=()=>guardRestore('INVALID_LEDGER','Consumed-budget ledger is malformed; preserve the database and inspect it');
+const counter=v=>{
+  if(v===undefined)return 0;
+  if(!Number.isSafeInteger(v)||v<0)invalidLedger();
+  return v;
+};
 function raise(ledger,missionId,unitId,attempts,leaseGeneration){
-  const mission=ledger[missionId]??={};
-  const old=mission[unitId]??{attempts:0,leaseGeneration:0};
-  mission[unitId]={attempts:Math.max(old.attempts||0,attempts||0),
-    leaseGeneration:Math.max(old.leaseGeneration||0,leaseGeneration||0)};
+  if(!LEDGER_MISSION_ID.test(missionId)||!LEDGER_UNIT_ID.test(unitId))invalidLedger();
+  const mission=Object.hasOwn(ledger,missionId)?ledger[missionId]:(ledger[missionId]=Object.create(null));
+  const old=Object.hasOwn(mission,unitId)?mission[unitId]:{attempts:0,leaseGeneration:0};
+  mission[unitId]={attempts:Math.max(old.attempts,counter(attempts)),
+    leaseGeneration:Math.max(old.leaseGeneration,counter(leaseGeneration))};
 }
 function mergeLedgers(target,source){
-  for(const [missionId,units] of Object.entries(source??{}))
-    for(const [unitId,u] of Object.entries(units??{}))
+  for(const [missionId,units] of Object.entries(source)){
+    if(!units||typeof units!=='object'||Array.isArray(units))invalidLedger();
+    for(const [unitId,u] of Object.entries(units)){
+      if(!u||typeof u!=='object'||Array.isArray(u))invalidLedger();
       raise(target,missionId,unitId,u.attempts,u.leaseGeneration);
+    }
+  }
   return target;
+}
+function readLedger(db){
+  const raw=db.prepare('SELECT value FROM metadata WHERE key=?').get(CONSUMED_BUDGET_KEY)?.value;
+  const ledger=Object.create(null);
+  if(raw===undefined)return ledger;
+  let value;
+  try{value=JSON.parse(raw);}catch{value=null;}
+  if(!value||typeof value!=='object'||Array.isArray(value))invalidLedger();
+  return mergeLedgers(ledger,value);
 }
 // Facts of one database: its ledger plus what its active and archived
 // missions consumed (an archived mission keeps its units in the snapshot).
-function budgetFacts(db){
-  const ledger=readLedger(db),mission=load(db);
+// With rebuild (only under --force-data-loss) a corrupt stored ledger or
+// archived snapshot is dropped and the ledger is rebuilt from what the
+// database still proves; the caller reports ledgerRebuilt.
+function budgetFacts(db,{rebuild=false}={}){
+  let ledger,rebuilt=false;
+  try{ledger=readLedger(db);}
+  catch(error){
+    if(!rebuild||error.code!=='INVALID_LEDGER')throw error;
+    ledger=Object.create(null);rebuilt=true;
+  }
+  const mission=load(db);
   const consume=m=>{for(const u of m?.units??[])
     raise(ledger,m.id,u.id,u.attempts||0,u.run?.leaseGeneration||0);};
   consume(mission);
   for(const row of db.prepare('SELECT snapshot FROM mission_archive').all()){
     let archived;
     try{archived=JSON.parse(row.snapshot);}catch{archived=null;}
-    if(!archived||typeof archived.id!=='string'||!Array.isArray(archived.units))
+    if(!archived||typeof archived.id!=='string'||!Array.isArray(archived.units)){
+      if(rebuild){rebuilt=true;continue;}
       guardRestore('INVALID_LEDGER','Archived mission snapshot is malformed; preserve the database and inspect it');
-    consume(archived);
+    }
+    try{consume(archived);}
+    catch(error){if(!rebuild||error.code!=='INVALID_LEDGER')throw error;rebuilt=true;}
   }
-  return {revision:mission?.revision??null,running:!!mission?.units.some(u=>u.status==='RUNNING'),ledger};
+  return {revision:mission?.revision??null,running:!!mission?.units.some(u=>u.status==='RUNNING'),ledger,rebuilt};
 }
-function refuseConsumedBudget(candidate,live){
-  if(live.running)
+function refuseConsumedBudget(backupMission,liveBudget){
+  if(liveBudget.running)
     guardRestore('CONSUMED_BUDGET','Live database has RUNNING work; restore refused. With --force-data-loss the consumed attempts are kept as max(live, backup)');
-  const consumed=candidate&&live.ledger[candidate.id];
+  const consumed=backupMission&&Object.hasOwn(liveBudget.ledger,backupMission.id)?liveBudget.ledger[backupMission.id]:null;
   if(!consumed)return;
+  const candidate=backupMission;
   for(const u of candidate.units){
-    const used=consumed[u.id];
+    const used=Object.hasOwn(consumed,u.id)?consumed[u.id]:null;
     if(used&&(used.attempts>(u.attempts||0)||used.leaseGeneration>(u.run?.leaseGeneration||0)))
       guardRestore('CONSUMED_BUDGET','Unit '+u.id+' of mission '+candidate.id+' consumed attempts not present in the backup; restore refused. With --force-data-loss they are kept as max(live, backup)');
   }
@@ -561,38 +596,44 @@ function refuseConsumedBudget(candidate,live){
 // fused on every restore or adoption. Attempts/leaseGeneration of the
 // candidate's own units are raised too; without --force-data-loss that is a
 // no-op because refuseConsumedBudget already proved they are not lower.
-function mergeBudgetFacts(db,facts){
+function mergeBudgetFacts(db,facts,{ownLedger}={}){
   if(!facts)return;
-  const ledger=mergeLedgers(readLedger(db),facts.ledger);
+  const ledger=mergeLedgers(ownLedger??readLedger(db),facts.ledger);
   db.prepare('INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
     .run(CONSUMED_BUDGET_KEY,json(ledger));
   const m=db.prepare('SELECT id,revision FROM active_mission WHERE slot=1').get();
   if(!m)return;
   if(facts.revision!==null&&facts.revision>=m.revision)
     db.prepare('UPDATE active_mission SET revision=? WHERE slot=1').run(facts.revision+1);
-  const read=db.prepare('SELECT attempts,run FROM units WHERE mission_id=? AND id=?');
+  const read=db.prepare('SELECT status,attempts,run FROM units WHERE mission_id=? AND id=?');
   const write=db.prepare('UPDATE units SET attempts=?,run=? WHERE mission_id=? AND id=?');
-  for(const [unitId,used] of Object.entries(ledger[m.id]??{})){
+  for(const [unitId,used] of Object.entries(Object.hasOwn(ledger,m.id)?ledger[m.id]:{})){
     const row=read.get(m.id,unitId);
     if(!row)continue;
     const run=parse(row.run);
     const attempts=Math.max(row.attempts||0,used.attempts);
-    const generation=Math.max(run?.leaseGeneration||0,used.leaseGeneration);
+    // An OUTCOME_UNKNOWN write keeps its exact token/generation: signed
+    // reconciliation (reconcileWrite, reconcile-view) must still match it,
+    // and the unit cannot start again until reconciled anyway. Only its
+    // attempts are raised.
+    const generation=row.status==='OUTCOME_UNKNOWN'?(run?.leaseGeneration||0):
+      Math.max(run?.leaseGeneration||0,used.leaseGeneration);
     if(attempts===(row.attempts||0)&&generation===(run?.leaseGeneration||0))continue;
-    // A non-RUNNING unit may carry a run object holding only leaseGeneration:
-    // startBatch reads run?.leaseGeneration to issue the next generation and
-    // nothing else reads run for PENDING/EXPIRED/FAILED units, so keeping the
-    // generation there is what makes stale lease tokens stay stale.
+    // Any other unit may end up with a run object holding only leaseGeneration
+    // (e.g. a PENDING unit from the backup). startBatch issues the next
+    // generation from run?.leaseGeneration, and lifecycle reads the rest of run
+    // only for RUNNING or OUTCOME_UNKNOWN units, so this keeps old lease
+    // tokens stale without inventing a lease.
     write.run(attempts,json(generation?{...(run??{}),leaseGeneration:generation}:run),m.id,unitId);
   }
 }
 // The monotone facts every restore and adoption source contributes.
-function securityFacts(db){
+function securityFacts(db,{rebuild=false}={}){
   return {
     actions:db.prepare('SELECT nonce,mission_id,kind,created_at FROM operator_actions').all(),
     revoked:db.prepare('SELECT grant_id,mission_id,payload,signature,fingerprint,revoked,created_at FROM operator_grants WHERE revoked=1').all(),
     epoch:db.prepare('SELECT value FROM metadata WHERE key=?').get(RESTORE_EPOCH_KEY)?.value??null,
-    budget:budgetFacts(db)};
+    budget:budgetFacts(db,{rebuild})};
 }
 function mergeSecurityFacts(db,security){
   if(security.blind){
@@ -766,14 +807,22 @@ export async function storageAdoptQuarantine(id,file=statePath(),{confirm=false,
       guardRestore('UNREADABLE_SOURCE','Unreadable or irregular restore artifacts may hold newer consumed budget: '+
         skipped.map(x=>x.path+' ('+x.reason+')').join(', ')+'; inspect them or repeat with --force-data-loss');
     const db=connect(quarantine);
+    let ledgerRebuilt=false;
     try{
       assertHealthy(db);
       const mission=load(db);
       if(!mission)guardRestore('EMPTY_QUARANTINE','Quarantine contains no active mission');
+      // Validate the chosen copy's own ledger before publishing it: a corrupt
+      // ledger would make every later restore fail with INVALID_LEDGER.
+      // Under --force-data-loss it is rebuilt from the copy's units.
+      const own=budgetFacts(db,{rebuild:forceDataLoss});
       const detail={quarantineId:id,source:'OPERATOR_EXPLICIT_CONFIRMATION',
-        securitySources:securitySources.map(x=>x.path),skippedSources:skipped,blindFence:true};
+        securitySources:securitySources.map(x=>x.path),skippedSources:skipped,
+        ledgerRebuilt:own.rebuilt,blindFence:true};
+      ledgerRebuilt=own.rebuilt;
       db.exec('BEGIN IMMEDIATE');
       try{
+        mergeBudgetFacts(db,{revision:null,ledger:Object.create(null)},{ownLedger:own.ledger});
         // Merge monotone revocations, consumed nonces and consumed work budget
         // from every readable quarantine and aborted DB, then revoke all grants because a lost
         // live DB cannot prove its absent authorization history.
@@ -805,6 +854,7 @@ export async function storageAdoptQuarantine(id,file=statePath(),{confirm=false,
     const d2=await open(dirname(path),'r');
     try{await d2.sync();}finally{await d2.close();}
     return {adopted:true,quarantineId:id,databasePath:path,skippedSources:skipped,
+      ledgerRebuilt,
       note:'Explicit quarantine adoption; audit event persisted before publication'};
   });
 }
@@ -844,6 +894,8 @@ async function restoreBackupUnlocked(source,file=statePath(),
   const sourceLive=await previousLiveDatabase(path);
   const temp=path+'.restoring.'+randomUUID();
   const quarantine=path+'.quarantine.'+randomUUID();
+  // What this restore could not prove, returned so the operator sees it.
+  const report={blind:false,ledgerRebuilt:false,skippedSources:[]};
   try{
     const sourceDb=new DatabaseSync(src,{readOnly:true});
     try{
@@ -866,7 +918,10 @@ async function restoreBackupUnlocked(source,file=statePath(),
       // A blind restore cannot read the live history. Merge what readable
       // aborted copies still prove; consumption only the lost DB knew is the
       // data loss --force-data-loss accepts (documented in sqlite-storage.md).
-      const siblings=security.blind?(await otherQuarantineSecurity(path,null)).sources:[];
+      const scan=security.blind?await otherQuarantineSecurity(path,null):{sources:[],skipped:[]};
+      const siblings=scan.sources;
+      Object.assign(report,{blind:!!security.blind,ledgerRebuilt:!!security.budget?.rebuilt,
+        skippedSources:scan.skipped});
       candidate.exec('BEGIN IMMEDIATE');
       try{
         mergeSecurityFacts(candidate,security);
@@ -882,7 +937,7 @@ async function restoreBackupUnlocked(source,file=statePath(),
       const result=await beginRestoreMoves({path,temp,quarantine,
         checkpoint:checkpointExclusive,allowUnreadable:forceDataLoss,
         afterQuarantine,afterRename,afterJournalReady});
-      return {...result,quarantinePath:result.quarantinePath??(
+      return {...result,...report,quarantinePath:result.quarantinePath??(
         sourceLive.quarantine?sourceLive.path:null)};
     }catch(error){
       // Ordinary thrown errors roll back through the journal. SIGKILL leaves

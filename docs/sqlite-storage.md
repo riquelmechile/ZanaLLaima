@@ -94,7 +94,7 @@ Los tokens y generaciones de intento protegen de dobles completados. El heartbea
 | `GRANT_COLLISION` | Conflicto de identidad de grant: bloquear e inspeccionar firmas y origen. |
 | `INVALID_FORCE` | Pasar booleano forceDataLoss válido y explícito. |
 | `INVALID_JOURNAL` | Diario corrupto: no borrar archivos; abort offline solo si no hubo movimientos identificables. |
-| `INVALID_LEDGER` | El ledger de presupuesto consumido o un snapshot archivado está corrupto: preservar la base e inspeccionarla; no forzar el restore. |
+| `INVALID_LEDGER` | El ledger `consumed_budget` (contadores que no son enteros ≥ 0, claves que no son un UUID de misión o un id de unidad válido) o un snapshot archivado está corrupto. Si el problema está en el **backup**, escoger otra copia. Si está en la **DB viva** o en la cuarentena a adoptar, `--force-data-loss` lo reconstruye desde las unidades activas y archivadas legibles, y el resultado lo informa con `ledgerRebuilt: true`. |
 | `INVALID_QUARANTINE` | UUID o identidad incompatible; no hacer renames manuales. |
 | `INVALID_UUID` | Elegir UUID válido exacto de storage-status. |
 | `JOURNAL_ACTIVE` | Completar o abortar diario activo, luego volver a operar. |
@@ -120,9 +120,18 @@ Los tokens y generaciones de intento protegen de dobles completados. El heartbea
 | `WAL_NOT_EMPTY` | WAL pendiente: cerrar conexiones y completar checkpoint, no separarlo de DB. |
 | `flock timeout` | Otro proceso retiene el lock: cerrar clientes y reintentar luego, no borrar el archivo de lock. |
 
-**Presupuesto consumido (R11).** Los `attempts` y la `leaseGeneration` de cada unidad son hechos monótonos, igual que los nonces: el total de starts es la suma de `attempts`, así que también lo es. Cada base guarda un ledger `consumed_budget` en `metadata`, por misión y unidad, que el restore y el `adopt` fusionan siempre con el de la DB viva y el de todas las fuentes legibles; nunca se achica. Eso cubre el cambio de misión: restaurar otra misión B y luego el backup viejo de A no devuelve los intentos de A. Sin `--force-data-loss`, el restore se rechaza con `CONSUMED_BUDGET` si el backup tiene menos consumo que el ledger para su misión o si hay trabajo RUNNING; con `--force-data-loss`, y en el `adopt`, las unidades del candidato suben a `max`. La `revision` de la misión se fusiona en **todo** restore o adopt: queda por sobre la de cada fuente, aunque no haya consumo nuevo.
+**Presupuesto consumido (R11).** Los `attempts` y la `leaseGeneration` de cada unidad son hechos monótonos, igual que los nonces: el total de starts es la suma de `attempts`, así que también lo es. Cada base guarda un ledger `consumed_budget` en `metadata`, por misión y unidad, que el restore y el `adopt` fusionan siempre con el de la DB viva y el de todas las fuentes legibles; nunca se achica. Eso cubre el cambio de misión: restaurar otra misión B y luego el backup viejo de A no devuelve los intentos de A. Sin `--force-data-loss`, el restore se rechaza con `CONSUMED_BUDGET` si el backup tiene menos consumo que el ledger para su misión o si hay trabajo RUNNING; con `--force-data-loss`, y en el `adopt`, las unidades del candidato suben a `max`. La `revision` de la misión se fusiona en todo restore o adopt: queda por sobre la de cada fuente **legible**, aunque no haya consumo nuevo.
 
-Límites: si alguna fuente hermana es ilegible, el `adopt` se rechaza con `UNREADABLE_SOURCE` salvo `--force-data-loss`. Un restore **ciego** (DB viva ausente o ilegible, solo con `--force-data-loss`) fusiona el ledger de las copias `.aborted.*` y cuarentenas legibles, pero el consumo que solo conocía la DB perdida se pierde: es parte de la pérdida que ese flag acepta, igual que la revocación total de grants.
+Límites, todos informados en el resultado del comando (`blind`, `ledgerRebuilt`, `skippedSources`):
+
+- Si alguna fuente hermana es ilegible, el `adopt` se rechaza con `UNREADABLE_SOURCE` salvo `--force-data-loss`.
+- Un restore **ciego** (DB viva ausente o ilegible, solo con `--force-data-loss`) fusiona el ledger de las copias `.aborted.*` y cuarentenas legibles y lista las ilegibles en `skippedSources`; el consumo que solo conocía la DB perdida se pierde. Lo mismo vale para el `adopt` de una cuarentena cuando la DB viva se perdió después de ella: es disaster recovery explícito (`--confirm`) y no puede conocer lo que la DB perdida consumió. Es la pérdida aceptada, igual que la revocación total de grants.
+- Una unidad `OUTCOME_UNKNOWN` conserva su `leaseGeneration` exacta, para que su reconciliación firmada siga calzando; solo suben sus `attempts`.
+- Si la fusión de historias divergentes deja el total de starts sobre `maxWorkStarts`, la misión ya no puede empezar trabajo nuevo, pero se puede cancelar, expirar y archivar: solo se rechaza una escritura que **sube** el total sobre el límite.
+- El ledger es una fila JSON en `metadata` que crece con cada misión archivada (unos 0,8 KB por misión de 20 unidades; un restore con 10.000 misiones archivadas tarda menos de 1 s).
+
+**Modelo de amenaza.** El restore y el `adopt` son comandos offline del operador sobre el servidor. El backup es un artefacto del operador, no una entrada de un tercero: quien puede entregar un backup arbitrario también puede editar la base SQLite directamente, incluidos los límites de presupuesto de la misión. Estas reglas protegen contra **errores** de recuperación (devolver intentos consumidos sin darse cuenta) y contra datos corruptos, y validan el ledger para que un archivo dañado nunca anule el máximo. No autentican backups. En el modo remoto (MCP para ChatGPT) ningún host tiene acceso a estos comandos.
+
 
 Comandos de operador, con todos los clientes cerrados:
 

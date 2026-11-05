@@ -69,6 +69,22 @@ const nestedRoot=(worktree,subpath)=>{
     deny('Git submodule is not an exact worktree root');
   return nested;
 };
+// A tracked file must be reached through real directories, not aliases.
+// Git's index names paths, not their symlink-resolved equivalents.
+const trackedParentsAreRealDirectories=(worktree,path)=>{
+  let cursor=worktree;
+  for(const component of path.split('/').slice(0,-1)){
+    cursor=resolve(cursor,component);
+    try{
+      const stat=lstatSync(cursor);
+      if(!stat.isDirectory()||stat.isSymbolicLink())return false;
+    }catch(error){
+      if(error?.code==='ENOENT'||error?.code==='ENOTDIR')return false;
+      deny('Unable to inspect tracked path ancestor');
+    }
+  }
+  return true;
+};
 const inspect=(worktree,depth=0)=>{
   if(depth>16)deny('Git submodule nesting exceeds inspection limit');
   // Only Git plumbing commands that do not consult content filters or run
@@ -82,6 +98,9 @@ const inspect=(worktree,depth=0)=>{
   for(const [path,entry] of index){
     const committed=tree.get(path);
     if(!committed||entry.mode!==committed.mode||entry.sha!==committed.sha)dirty=true;
+    // A symlink at any intermediate component changes the tracked tree
+    // even if its target is another directory inside this repository.
+    if(!trackedParentsAreRealDirectories(worktree,path)){dirty=true;continue;}
     if(entry.mode==='160000'){
       const nested=nestedRoot(worktree,path);
       if(call(nested,['rev-parse','--verify','HEAD^{commit}']).trim()!==entry.sha)

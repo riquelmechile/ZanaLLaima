@@ -472,7 +472,10 @@ export async function restoreBackup(source,file=statePath(),
     // Run the same ordered, transactional migrations as ordinary connect().
     const migrating=connect(temp);
     migrating.close();
-    const candidate=connect(temp,true);
+    // A backup may be older than a WRITE revocation or a consumed operator
+    // nonce. Merge those security facts before the atomic replacement.
+    // forceDataLoss never authorizes a rollback of signed permissions.
+    const candidate=connect(temp);
     try{
       assertHealthy(candidate);
       const m=load(candidate);
@@ -480,14 +483,12 @@ export async function restoreBackup(source,file=statePath(),
       if(m.units.some(x=>x.status==='RUNNING')||
          m.review?.lenses?.some(x=>x.state==='RUNNING'))
         fail('Backup contains running work; reconcile it before restoring');
+      let liveUnreadable=false;
+      let liveActions=[],liveRevoked=[];
       if(await exists(path)){
         let live;
-        try{live=connect(path,true);}
-        catch(error){
-          if(!forceDataLoss)
-            fail('Live database cannot be inspected; explicit --force-data-loss required');
-        }
-        if(live)try{
+        try{
+          live=connect(path,true);
           assertHealthy(live);
           const old=load(live);
           if(!forceDataLoss && old?.units.some(x=>
@@ -500,8 +501,55 @@ export async function restoreBackup(source,file=statePath(),
                 fail('Restoring backup would discard newer durable receipt without --force-data-loss');
             }
           }
-        }finally{live.close();}
+          liveActions=live.prepare('SELECT nonce,mission_id,kind,created_at FROM operator_actions').all();
+          liveRevoked=live.prepare('SELECT grant_id,mission_id,payload,signature,fingerprint,revoked,created_at FROM operator_grants WHERE revoked=1').all();
+        }catch(error){
+          // A failed security read cannot be turned into a permissive restore.
+          // With explicit data-loss consent, revoke EVERY restored grant.
+          if(!forceDataLoss){
+            if(/OUTCOME_UNKNOWN|newer durable receipt/.test(error.message))throw error;
+            fail('Live database cannot be inspected; explicit --force-data-loss required');
+          }
+          liveUnreadable=true;
+        }finally{if(live)live.close();}
       }
+      candidate.exec('BEGIN IMMEDIATE');
+      try{
+        if(liveUnreadable){
+          candidate.exec('UPDATE operator_grants SET revoked=1');
+        }else{
+          const findNonce=candidate.prepare(
+            'SELECT nonce,mission_id,kind,created_at FROM operator_actions WHERE nonce=?');
+          const putNonce=candidate.prepare(
+            'INSERT INTO operator_actions(nonce,mission_id,kind,created_at) VALUES(?,?,?,?)');
+          for(const row of liveActions){
+            const old=findNonce.get(row.nonce);
+            if(old){
+              if(old.mission_id!==row.mission_id||old.kind!==row.kind||
+                 old.created_at!==row.created_at)
+                fail('Operator nonce collision while restoring; refusing rollback');
+            }else putNonce.run(row.nonce,row.mission_id,row.kind,row.created_at);
+          }
+          const findGrant=candidate.prepare(
+            'SELECT grant_id,mission_id,payload,signature,fingerprint,created_at FROM operator_grants WHERE grant_id=?');
+          const putRevoked=candidate.prepare(
+            'INSERT INTO operator_grants(grant_id,mission_id,payload,signature,fingerprint,revoked,created_at) VALUES(?,?,?,?,?,1,?)');
+          const revoke=candidate.prepare(
+            'UPDATE operator_grants SET revoked=1 WHERE grant_id=?');
+          for(const row of liveRevoked){
+            const old=findGrant.get(row.grant_id);
+            if(old){
+              if(old.mission_id!==row.mission_id||old.payload!==row.payload||
+                 old.signature!==row.signature||old.fingerprint!==row.fingerprint||
+                 old.created_at!==row.created_at)
+                fail('Operator grant identity collision while restoring');
+              revoke.run(row.grant_id);
+            }else putRevoked.run(row.grant_id,row.mission_id,row.payload,
+              row.signature,row.fingerprint,row.created_at);
+          }
+        }
+        candidate.exec('COMMIT');
+      }catch(error){rollbackIfOpen(candidate);throw error;}
     }finally{candidate.close();}
     const lock=await open(marker,'wx',0o600);
     await lock.close();

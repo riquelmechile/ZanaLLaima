@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
-import {copyFileSync,mkdirSync,mkdtempSync,rmSync,writeFileSync} from 'node:fs';
+import {chmodSync,copyFileSync,mkdirSync,mkdtempSync,rmSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {observeGit} from '../src/git-evidence.mjs';
@@ -33,6 +33,7 @@ test('R7 CRITICAL 1: subárbol sustituido a igual SHA no debe parecer limpio',()
     const newTree=git(f.repo,'write-tree');
     const newSubtree=git(f.repo,'rev-parse',newTree+':src');
     assert.notEqual(oldTree,newSubtree);
+    chmodSync(objectFile(f.repo,oldTree),0o644); // Git 2.56 deja objetos loose 0444
     copyFileSync(objectFile(f.repo,newSubtree),objectFile(f.repo,oldTree));
     shouldReject(f.repo);
   }finally{f.close();}
@@ -42,6 +43,7 @@ test('R7 CRITICAL 1: blob corrupto en .git/objects se rechaza',()=>{
     const oldBlob=git(f.repo,'rev-parse','HEAD:src/app.mjs');
     writeFileSync(join(f.repo,'other.txt'),'different blob bytes\n');
     const newBlob=git(f.repo,'hash-object','-w','other.txt');
+    chmodSync(objectFile(f.repo,oldBlob),0o644);
     copyFileSync(objectFile(f.repo,newBlob),objectFile(f.repo,oldBlob));
     rmSync(join(f.repo,'other.txt'));
     shouldReject(f.repo);

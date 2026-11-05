@@ -524,6 +524,9 @@ const ledgerKey=k=>typeof k==='string'&&k.length>=1&&k.length<=200&&k!=='__proto
 // Mission-wide fence: its consumption is unknown (a corrupt archived
 // snapshot was set aside). Never a unit id: createMission ids are [a-z]...
 const FENCE_UNIT='*';
+// Consumed review rounds (reviewCount) of a mission, kept in the same ledger
+// under a key no unit id can take (createMission ids start with [a-z]).
+const REVIEW_ROUNDS_KEY='#review-rounds';
 const invalidLedger=()=>guardRestore('INVALID_LEDGER','Consumed-budget ledger is malformed; preserve the database and inspect it');
 const counter=v=>{
   if(v===undefined)return 0;
@@ -570,11 +573,15 @@ function budgetFacts(db,{rebuild=false}={}){
     ledger=Object.create(null);rebuilt=true;
   }
   const mission=load(db);
-  const consume=m=>{for(const u of m?.units??[])
-    raise(ledger,m.id,u.id,u.attempts||0,u.run?.leaseGeneration||0);};
+  const consume=m=>{
+    for(const u of m?.units??[])raise(ledger,m.id,u.id,u.attempts||0,u.run?.leaseGeneration||0);
+    if(m?.reviewCount!==undefined&&m.reviewCount!==0)raise(ledger,m.id,REVIEW_ROUNDS_KEY,m.reviewCount,0);
+  };
   // Damaged counters on the active mission: under rebuild keep every unit
   // that is still valid and drop only the damaged ones, so recovery under
   // --force-data-loss is always possible.
+  if(mission&&Number.isSafeInteger(mission.reviewCount)&&mission.reviewCount>0)
+    raise(ledger,mission.id,REVIEW_ROUNDS_KEY,mission.reviewCount,0);
   if(mission)for(const u of mission.units){
     try{raise(ledger,mission.id,u.id,u.attempts||0,u.run?.leaseGeneration||0);}
     catch(error){if(!rebuild||error.code!=='INVALID_LEDGER')throw error;rebuilt=true;damagedUnits.push(u.id);}
@@ -609,6 +616,8 @@ function refuseConsumedBudget(backupMission,liveBudget){
   if(!consumed)return;
   if(Object.hasOwn(consumed,FENCE_UNIT))
     guardRestore('CONSUMED_BUDGET','Consumption of mission '+backupMission.id+' is unknown (a corrupt archived snapshot was set aside); restore refused. With --force-data-loss the mission is restored exhausted');
+  if(Object.hasOwn(consumed,REVIEW_ROUNDS_KEY)&&consumed[REVIEW_ROUNDS_KEY].attempts>(backupMission.reviewCount||0))
+    guardRestore('CONSUMED_BUDGET','Mission '+backupMission.id+' consumed review rounds not present in the backup; restore refused. With --force-data-loss they are kept as max(live, backup)');
   for(const u of backupMission.units){
     const used=Object.hasOwn(consumed,u.id)?consumed[u.id]:null;
     if(used&&(used.attempts>(u.attempts||0)||used.leaseGeneration>(u.run?.leaseGeneration||0)))
@@ -633,7 +642,12 @@ function mergeBudgetFacts(db,facts,{ownLedger}={}){
     // Unknown consumption: exhaust every unit so nothing can start again.
     const cap=unitAttemptCap(parse(db.prepare('SELECT budget FROM active_mission WHERE slot=1').get()?.budget??'null'));
     db.prepare('UPDATE units SET attempts=MAX(attempts,?) WHERE mission_id=?').run(cap,m.id);
+    const rounds=limits=>Number.isSafeInteger(limits?.maxReviewRounds)?limits.maxReviewRounds:DEFAULT_BUDGET.maxReviewRounds;
+    db.prepare('UPDATE active_mission SET review_count=MAX(review_count,?) WHERE slot=1')
+      .run(rounds(parse(db.prepare('SELECT budget FROM active_mission WHERE slot=1').get()?.budget??'null')));
   }
+  if(Object.hasOwn(own,REVIEW_ROUNDS_KEY))
+    db.prepare('UPDATE active_mission SET review_count=MAX(review_count,?) WHERE slot=1').run(own[REVIEW_ROUNDS_KEY].attempts);
   const read=db.prepare('SELECT status,attempts,run FROM units WHERE mission_id=? AND id=?');
   const write=db.prepare('UPDATE units SET attempts=?,run=? WHERE mission_id=? AND id=?');
   for(const [unitId,used] of Object.entries(own)){

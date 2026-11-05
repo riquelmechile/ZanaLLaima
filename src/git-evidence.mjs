@@ -13,6 +13,7 @@ const SAFE_GIT_ARGS=[
   '-c','core.sshCommand=false',
   '-c','diff.external=false',
   '-c','core.pager=cat',
+  '-c','core.excludesFile=/dev/null',
 ];
 const SHA=/^[a-f0-9]{40}$/;
 const deny=reason=>{throw new Error('Git candidate rejected: '+reason);};
@@ -146,8 +147,14 @@ const inspect=(worktree,depth=0)=>{
       :call(worktree,['hash-object','--no-filters','--',path]).trim();
     if(contentSha!==entry.sha)dirty=true;
   }
-  if(records(call(worktree,['ls-files','--others','--exclude-standard','-z'])).length)
-    dirty=true;
+  // Only tracked .gitignore rules are eligible: a nested, untracked
+  // .gitignore must itself invalidate the candidate even if it ignores '*'.
+  const allUntracked=records(call(worktree,['ls-files','--others','-z']));
+  if(allUntracked.some(path=>path.split('/').at(-1)==='.gitignore'))dirty=true;
+  // --exclude-standard would import .git/info/exclude and local/global
+  // core.excludesFile; those are controlled outside the candidate commit.
+  if(records(call(worktree,['ls-files','--others',
+    '--exclude-per-directory=.gitignore','-z'])).length)dirty=true;
   return dirty;
 };
 

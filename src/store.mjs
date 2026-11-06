@@ -154,16 +154,20 @@ function connect(path, readonly = false) {
 }
 
 // FTS5 index of project_memory (external content, kept by triggers). If this
-// Node's SQLite lacks FTS5, metadata fts='0' and search falls back to LIKE.
+// Node's SQLite lacks FTS5 or the rebuild fails, metadata fts='0' and search
+// falls back to LIKE. The index is rebuilt when the table or a trigger was
+// missing, or when it does not index every row (table recreated empty).
 export function setupMemoryFts(db){
   const existed=Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE name='project_memory_fts'").get());
+  const triggers=db.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE type='trigger' AND name IN ('project_memory_ai','project_memory_ad','project_memory_au')").get().n;
   let fts='1';
   try{
     db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS project_memory_fts USING fts5(topic,body,content='project_memory',content_rowid='seq')");
     db.exec('CREATE TRIGGER IF NOT EXISTS project_memory_ai AFTER INSERT ON project_memory BEGIN INSERT INTO project_memory_fts(rowid,topic,body) VALUES(new.seq,new.topic,new.body); END');
     db.exec("CREATE TRIGGER IF NOT EXISTS project_memory_ad AFTER DELETE ON project_memory BEGIN INSERT INTO project_memory_fts(project_memory_fts,rowid,topic,body) VALUES('delete',old.seq,old.topic,old.body); END");
     db.exec("CREATE TRIGGER IF NOT EXISTS project_memory_au AFTER UPDATE OF topic,body ON project_memory BEGIN INSERT INTO project_memory_fts(project_memory_fts,rowid,topic,body) VALUES('delete',old.seq,old.topic,old.body); INSERT INTO project_memory_fts(rowid,topic,body) VALUES(new.seq,new.topic,new.body); END");
-    if(!existed)db.exec("INSERT INTO project_memory_fts(project_memory_fts) VALUES('rebuild')");
+    const unindexed=()=>db.prepare('SELECT (SELECT COUNT(*) FROM project_memory_fts_docsize)!=(SELECT COUNT(*) FROM project_memory) d').get().d;
+    if(!existed||triggers<3||unindexed())db.exec("INSERT INTO project_memory_fts(project_memory_fts) VALUES('rebuild')");
   }catch{fts='0';}
   db.prepare("INSERT INTO metadata(key,value) VALUES('fts',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(fts);
 }

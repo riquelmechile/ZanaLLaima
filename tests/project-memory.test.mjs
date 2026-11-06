@@ -7,7 +7,7 @@ import {memoryContext,saveEntry,saveSummary,POINTER_PATH} from '../src/project-m
 const spec={objective:'Misión de memoria',units:[{id:'a',effect:'READ',instruction:'Leer el repo'}]};
 const target={repo:'o/r',base:'main'};
 const q=(sql,...p)=>remoteRead(db=>db.prepare(sql).all(...p).map(r=>({...r})));
-const pointer=projectId=>JSON.stringify({zanallaima:1,projectId,note:'x'});
+const pointer=(projectId,githubRepoId=4242)=>JSON.stringify({zanallaima:1,projectId,githubRepoId,note:'x'});
 const summary=(extra={})=>({done:'Se hizo el trabajo de la misión completo',decisions:[],conventions:[],pending:[],keyFiles:[],...extra});
 // One mission: init, then cancel and archive so the next one can start.
 async function initOnly(f,s){
@@ -34,7 +34,7 @@ test('puntero: los seis casos de resolución del proyecto',async()=>{
     // Ausente sin proyecto: se crea. Ausente con proyecto: se usa.
     const a=await initOnly(f,s);
     assert.match(a.projectId,/^zp_[0-9a-f]{16}$/);
-    assert.deepEqual(a.pointer,{status:'POINTER_MISSING',path:POINTER_PATH,content:{zanallaima:1,projectId:a.projectId,
+    assert.deepEqual(a.pointer,{status:'POINTER_MISSING',path:POINTER_PATH,content:{zanallaima:1,projectId:a.projectId,githubRepoId:4242,
       note:'Antes de trabajar en este repositorio, pide zana_memory_context con este projectId a ZanaLLaima.'}});
     assert.deepEqual(a.context,{projectId:a.projectId,entries:[],truncated:false});
     const b=await initOnly(f,s);
@@ -47,13 +47,27 @@ test('puntero: los seis casos de resolución del proyecto',async()=>{
     const d=await initOnly(f,s);
     assert.deepEqual([d.projectId,d.pointer.status],[a.projectId,'POINTER_STALE']);
     // Copia o fork (otro id de repo con el puntero de a): proyecto nuevo, y luego el mismo.
-    f.api.state.repoId=5000;f.api.state.files[POINTER_PATH]=pointer(a.projectId);
+    f.api.state.repoId=5000;f.api.state.files[POINTER_PATH]=pointer(a.projectId,4242);
     const e=await initOnly(f,s);
     assert.equal(e.pointer.status,'POINTER_FOREIGN');
     assert.notEqual(e.projectId,a.projectId);
     assert.equal((await initOnly(f,s)).projectId,e.projectId);
     // Válido, sin fila y sin proyecto del repo: se adopta el id del puntero.
-    f.api.state.repoId=6000;f.api.state.files[POINTER_PATH]=pointer('zp_'+'b'.repeat(16));
+    // Fork registrado ANTES que el original: el puntero dice otro repo, no se adopta.
+    f.api.state.repoId=7000;f.api.state.files[POINTER_PATH]=pointer('zp_'+'c'.repeat(16),8000);
+    const fork=await initOnly(f,s);
+    assert.equal(fork.pointer.status,'POINTER_FOREIGN');
+    assert.notEqual(fork.projectId,'zp_'+'c'.repeat(16));
+    // Sin githubRepoId tampoco se adopta: id nuevo y el puntero se reescribe.
+    f.api.state.repoId=7100;f.api.state.files[POINTER_PATH]=JSON.stringify({zanallaima:1,projectId:'zp_'+'d'.repeat(16)});
+    const bare=await initOnly(f,s);
+    assert.equal(bare.pointer.status,'POINTER_STALE');
+    assert.notEqual(bare.projectId,'zp_'+'d'.repeat(16));
+    // El original llega después con su propio puntero: adopta el id que le corresponde.
+    f.api.state.repoId=8000;f.api.state.files[POINTER_PATH]=pointer('zp_'+'c'.repeat(16),8000);
+    const orig=await initOnly(f,s);
+    assert.deepEqual([orig.projectId,orig.pointer.status],['zp_'+'c'.repeat(16),'OK']);
+    f.api.state.repoId=6000;f.api.state.files[POINTER_PATH]=pointer('zp_'+'b'.repeat(16),6000);
     const g=await initOnly(f,s);
     assert.deepEqual([g.projectId,g.pointer.status],['zp_'+'b'.repeat(16),'OK']);
     // Ilegible: cuenta como ausente y se informa.
@@ -64,7 +78,7 @@ test('puntero: los seis casos de resolución del proyecto',async()=>{
     f.api.state.files[POINTER_PATH]=JSON.stringify({zanallaima:2,projectId:g.projectId});
     assert.match((await initOnly(f,s)).pointer.invalid,/not a ZanaLLaima pointer/);
     const rows=await q('SELECT project_id,github_repo_id FROM projects ORDER BY github_repo_id');
-    assert.deepEqual(rows.map(r=>r.github_repo_id),[4242,5000,6000]);
+    assert.deepEqual(rows.map(r=>r.github_repo_id),[4242,5000,6000,7000,7100,8000]);
     f.api.state.repoId=null;
     const noId=await f.call('zana_mission_init',{spec,github:target},s);
     assert.match(noId.memory.error,/REPO_ID_UNAVAILABLE/);
@@ -87,7 +101,7 @@ test('close: resumen obligatorio, entradas redactadas, supersesión y contexto e
     assert.match((await f.call('zana_mission_close',{},s)).error,/SUMMARY_REQUIRED: .*summary/);
     assert.match((await f.call('zana_mission_close',{summary:{...summary(),done:'corto'}},s)).error,/SUMMARY_REQUIRED: .*summary\.done Too small/);
     const sum=summary({decisions:[{topic:'estilo',body:'Sin punto y coma; token '+AUTHOR_TOKEN}],
-      conventions:[{topic:'tests',body:'node --test por archivo'}],pending:[{topic:'docs',body:'Falta la guía'}],keyFiles:['src/a.mjs']});
+      conventions:[{topic:'tests',body:'node --test por archivo'}],pending:[{topic:'docs',body:'Falta la guía; claves sk-proj-'+'Q'.repeat(30)+' AKIA'+'B'.repeat(16)+' xoxb-1234567890-abc'}],keyFiles:['src/a.mjs']});
     const closed=(await f.call('zana_mission_close',{summary:sum},s));
     assert.deepEqual([closed.status,closed.memory],['CLOSED',{projectId:first.init.memory.projectId,saved:4,superseded:0}]);
     const rows=await q('SELECT kind,topic,body,mission_id,superseded_by FROM project_memory ORDER BY seq');
@@ -95,6 +109,8 @@ test('close: resumen obligatorio, entradas redactadas, supersesión y contexto e
     assert.equal(rows[0].topic,first.init.id);
     assert.match(rows[0].body,/Archivos clave: src\/a\.mjs/);
     assert.equal(rows[1].body,'Sin punto y coma; token [redacted]');
+    // Credential shapes not in the server's environment are dropped too.
+    assert.equal(rows[3].body,'Falta la guía; claves [redacted] [redacted] [redacted]');
     await f.call('zana_mission_archive',{},s);
     // La misión siguiente trae el contexto y una decisión con el mismo topic supersede la anterior.
     const second=await closeWith(f,s,summary({decisions:[{topic:'estilo',body:'Con punto y coma'}]}));

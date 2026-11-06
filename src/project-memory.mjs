@@ -11,7 +11,8 @@ export const POINTER_PATH='.zanallaima.json';
 export const MEMORY_KINDS=Object.freeze(['summary','decision','convention','issue','pending']);
 const PROJECT_ID=/^zp_[0-9a-f]{16}$/;
 const NOTE='Antes de trabajar en este repositorio, pide zana_memory_context con este projectId a ZanaLLaima.';
-export const pointerContent=projectId=>({zanallaima:1,projectId,note:NOTE});
+// githubRepoId ties the pointer to its repo: a copy in another repo is never adopted.
+export const pointerContent=(projectId,githubRepoId)=>({zanallaima:1,projectId,githubRepoId,note:NOTE});
 
 // Red, fuera de toda transacción: id del repo y puntero de la rama base. Un
 // puntero ilegible cuenta como ausente (se reescribe) y se informa en `invalid`.
@@ -46,13 +47,15 @@ export function resolveProject(db,{repoId,repo,pointer,invalid=null,missionId=nu
     const row=db.prepare('SELECT * FROM projects WHERE project_id=?').get(pointer.projectId);
     // Copia o fork: el id es de otro repo; este repo usa (o recibe) el suyo.
     if(row&&row.github_repo_id!==repoId){projectId=fresh();status='POINTER_FOREIGN';}
-    else if(row){projectId=row.project_id;status='OK';}
+    else if(row){projectId=row.project_id;status=pointer.githubRepoId===repoId?'OK':'POINTER_STALE';}
     else if(byRepo){projectId=byRepo.project_id;status='POINTER_STALE';}
-    // DB restaurada u otro servidor: se adopta el id del puntero.
-    else{projectId=create(pointer.projectId);status='OK';}
+    // DB restaurada u otro servidor: se adopta el id solo si el puntero es de este
+    // mismo repo; un puntero copiado (o sin githubRepoId) recibe un id nuevo.
+    else if(pointer.githubRepoId===repoId){projectId=create(pointer.projectId);status='OK';}
+    else{projectId=fresh();status=Number.isSafeInteger(pointer.githubRepoId)?'POINTER_FOREIGN':'POINTER_STALE';}
   }
   db.prepare('UPDATE projects SET repo=? WHERE project_id=? AND repo!=?').run(repo,projectId,repo);
-  return {projectId,pointer:{status,path:POINTER_PATH,content:pointerContent(projectId),...(invalid?{invalid}:{})}};
+  return {projectId,pointer:{status,path:POINTER_PATH,content:pointerContent(projectId,repoId),...(invalid?{invalid}:{})}};
 }
 
 export const missionProject=(db,missionId)=>
@@ -66,9 +69,9 @@ const view=r=>({seq:r.seq,kind:r.kind,topic:r.topic,body:r.body,missionId:r.miss
 export function memoryContext(db,projectId,{maxBytes=4096}={}){
   const live='SELECT * FROM project_memory WHERE project_id=? AND superseded_by IS NULL AND ';
   const rows=[
-    ...db.prepare(live+"kind IN ('convention','decision') ORDER BY seq DESC").all(projectId),
-    ...db.prepare(live+"kind='pending' AND resolved_at IS NULL ORDER BY seq DESC").all(projectId),
-    ...db.prepare(live+"kind='issue' ORDER BY seq DESC").all(projectId),
+    ...db.prepare(live+"kind IN ('convention','decision') ORDER BY seq DESC LIMIT 200").all(projectId),
+    ...db.prepare(live+"kind='pending' AND resolved_at IS NULL ORDER BY seq DESC LIMIT 200").all(projectId),
+    ...db.prepare(live+"kind='issue' ORDER BY seq DESC LIMIT 200").all(projectId),
     ...db.prepare(live+"kind='summary' ORDER BY seq DESC LIMIT 3").all(projectId)];
   const entries=[];
   let used=Buffer.byteLength(JSON.stringify({projectId,entries:[],truncated:false})),truncated=false;
@@ -81,11 +84,17 @@ export function memoryContext(db,projectId,{maxBytes=4096}={}){
   return {projectId,entries,truncated};
 }
 
+// Memory is durable, so it also drops common credential shapes that are not in
+// the server's environment (OpenAI/Anthropic-style keys, AWS, Slack, PEM keys).
+const CREDENTIALS=[/\bsk-[A-Za-z0-9_-]{20,}/g,/\bAKIA[0-9A-Z]{16}\b/g,/\bxox[abprs]-[A-Za-z0-9-]{10,}/g,
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g];
+const scrub=text=>CREDENTIALS.reduce((t,re)=>t.replace(re,'[redacted]'),text);
+
 // Una entrada redactada; la viva anterior con el mismo (proyecto, kind, topic)
 // queda superseded_by la nueva.
 export function saveEntry(db,{projectId,kind,topic,body,missionId=null,sha=null,sessionId=null,secrets=[]}){
   if(!MEMORY_KINDS.includes(kind))throw new Error('INVALID_MEMORY_KIND: '+kind);
-  const t=redactText(topic,secrets).slice(0,80),b=redactText(body,secrets).slice(0,1000);
+  const t=scrub(redactText(topic,secrets)).slice(0,80),b=scrub(redactText(body,secrets)).slice(0,1000);
   const old=db.prepare('SELECT seq FROM project_memory WHERE project_id=? AND kind=? AND topic=? AND superseded_by IS NULL').all(projectId,kind,t);
   const seq=Number(db.prepare('INSERT INTO project_memory(project_id,kind,topic,body,mission_id,sha,session_id,created_at) VALUES(?,?,?,?,?,?,?,?)')
     .run(projectId,kind,t,b,missionId,sha,sessionId,nowIso()).lastInsertRowid);

@@ -21,7 +21,25 @@ export function evaluateRuns(runs,sha,required=[]){
     pending.length||missing.length||!relevant.length?'PENDING':
     relevant.some(r=>r.conclusion==='success')?'SUCCESS':'FAILURE';
   return {state,sha,missing,
-    runs:relevant.map(r=>({id:r.id,name:r.name,status:r.status,conclusion:r.conclusion??null,url:r.html_url??null}))};
+    runs:relevant.map(r=>({id:r.id,name:r.name,status:r.status,conclusion:r.conclusion??null,url:r.html_url??null,
+      ...(r.details_url?{detailsUrl:r.details_url}:{})}))};
+}
+
+// A check run id is not the Actions job id. The job comes from the check
+// run's details_url/html_url (.../actions/runs/R/job/J) or, when only the run
+// is linked, from that run's job list by exact name.
+const JOB_URL=/\/actions\/runs\/(\d+)\/jobs?\/(\d+)(?:[/?#]|$)/;
+const RUN_URL=/\/actions\/runs\/(\d+)(?:[/?#]|$)/;
+export async function actionsJobId(github,repo,run){
+  const urls=[run.detailsUrl,run.url].map(u=>String(u??''));
+  for(const u of urls){const m=JOB_URL.exec(u);if(m)return Number(m[2]);}
+  for(const u of urls){
+    const m=RUN_URL.exec(u);
+    if(!m)continue;
+    const jobs=(await github.runJobs(repo,Number(m[1]))).filter(j=>j?.name===run.name);
+    if(jobs.length===1&&Number.isSafeInteger(Number(jobs[0].id)))return Number(jobs[0].id);
+  }
+  return null;
 }
 
 export function createChecks({github,config,remoteWrite,remoteRead,missionContext,recordActivity}){
@@ -66,8 +84,10 @@ export function createChecks({github,config,remoteWrite,remoteRead,missionContex
         const logs=createDeadline(Math.min(LOG_BUDGET_MS,deadline.remaining()));
         for(const run of result.runs.filter(r=>r.status==='completed'&&!OK.has(r.conclusion)).slice(0,MAX_FAILED_LOGS)){
           let logTail;
-          try{logTail=await logs.step(()=>github.jobLogTail(ctx.repo,run.id,60),'log:'+run.name,
-            {fallback:['(log omitted: log time budget exhausted)']});}
+          try{logTail=await logs.step(async()=>{
+            const jobId=await actionsJobId(github,ctx.repo,run);
+            return jobId===null?['(log unavailable: no GitHub Actions job found for this check run)']:github.jobLogTail(ctx.repo,jobId,60);
+          },'log:'+run.name,{fallback:['(log omitted: log time budget exhausted)']});}
           catch(error){logTail=['(log unavailable: '+String(error?.message??error).slice(0,200)+')'];}
           failures.push({name:run.name,url:run.url,logTail});
         }

@@ -89,7 +89,8 @@ export function pruneRemote(db,now=Date.now()){
   db.prepare('DELETE FROM remote_activity WHERE created_at<? AND mission_id!=?').run(before(RETENTION_DAYS.activity),active);
   db.prepare('DELETE FROM remote_checks WHERE created_at<?').run(before(RETENTION_DAYS.checks));
   const terminal="state IN ('FINALIZED','STALE_SHA','EXPIRED','ABANDONED')";
-  const old=db.prepare('SELECT ticket_id FROM review_tickets WHERE '+terminal+' AND updated_at<?').all(before(RETENTION_DAYS.tickets));
+  // Never the active mission's tickets: they carry its same-SHA blockers.
+  const old=db.prepare('SELECT ticket_id FROM review_tickets WHERE '+terminal+' AND updated_at<? AND mission_id!=?').all(before(RETENTION_DAYS.tickets),active);
   for(const {ticket_id} of old){
     db.prepare('DELETE FROM review_diff_pages WHERE ticket_id=?').run(ticket_id);
     // Lens receipts go with the ticket unless the finalized review is archived.

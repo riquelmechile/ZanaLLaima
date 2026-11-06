@@ -140,6 +140,10 @@ export class GitHubApi{
     const data=await this.request('GET',repoPath(repo)+'/actions/runs?per_page=50&head_sha='+sha(commit));
     return Array.isArray(data?.workflow_runs)?data.workflow_runs:[];
   }
+  async runJobs(repo,runId){
+    const data=await this.request('GET',repoPath(repo)+'/actions/runs/'+positive(runId)+'/jobs?per_page=100');
+    return Array.isArray(data?.jobs)?data.jobs:[];
+  }
   async dispatchWorkflow(repo,workflow,ref){
     if(!/^[A-Za-z0-9._-]{1,100}$/.test(workflow)||!validRefName(ref))
       throw new GitHubApiError(400,'Invalid workflow or ref');

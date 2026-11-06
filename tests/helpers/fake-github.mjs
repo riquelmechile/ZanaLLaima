@@ -16,7 +16,7 @@ async function bodyOf(req){const parts=[];for await(const c of req)parts.push(c)
 
 export async function fakeGitHubApi(){
   const state={repo:'o/r',defaultBranch:'main',branches:{main:sha('0')},pulls:[],checkRuns:{},statuses:{},
-    reviews:{},commits:{},workflowRuns:{},dispatches:[],merges:[],logs:{},comments:{},requests:[],
+    reviews:{},commits:{},workflowRuns:{},runJobs:{},dispatches:[],merges:[],logs:{},comments:{},requests:[],
     failNext:null};
   const server=createServer(async(req,res)=>{
     const url=new URL(req.url,'http://x');
@@ -80,6 +80,10 @@ export async function fakeGitHubApi(){
       state.dispatches.push({workflow:decodeURIComponent(m[1]),...JSON.parse(body)});
       res.writeHead(204);return res.end();
     }
+    if((m=/^\/actions\/runs\/(\d+)\/jobs$/.exec(p))){
+      const jobs=state.runJobs[m[1]]??[];
+      return send(200,{total_count:jobs.length,jobs});
+    }
     if((m=/^\/actions\/jobs\/(\d+)\/logs$/.exec(p)))
       return state.logs[m[1]]?send(200,state.logs[m[1]],'text/plain'):send(404,{message:'nf'});
     return send(404,{message:'Not Found '+p});
@@ -89,8 +93,15 @@ export async function fakeGitHubApi(){
   state.push=(branch,commit)=>{state.branches[branch]=commit;};
   state.green=(commit,name='test')=>{(state.checkRuns[commit]??=[]).push({id:500+Object.keys(state.checkRuns).length,
     name,status:'completed',conclusion:'success',head_sha:commit,html_url:'https://github.com/o/r/runs/1'});};
-  state.red=(commit,jobId=77,name='test')=>{(state.checkRuns[commit]??=[]).push({id:jobId,name,status:'completed',
-    conclusion:'failure',head_sha:commit,html_url:'https://github.com/o/r/runs/'+jobId});
+  // A failed check run: its id is NOT the Actions job id (as on GitHub, where
+  // the job is found from details_url or from the run's job list).
+  // link: 'job' (details_url .../actions/runs/R/job/J), 'run' (only the run; the job is found by name), 'none'.
+  state.red=(commit,jobId=77,name='test',link='job',runId=900)=>{
+    const url=link==='job'?'https://github.com/o/r/actions/runs/'+runId+'/job/'+jobId:
+      link==='run'?'https://github.com/o/r/actions/runs/'+runId:'https://example.invalid/checks/'+jobId;
+    (state.checkRuns[commit]??=[]).push({id:jobId+50_000,name,status:'completed',
+      conclusion:'failure',head_sha:commit,html_url:url,details_url:url});
+    (state.runJobs[runId]??=[]).push({id:jobId,name,run_id:runId});
     state.logs[jobId]='line 1\n\x1b[31merror: expected 2 got 3\x1b[0m\ntoken '+AUTHOR_TOKEN+'\n';};
   state.openPull=(branch,number=7,base='main')=>{state.pulls.push({number,state:'open',draft:false,mergeable:true,
     mergeable_state:'clean',html_url:'https://github.com/o/r/pull/'+number,user:{login:'riquelmechile'},

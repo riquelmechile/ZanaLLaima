@@ -122,6 +122,12 @@ function connect(path, readonly = false) {
         if(!ticketColumns.includes('operator_released'))db.exec('ALTER TABLE review_tickets ADD COLUMN operator_released INTEGER NOT NULL DEFAULT 0');
         const activityColumns=db.prepare('PRAGMA table_info(remote_activity)').all().map(x=>x.name);
         if(!activityColumns.includes('client_id'))db.exec('ALTER TABLE remote_activity ADD COLUMN client_id TEXT');
+        // Rows written before client_id existed get it from their session
+        // (once; sessions are pruned later, so do it while they are there).
+        if(!db.prepare("SELECT 1 FROM metadata WHERE key='activity_client_backfill'").get()){
+          db.exec('UPDATE remote_activity SET client_id=(SELECT s.client_id FROM remote_sessions s WHERE s.session_id=remote_activity.session_id) WHERE client_id IS NULL');
+          db.exec("INSERT INTO metadata(key,value) VALUES('activity_client_backfill','1')");
+        }
         const auditColumns=db.prepare('PRAGMA table_info(remote_audit)').all().map(x=>x.name);
         if(!auditColumns.includes('category'))db.exec("ALTER TABLE remote_audit ADD COLUMN category TEXT NOT NULL DEFAULT 'other'");
         db.exec('CREATE INDEX IF NOT EXISTS remote_audit_category ON remote_audit(category,seq)');

@@ -118,6 +118,13 @@ test('size limits: the claim returns the line budget measured for the ticket SHA
     assert.equal(again.error,undefined,again.error);
     await remoteWrite(db=>db.prepare("UPDATE review_tickets SET line_budget=NULL WHERE state='OPEN'").run());
     assert.equal((await f.call('zana_review_claim',{ticket:again.ticket},await f.session())).lineBudget,null);
+    // A corrupt stored value does not burn the claimed ticket.
+    const third=await f.call('zana_review_request',{missionId},author);
+    assert.equal(third.error,undefined,third.error);
+    await remoteWrite(db=>db.prepare("UPDATE review_tickets SET line_budget='{nope' WHERE state='OPEN'").run());
+    const corrupt=await f.call('zana_review_claim',{ticket:third.ticket},await f.session());
+    assert.equal(corrupt.error,undefined,corrupt.error);
+    assert.deepEqual(corrupt.lineBudget,{error:'UNREADABLE'});
   }finally{await f.cleanup();}
 });
 
@@ -142,6 +149,14 @@ test('size limits: the delivery line budget runs inside the tool deadline and is
   // In time it is returned as measured; without the callback there is no lineBudget.
   assert.deepEqual((await deliveryStatus({github:gh,config,ctx,lineBudgetOf:async p=>({pull:p.number})})).lineBudget,{pull:1});
   assert.equal('lineBudget' in await deliveryStatus({github:gh,config,ctx}),false);
+  // The line budget is informative: over, failed or out of time, it never changes ready or blockers.
+  const gate=r=>({ready:r.ready,state:r.state,blockers:r.blockers});
+  const plain=gate(await deliveryStatus({github:gh,config,ctx}));
+  assert.deepEqual(gate(await deliveryStatus({github:gh,config,ctx,lineBudgetOf:async()=>({lines:9999,limit:400,over:true,truncated:true})})),plain);
+  const failed=await deliveryStatus({github:gh,config,ctx,lineBudgetOf:async()=>{throw Object.assign(new Error('boom'),{code:'GITHUB_DOWN'});}});
+  assert.deepEqual(gate(failed),plain);
+  assert.deepEqual(failed.lineBudget,{unavailable:'GITHUB_DOWN'});
+  assert.deepEqual(gate(await deliveryStatus({github:gh,config,ctx,deadline:createDeadline(200),lineBudgetOf:slow})),plain);
 });
 
 test('size limits: GitHub refusing a diff over 300 files (406/422) is DIFF_TOO_LARGE',async()=>{
@@ -168,7 +183,7 @@ test('size limits: a file list that does not match changed_files is incomplete a
     const {author,missionId}=await f.authorReady();
     f.api.state.pulls[0].changed_files=2;
     assert.match((await f.call('zana_review_request',{missionId},author)).error,
-      /^OVER_LINE_BUDGET: GitHub listó 1 de los 2 archivos del PR; la medida está incompleta/);
+      /^OVER_LINE_BUDGET: la lista de archivos de GitHub \(1\) no coincide con changed_files \(2\); la medida está incompleta/);
     assert.equal((await f.call('zana_delivery_status',{missionId},author)).lineBudget.truncated,true);
     assert.equal(await tickets(),0);
   }finally{await f.cleanup();}

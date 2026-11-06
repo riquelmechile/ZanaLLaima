@@ -157,7 +157,7 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
       if(/response too large/.test(String(error?.message)))
         fail('DIFF_TOO_LARGE','el diff pasa los 2 MB que entrega GitHub y el tope es '+config.reviewMaxDiffBytes+'; divide el cambio en misiones secuenciales');
       // GitHub does not render a diff of more than 300 files (or too big): 406 or 422.
-      if([406,422].includes(error?.status)&&(error.codes.includes('too_large')||/diff exceeded/i.test(error.message)))
+      if([406,422].includes(error?.status)&&(error.codes?.includes('too_large')||/diff exceeded/i.test(error.message)))
         fail('DIFF_TOO_LARGE','GitHub no entrega el diff (HTTP '+error.status+': más de 300 archivos o demasiado grande); divide el cambio en misiones secuenciales');
       throw error;
     }
@@ -209,7 +209,7 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
       const after=String((await github.pull(ctx.repo,pull.number))?.head?.sha??'');
       if(after!==sha)reject('HEAD_MOVED','el head del PR cambió de '+sha+' a '+after+' mientras se medía; vuelve a pedir el ticket');
       if(budget.changedFiles!==undefined&&budget.files<3000)
-        reject('OVER_LINE_BUDGET','GitHub listó '+budget.files+' de los '+budget.changedFiles+' archivos del PR; la medida está incompleta: vuelve a pedir el ticket o divide el cambio');
+        reject('OVER_LINE_BUDGET','la lista de archivos de GitHub ('+budget.files+') no coincide con changed_files ('+budget.changedFiles+'); la medida está incompleta: vuelve a pedir el ticket o divide el cambio');
       if(budget.truncated)
         reject('OVER_LINE_BUDGET','el PR cambia más de 3000 archivos; no hay extensión posible: divide el cambio en misiones secuenciales');
       if(budget.over&&budget.lines>EXTEND_MAX)
@@ -286,7 +286,9 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
       try{const entry=await ensureManifest(t);manifest=diffManifest(entry.pages);diffBytes=entry.bytes;}
       catch(error){manifestError=String(error?.message??error).slice(0,300);}
       // Measured at request time on the ticket SHA (the live head may have moved since).
-      const budget=t.line_budget?JSON.parse(t.line_budget):null;
+      // A corrupt stored value must not burn an already CLAIMED ticket.
+      let budget=null;
+      try{budget=t.line_budget?JSON.parse(t.line_budget):null;}catch{budget={error:'UNREADABLE'};}
       const verdict=await checks.verdict(t.repo,t.sha);
       return {ticket:code,state:'CLAIMED',missionId:t.mission_id,repo:t.repo,pullNumber:t.pr_number,sha:t.sha,
         spec:{objective:ctx.objective,units:ctx.units},diffManifest:manifest,diffBytes,lineBudget:budget,

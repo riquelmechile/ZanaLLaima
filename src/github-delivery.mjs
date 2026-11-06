@@ -7,7 +7,7 @@
 // UNAVAILABLE. Panter's label, issue, conventional-commit and review-budget
 // gates are not copied: ZanaLLaima adds no gates beyond its contract.
 import {evaluateRuns} from './checks.mjs';
-import {createDeadline} from './deadline.mjs';
+import {createDeadline,DeadlineError} from './deadline.mjs';
 
 export async function independentReview(github,repo,number,head,pull,reviewer){
   const login=reviewer.toLowerCase();
@@ -76,7 +76,10 @@ export async function deliveryStatus({github,config,ctx,openBlockingTickets=[],c
   const review=await deadline.step(()=>independentReview(github,ctx.repo,pull.number,head,pull,config.reviewerLogin),'review',
     {fallback:{login:config.reviewerLogin.toLowerCase(),state:'UNAVAILABLE',unavailableReason:'DEADLINE'}});
   // Informative only (never a blocker), but inside the same deadline.
-  const lineBudget=lineBudgetOf&&await deadline.step(()=>lineBudgetOf(pull),'lineBudget',{fallback:{unavailable:'DEADLINE'}});
+  // A failed read (not the deadline) is reported, never thrown: it must not break the tool.
+  const lineBudget=lineBudgetOf&&await deadline.step(()=>Promise.resolve().then(()=>lineBudgetOf(pull))
+    .catch(error=>error instanceof DeadlineError?Promise.reject(error):{unavailable:String(error?.code??'ERROR')}),
+  'lineBudget',{fallback:{unavailable:'DEADLINE'}});
   const mergeable=pull.mergeable===true&&pull.draft!==true&&pull.state==='open';
   const blockers=[];
   if(review.state!=='APPROVED_EXACT_SHA')blockers.push('Review of '+review.login+': '+review.state);

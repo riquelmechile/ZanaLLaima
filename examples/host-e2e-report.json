@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "project": "ZanaLLaima",
+  "assurance": "HOST_REPORTED_UNVERIFIED",
+  "performedBy": null,
+  "observedAtUtc": null,
+  "git": {
+    "candidateSha": null,
+    "treeSha": null,
+    "branchRef": null,
+    "clean": null
+  },
+  "host": {
+    "name": "Codex CLI",
+    "version": null,
+    "modelUiReported": null,
+    "reasoningEffortUiReported": null,
+    "nativeSubagentsReportedCount": null,
+    "nativeSubagentIds": [],
+    "evidenceLinks": []
+  },
+  "mcp": {
+    "toolCountObserved": null,
+    "transport": "stdio",
+    "serverVersion": null,
+    "handshakeSuccessful": null
+  },
+  "readMission": {
+    "missionId": null,
+    "completedUnits": null,
+    "incrementalRefillsObserved": null,
+    "leaseGenerations": [],
+    "evidenceLinks": []
+  },
+  "writeMission": {
+    "missionId": null,
+    "operatorGrantValidated": null,
+    "hostDirectWriteDeniedByOS": null,
+    "effectId": null,
+    "path": null,
+    "preSha256": null,
+    "postSha256": null,
+    "duplicateRejected": null,
+    "evidenceLinks": []
+  },
+  "recovery": {
+    "readExpiredObserved": null,
+    "retryNewGenerationObserved": null,
+    "uncertainWriteReconciledWithSignature": null,
+    "evidenceLinks": []
+  },
+  "review": {
+    "candidateSha": null,
+    "lenses": [],
+    "gate": null,
+    "independentReviewVerified": false,
+    "evidenceLinks": []
+  },
+  "overall": {
+    "passed": null,
+    "limitations": [],
+    "operatorNotes": null
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "model": "gpt-6-astra",
+  "reasoningEffort": "max",
+  "nativeSubagents": {"available": true, "maxConcurrent": 4}
+}

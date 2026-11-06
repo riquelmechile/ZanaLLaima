@@ -1,0 +1,41 @@
+name: CI attestation (trusted main)
+on:
+  workflow_run:
+    workflows: ['CI']
+    types: [completed]
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+jobs:
+  attest:
+    name: attest CI (trusted default branch only)
+    if: >-
+      ${{ vars.ZANA_CI_ATTESTATION_READY == 'true' && github.ref == 'refs/heads/main' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: ci-attestation
+    steps:
+      - name: Checkout trusted main only
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          path: trusted
+      - name: Set up trusted Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.23.4'
+      - name: Verify and sign CI run from GitHub API
+        working-directory: trusted
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ZANA_CI_SIGNING_KEY: ${{ secrets.ZANA_CI_SIGNING_KEY }}
+        run: node scripts/ci-attest.mjs
+      - name: Upload signed CI envelope
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ci-attestation-${{ github.event.workflow_run.head_sha }}
+          path: ${{ runner.temp }}/ci-attestation-*.json
+          retention-days: 7
+          if-no-files-found: error

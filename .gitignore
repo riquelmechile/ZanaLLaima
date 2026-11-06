@@ -1,0 +1,15 @@
+.zana/
+node_modules/
+*.log
+
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.pre-sqlite.bak
+*.restore-pending
+*.quarantine.*
+
+# Operator private material must remain outside this repository
+*.key
+.env
+.env.*

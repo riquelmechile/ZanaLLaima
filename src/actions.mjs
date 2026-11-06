@@ -1,0 +1,213 @@
+import { createMission, nextBatch, startBatch, completeUnit, publicStatus, HOST_REQUEST } from './core.mjs';
+import { readState, transact, readHistory, readReviewArchive, storageStatus, migrateLegacy, backupState, restoreBackup,
+  authorizationStatus, archiveMission, readMissionArchive, cleanupEffectTemporaries } from './store.mjs';
+import { openReview, reviewStatus, nextReviewBatch, startReviewBatch, submitReview, checkCandidate } from './review.mjs';
+import { heartbeatUnit, expireUnits, retryRead, cancelMission, closeMission } from './lifecycle.mjs';
+import { verifyWorkspacePaths } from './paths.mjs';
+import {capturePathAnchors} from './write-effect.mjs';
+import {applyWriteEffect} from './write-operations.mjs';
+import { observeGit, matchesReviewCandidate } from './git-evidence.mjs';
+import { deliveryGate, readVerifierKey } from './delivery.mjs';
+
+export const operations = {
+  profile: async () => ({ requested: HOST_REQUEST, assurance: 'REQUESTED_ONLY' }),
+  applyWrite: async args => applyWriteEffect(args),
+  storageStatus: async () => storageStatus(),
+  authorizationStatus: async () => authorizationStatus(),
+  missionHistory: async (args={}) => readMissionArchive(args),
+  archive: async () => archiveMission(),
+  storageHistory: async (args = {}) => readHistory(args),
+  storageReviews: async (args = {}) => readReviewArchive(args),
+  storageMigrate: async () => ({ mission: publicStatus(await migrateLegacy()), backend: await storageStatus() }),
+  storageBackup: async ({ destination }) => backupState(destination),
+  storageRestore: async ({ source, offline = false, forceDataLoss = false }) =>
+    restoreBackup(source, undefined, { offline,forceDataLoss }),
+  init: async ({ spec }) => {
+    const result = await transact(existing => {
+      if (existing) throw Error('Mission exists; finish or archive it before starting another');
+      return createMission(spec);
+    });
+    return publicStatus(result);
+  },
+  status: async () => {
+    const state = await readState();
+    if (!state) throw Error('No mission initialized');
+    return publicStatus(state);
+  },
+  next: async ({ hostReport = {} } = {}) => {
+    const state = await readState();
+    if (!state) throw Error('No mission initialized');
+    const status=await authorizationStatus();
+    const grant=status.valid?{...status,valid:true}:null;
+    return nextBatch(state, hostReport,grant);
+  },
+  start: async ({ hostReport = {}, leaseSeconds } = {}) => {
+    let batch;
+    await transact(async (existing,context) => {
+      if (!existing) throw Error('No mission initialized');
+      const preview=nextBatch(existing,hostReport,context.writeGrant);
+      const anchors=new Map();
+      for(const unit of preview.units.filter(x=>x.effect==='WRITE')){
+        await verifyWorkspacePaths(unit.paths);
+        anchors.set(unit.id,await capturePathAnchors(unit.paths));
+      }
+      const changed = startBatch(existing, hostReport,context.writeGrant,leaseSeconds);
+      for(const packet of changed.batch.packets.filter(x=>x.effect==='WRITE')){
+        const unit=existing.units.find(x=>x.id===packet.unitId);
+        unit.run.pathAnchors=anchors.get(packet.unitId);
+      }
+      batch = changed.batch;
+      return changed.mission;
+    });
+    return batch;
+  },
+  reviewOpen: async (args = {}) => {
+    const observation=observeGit();
+    if(!observation.clean)throw Error('Review requires a clean Git worktree');
+    if(args.candidateSha && args.candidateSha!==observation.candidateSha)
+      throw Error('Candidate SHA differs from verified local Git HEAD');
+    let status;
+    await transact(existing=>{
+      if(!existing)throw Error('No mission initialized');
+      status=openReview(existing,{...args,candidateSha:observation.candidateSha,
+        gitEvidence:observation});
+      return existing;
+    });
+    return status;
+  },
+  reviewStatus: async () => {
+    const state=await readState();
+    if(!state)throw Error('No mission initialized');
+    if(!state.review?.gitEvidence)return reviewStatus(state);
+    const observation=observeGit();
+    if(matchesReviewCandidate(state.review,observation))return reviewStatus(state);
+    let status;
+    await transact(existing=>{
+      status=checkCandidate(existing,observation.candidateSha,observation);
+      return existing;
+    });
+    return status;
+  },
+  reviewNext: async ({hostReport}={}) => {
+    const state=await readState();
+    if(!state)throw Error('No mission initialized');
+    if(state.review?.gitEvidence){
+      const obs=observeGit();
+      if(!matchesReviewCandidate(state.review,obs)){
+        let status;
+        await transact(existing=>{
+          status=checkCandidate(existing,obs.candidateSha,obs);
+          return existing;
+        });
+        return status;
+      }
+    }
+    return nextReviewBatch(state,hostReport);
+  },
+  reviewStart: async ({hostReport}={}) => {
+    const obs=observeGit();
+    let result;
+    await transact(existing=>{
+      if(!existing)throw Error('No mission initialized');
+      if(existing.review?.gitEvidence){
+        const check=checkCandidate(existing,obs.candidateSha,obs);
+        if(check.gate==='INVALIDATED_CANDIDATE'){result=check;return existing;}
+      }
+      result=startReviewBatch(existing,hostReport);
+      return existing;
+    });
+    return result;
+  },
+  reviewSubmit: async args => {
+    const obs=observeGit();
+    let result;
+    await transact(existing=>{
+      if(!existing)throw Error('No mission initialized');
+      if(existing.review?.gitEvidence){
+        const check=checkCandidate(existing,obs.candidateSha,obs);
+        if(check.gate==='INVALIDATED_CANDIDATE'){result=check;return existing;}
+      }
+      result=submitReview(existing,args);
+      return existing;
+    });
+    return result;
+  },
+  reviewCheckCandidate: async () => {
+    const obs=observeGit();
+    let result;
+    await transact(existing=>{
+      if(!existing)throw Error('No mission initialized');
+      result=checkCandidate(existing,obs.candidateSha,obs);
+      return existing;
+    });
+    return result;
+  },
+  deliveryCheck: async ({ciEnvelope=null,operatorEnvelope=null}={}) => {
+    const state=await readState();
+    if(!state)throw Error('No mission initialized');
+    const observation=observeGit();
+    return deliveryGate(state,observation,{
+      ciEnvelope,operatorEnvelope,
+      ciKey:readVerifierKey(process.env.ZANA_CI_PUBLIC_KEY_PATH),
+      operatorKey:readVerifierKey(process.env.ZANA_OPERATOR_PUBLIC_KEY_PATH),
+    });
+  },
+
+  heartbeat: async args => {
+    let packet;
+    await transact((existing,context)=>{
+      if(!existing)throw Error('No active mission');
+      packet=heartbeatUnit(existing,args,context.writeGrant);
+      return existing;
+    });
+    return packet;
+  },
+  recoverExpired: async () => {
+    let changed;
+    let cleanedTemps=[];
+    await transact(async existing=>{
+      if(!existing)throw Error('No active mission');
+      changed=expireUnits(existing);
+      cleanedTemps=await cleanupEffectTemporaries(existing);
+      return existing;
+    });
+    return {changed,cleanedTemps};
+  },
+  retry: async ({unitId}) => {
+    let status;
+    await transact(existing=>{
+      if(!existing)throw Error('No active mission');
+      status=retryRead(existing,unitId);
+      return existing;
+    });
+    return status;
+  },
+  cancel: async () => {
+    let status;
+    await transact(existing=>{
+      if(!existing)throw Error('No active mission');
+      status=cancelMission(existing);
+      return existing;
+    });
+    return status;
+  },
+  close: async () => {
+    let status;
+    await transact(existing=>{
+      if(!existing)throw Error('No active mission');
+      status=closeMission(existing);
+      return existing;
+    });
+    return status;
+  },
+  complete: async ({ unitId, token, leaseGeneration, outcome }) => {
+    const state = await transact((existing,context) => {
+      if (!existing) throw Error('No mission initialized');
+      const u=existing.units.find(x=>x.id===unitId);
+      if(u?.effect==='WRITE'&&!u.run?.effectReceipt)
+        throw Error('WRITE must use zana_apply_write before recording successful completion');
+      return completeUnit(existing, unitId, token, outcome, leaseGeneration, context.writeGrant);
+    });
+    return publicStatus(state);
+  },
+};

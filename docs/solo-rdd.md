@@ -1,0 +1,85 @@
+# RDD verificable con una sola cuenta GPT
+
+**Alcance:** Fase 2 del roadmap. El controlador local valida Git, prepara cuatro revisiones y controla el gate de entrega. **No inicia modelos, no crea subagentes, no confirma la configuración efectiva de GPT y no mergea ni despliega.** La integración real del anfitrión y la fuente de atestaciones CI corresponde a una fase posterior.
+
+## Candidato Git confiable: observación sin confianza en el almacén de objetos
+
+**Invariante de seguridad:** la identidad del candidato se obtiene de un único objeto commit y solo se acepta después de realizar su **re-hash en Node**. No se confía en ningún árbol, blob, índice o configuración del candidato como prueba de que el contenido es seguro.
+
+1. **Lectura única del commit.** Se leen `.git/HEAD`, la referencia de la rama y las configuraciones locales como texto con un parser conservador. Antes de iniciar Git se rechazan partial clone, fetch remoto ejecutable, extensiones desconocidas, includes e instrucciones externas. Una sola llamada aislada a `git cat-file commit <SHA>` devuelve los bytes del commit. Node calcula SHA-1 de `commit <longitud>\\0<bytes>` y exige el SHA exacto del HEAD; el campo `tree` sale únicamente de ese commit validado. En submódulos se revalida el HEAD contra el gitlink del padre.
+2. **Árbol calculado desde el disco.** Node recorre con `lstat`, abre archivos sin seguir symlinks, calcula SHA-1 de `blob <longitud>\\0<bytes>`, serializa las entradas Git `100644`, `100755` (bit `mode & 0o100`), `120000` (destino del symlink) y `160000` (HEAD validado del submódulo), ordena con las reglas de árboles Git y calcula cada tree hash desde el disco. Nunca usa bytes de los árboles o blobs almacenados por el candidato. El índice se decodifica en Node únicamente como **guard** de cambios staged, conflictos, flags ocultos y sparse checkout, no como fuente de contenido confiable.
+3. **Ignorados aislados.** Para evaluar patrones se crea un gitdir privado y vacío con shadow independiente; contiene únicamente `.gitignore` rastreados, cuyo contenido se lee una vez y se valida contra su blob del índice antes de publicarlo en el shadow. El único comando adicional de Git es `git check-ignore --no-index --stdin -z` contra ese gitdir privado, con `core.excludesFile=/dev/null`; ningún proceso consulta la configuración local del candidato. Las rutas con prefijo `:` se envían como `./ruta` para evitar magia de pathspec. Los directorios se materializan en el shadow para interpretar negaciones y se consultan sin `/` final. No se desciende en carpetas realmente ignoradas, incluso si contienen miles de archivos. Si el commit no rastrea ningún `.gitignore`, se evita crear directorios shadow y lanzar check-ignore innecesariamente. La matriz de 66 escenarios distintos compara el resultado contra `git status --porcelain=v1 -uall --ignore-submodules=none`; no se usa ese comando en producción. Se admite la excepción Python de un `.gitignore` no rastreado con único patrón efectivo `*` exclusivamente en directorios sin entradas rastreadas y sin repositorio Git anidado. La gramática aceptada es exacta: un BOM opcional solo en el primer byte; líneas LF con un único CR final opcional; únicamente líneas vacías, comentarios con `#` en la columna cero y exactamente una línea `*` seguida opcionalmente de espacios ASCII U+0020. Tabs, espacios iniciales, NBSP, blancos Unicode, CR/BOM repetidos y negaciones no conceden la excepción. Un directorio no rastreado con cualquier entrada `.git` se considera extra, aunque esté corrupta; los directorios totalmente ignorados por reglas rastreadas permanecen ignorados.
+4. **Decisión.** `clean:true` si y solo si el hash de árbol recalculado coincide con el `tree` del commit verificado y el guard del índice no detecta discrepancias. En caso contrario `clean:false` incluye la primera ruta y categoría `extra`, `missing`, `content`, `mode`, `staged` o `submodule`. Se rechazan explícitamente configuraciones inseguras y atributos de normalización que cambiarían los bytes. **`core.fileMode` y `core.autocrlf` del candidato se ignoran** como controles de seguridad; el modo ejecutable se compara físicamente. Los clones `shallow` funcionan, pues la historia antigua no participa en esta prueba.
+
+**Configuración y atributos:** se rechazan continuaciones de línea con barra invertida final no escapada, `remote.*.promisor`, `remote.*.uploadpack`, protocolos o URL hostiles, `core.worktree` arbitrario, y reglas peligrosas en `.git/info/attributes` y `core.attributesFile`. Solo se permite el `core.worktree` canónico que Git crea para el submódulo real previamente verificado.
+
+**Entorno aislado de cada subprocess Git:** `GIT_NO_LAZY_FETCH=1`, `GIT_ALLOW_PROTOCOL=` (vacío), `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS=0`, `GIT_NO_REPLACE_OBJECTS=1`, `GIT_ATTR_NOSYSTEM=1`. Todos los parámetros de configuración inyectados con `-c`: `core.fsmonitor=false`, `core.untrackedCache=false`, `core.hooksPath=/dev/null`, `core.sshCommand=false`, `protocol.allow=never`, `core.excludesFile=/dev/null`, `diff.external=false`, `core.pager=cat`. Además se aplica `--no-replace-objects`. El commit se verifica en Node; no se ejecutan filtros, hooks ni otros comandos del candidato.
+
+El repositorio se define mediante `ZANA_REVIEW_REPO`; la base de comparación `ZANA_REVIEW_TARGET_REF` (predeterminado `refs/heads/main`). El modelo congela `candidateSha`, `treeSha`, `branchRef`, `targetRef`, `baseSha`, `repoRoot`, `clean` y `observedAt`. Las operaciones de revisión vuelven a observar el disco. Una diferencia o un cambio de SHA invalida durablemente los paquetes y resultados de la revisión. Esta observación no concede permisos sobre el sistema operativo ni sustituye una revisión 4R externa.
+
+## Cuatro lentes
+
+| Lente | Aspectos que revisa |
+| --- | --- |
+| Risk | permisos, límites de confianza, seguridad, filtraciones |
+| Reliability | invariantes, transiciones, errores y pruebas |
+| Resilience | fallos, reinicios, idempotencia y recuperación |
+| Readability | claridad, diseño, contratos y mantenimiento |
+
+Solo se permite abrir la revisión después de completar con éxito todas las unidades de la misión. Cada paquete lleva ID de revisión, SHA del candidato, SHA de árbol, número de ronda y token único. El resultado requiere resumen, evidencia real y hallazgos, y rechaza un `PASS` con BLOCKER, CRITICAL o HIGH.
+
+Hay un máximo de **cinco rondas verificadas** por misión. Las rondas se almacenan en SQLite (`review_count`, esquema v3); la quinta no permite comenzar una sexta. Si se agotan, intervenir manualmente en vez de generar un bucle de correcciones interminable.
+
+## Una cuenta, dos modos
+
+**SOLO_SEQUENTIAL.** Un único contexto realiza una revisión a la vez. Su resultado es `SELF_CHECK_COMPLETE_UNVERIFIED`; no es independiente.
+
+**NATIVE_PLANNED.** Si el anfitrión informa subagentes nativos, el controlador prepara como máximo `min(maxConcurrent, 4)` paquetes simultáneos. La capacidad reportada no demuestra que nacieron contextos. Cada paquete nativo necesita un ID de contexto diferente, pero ese identificador es todavía autodeclarado. Su resultado puede ser `NATIVE_4R_REPORTED_UNVERIFIED`, nunca una certificación de independencia.
+
+Si la capacidad nativa desaparece o se reduce, el controlador limita la tanda o continúa secuencialmente. Si se mezclan revisiones nativas y autocomprobaciones, el estado final es `MIXED_CONTEXTS_SELF_CHECK_UNVERIFIED`. Los paquetes ya iniciados deben completarse antes de cambiar el modo. La prohibición de compartir hallazgos entre lentes es un contrato de ejecución; el controlador no puede probar el aislamiento del anfitrión hasta la integración real.
+
+## Comandos de revisión
+
+Con todas las tareas de la misión completas y el worktree limpio:
+
+```sh
+node src/cli.mjs review-open "$(git rev-parse HEAD)"
+node src/cli.mjs review-next [host.json]
+node src/cli.mjs review-start [host.json]
+node src/cli.mjs review-submit <lens-id> <token> <candidate-sha> resultado.json
+node src/cli.mjs review-status
+node src/cli.mjs review-check
+```
+
+`review-open` contrasta el SHA suministrado con el HEAD real. `review-check` no confía en un SHA enviado por un cliente: consulta Git directamente. Los comandos `review-next` y `review-start` pueden recibir informes de capacidad actualizados; si no se entregan, utilizan la configuración congelada para la revisión.
+
+Los comandos MCP `zana_review_*` ofrecen el mismo ciclo de control. No dan acceso a las claves privadas del operador ni ejecutan cambios automáticamente.
+
+## Gate de entrega separado
+
+El archivo `src/delivery.mjs` distingue **RDD terminado** de **decisión manual sobre entrega**. Requiere todos los lentes en PASS, ausencia de hallazgos bloqueantes y Git inalterado.
+
+Además exige dos atestaciones Ed25519 independientes, que deben generarse fuera del contexto del modelo:
+
+1. Una atestación `CI_RESULT` firmada por un verificador CI confiable, vinculada a SHA, árbol, base, rama, destino, runId y resultado `success`.
+2. Una aprobación `APPROVE_REVIEW` firmada por el operador, vinculada al mismo commit, misión, revisión y runId del CI, con decisión `ALLOW_MANUAL_RELEASE`.
+
+Las claves públicas se configuran con `ZANA_CI_PUBLIC_KEY_PATH` y `ZANA_OPERATOR_PUBLIC_KEY_PATH`; deben ser distintas. Las claves privadas se mantienen fuera del repositorio y fuera del alcance del modelo. Las atestaciones poseen fecha de emisión y expiración, y las firmas inválidas, fechas caducadas o referencias inconsistentes bloquean la entrega.
+
+```sh
+node src/cli.mjs delivery-check /ruta/atestacion-ci.json /ruta/aprobacion-operador.json
+```
+
+Sin firmas, el gate devuelve `BLOCKED`. Con ambas válidas, puede devolver `READY_FOR_MANUAL_RELEASE`, pero sigue informando:
+
+- `mergeAuthorized: false`
+- `deploymentAuthorized: false`
+- `independentReviewVerified: false`
+
+**No se conecta actualmente a GitHub Actions para obtener y firmar resultados CI auténticos.** Las pruebas utilizan claves temporales y atestaciones simuladas para validar el algoritmo. La fuente real del verificador y su autenticación se integrarán más adelante.
+
+## Validaciones adversariales
+
+La suite cubre cambios de SHA y árbol, worktree sucio, movimiento de rama base, HEAD desacoplado, capacidad 1/2/4, pérdida de subagentes, contexts repetidos, tokens obsoletos, hallazgos HIGH/BLOCKER, límite de cinco correcciones, CI falsificado, firmantes no independientes, aprobaciones caducadas y falta de atestaciones.
+
+No interpretar una suite verde como una revisión RDD independiente ni como autorización de entrega. El PR permanece en borrador hasta que se disponga de integración y verificación real.

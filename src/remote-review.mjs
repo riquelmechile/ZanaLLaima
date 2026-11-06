@@ -10,6 +10,7 @@ import {missionPull} from './github-delivery.mjs';
 import {recordActivity,sessionRow,sessionWrote,nowIso,writeAudit,missionClients,remoteMission} from './remote-state.mjs';
 import {budgetOf} from './budget.mjs';
 import {redactText,envSecrets} from './redact.mjs';
+import {lineBudget,lineLimit,EXTEND_MAX} from './line-budget.mjs';
 
 export const LENSES=Object.freeze(['risk','readability','reliability','resilience']);
 export const SEVERITIES=Object.freeze(['BLOCKER','CRITICAL','WARNING','SUGGESTION']);
@@ -147,28 +148,39 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
   };
   const superseded=(code,t,state)=>({ticket:code,state,published:false,ticketSha:t.sha,
     note:'This ticket was superseded or abandoned while finalizing; nothing was published. Ask the author for the current ticket.'});
-  async function loadPages(t){
-    const cached=pageCache.get(t.ticket_id);
-    if(cached)return cached;
-    const ctx=await missionContext(t.mission_id,null,{allowInactive:true});
-    const pages=diffPages(await github.compareDiff(t.repo,ctx.base,t.sha));
-    pageCache.set(t.ticket_id,pages);
+  // Cache by repo:base:sha, so request() (which measures the diff before the
+  // ticket exists) warms what claim() and diff() read.
+  async function fetchPages(repo,base,sha){
+    let diff,rawBytes;
+    try{({text:diff,bytes:rawBytes}=await github.compareDiffMeasured(repo,base,sha));}
+    catch(error){
+      if(/response too large/.test(String(error?.message)))
+        fail('DIFF_TOO_LARGE','el diff pasa los 2 MB que entrega GitHub y el tope es '+config.reviewMaxDiffBytes+'; divide el cambio en misiones secuenciales');
+      throw error;
+    }
+    // bytes is the size GitHub sent, before redaction, so redaction cannot shrink it under the cap.
+    const entry={key:repo+':'+base+':'+sha,pages:diffPages(diff),bytes:rawBytes};
+    pageCache.set(entry.key,entry);
     if(pageCache.size>50)pageCache.delete(pageCache.keys().next().value);
-    return pages;
+    return entry;
+  }
+  async function loadPages(t){
+    const ctx=await missionContext(t.mission_id,null,{allowInactive:true});
+    return pageCache.get(t.repo+':'+ctx.base+':'+t.sha)??fetchPages(t.repo,ctx.base,t.sha);
   }
   // Record the manifest once; a later fetch must produce the same pages.
   async function ensureManifest(t){
-    const pages=await loadPages(t);
+    const entry=await loadPages(t),pages=entry.pages;
     return remoteWrite(db=>{
       const stored=db.prepare('SELECT page,sha256 FROM review_diff_pages WHERE ticket_id=? ORDER BY page').all(t.ticket_id);
       if(!stored.length){
         const put=db.prepare('INSERT INTO review_diff_pages(ticket_id,page,path,sha256,read_at) VALUES(?,?,?,?,NULL)');
         for(const p of pages)put.run(t.ticket_id,p.page,p.path,p.sha256);
       }else if(stored.length!==pages.length||stored.some((r,i)=>r.sha256!==pages[i].sha256)){
-        pageCache.delete(t.ticket_id);
+        pageCache.delete(entry.key);
         fail('DIFF_CHANGED','the diff of '+t.sha+' no longer matches the recorded manifest');
       }
-      return pages;
+      return entry;
     });
   }
   return {
@@ -180,6 +192,24 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
       const sha=String(pull.head?.sha??'');
       const verdict=await checks.verdict(ctx.repo,sha);
       if(verdict.state!=='SUCCESS')fail('CHECKS_NOT_GREEN','checks on '+sha+' are '+verdict.state);
+      // Size limits before the ticket: the diff cap has no exception; the line
+      // budget can only be raised with zana_budget_extend (user's yes).
+      const measured=await fetchPages(ctx.repo,ctx.base,sha);
+      const diffBytes=measured.bytes;
+      // A rejected request does not keep its diff in the cache.
+      const reject=(...args)=>{pageCache.delete(measured.key);fail(...args);};
+      if(diffBytes>config.reviewMaxDiffBytes)
+        reject('DIFF_TOO_LARGE','el diff pesa '+diffBytes+' bytes y el tope es '+config.reviewMaxDiffBytes+'; divide el cambio en misiones secuenciales');
+      const budget=lineBudget(await github.pullFiles(ctx.repo,pull.number),{limit:lineLimit(ctx,config)});
+      if(budget.truncated)
+        reject('OVER_LINE_BUDGET','el PR cambia más de 3000 archivos; no hay extensión posible: divide el cambio en misiones secuenciales');
+      if(budget.over&&budget.lines>EXTEND_MAX)
+        reject('OVER_LINE_BUDGET','el PR cambia '+budget.lines+' líneas (sin lockfiles) y la extensión máxima es '+EXTEND_MAX+'; divide el cambio en misiones secuenciales');
+      if(budget.over)reject('OVER_LINE_BUDGET','el PR cambia '+budget.lines+' líneas (sin lockfiles) y el presupuesto es '+budget.limit+
+        '; pregúntale al usuario si autoriza '+budget.lines+' líneas y, solo con su sí, llama zana_budget_extend');
+      // The file list is read from the PR's current head: it must still be the measured SHA.
+      const after=String((await github.pull(ctx.repo,pull.number))?.head?.sha??'');
+      if(after!==sha)reject('HEAD_MOVED','el head del PR cambió de '+sha+' a '+after+' mientras se medía; vuelve a pedir el ticket');
       const code=ticketCode(),ticketId=randomUUID();
       let expiresAt;
       let superseded=[];
@@ -217,7 +247,7 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
         mission.revision++;
         return mission;
       }));
-      return {ticket:code,missionId,repo:ctx.repo,pullNumber:pull.number,sha,expiresAt,
+      return {ticket:code,missionId,repo:ctx.repo,pullNumber:pull.number,sha,expiresAt,lineBudget:budget,diffBytes,
         superseded:superseded.map(x=>x.ticket_id),
         message:'Revisa el ticket '+code+' con ZanaLLaima',
         instructions:'Entrega este mensaje exacto al usuario para que lo pegue en una conversación NUEVA. Esta sesión no puede reclamarlo.'};
@@ -246,12 +276,13 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
       if(claimed.error)fail(...claimed.error);
       const t=claimed.ticket;
       const ctx=await missionContext(t.mission_id,null,{allowInactive:true});
-      let manifest=null,manifestError=null;
-      try{manifest=diffManifest(await ensureManifest(t));}
+      let manifest=null,manifestError=null,diffBytes=null,budget=null;
+      try{const entry=await ensureManifest(t);manifest=diffManifest(entry.pages);diffBytes=entry.bytes;}
       catch(error){manifestError=String(error?.message??error).slice(0,300);}
+      try{budget=lineBudget(await github.pullFiles(t.repo,t.pr_number),{limit:lineLimit(ctx,config)});}catch{budget=null;}
       const verdict=await checks.verdict(t.repo,t.sha);
       return {ticket:code,state:'CLAIMED',missionId:t.mission_id,repo:t.repo,pullNumber:t.pr_number,sha:t.sha,
-        spec:{objective:ctx.objective,units:ctx.units},diffManifest:manifest,
+        spec:{objective:ctx.objective,units:ctx.units},diffManifest:manifest,diffBytes,lineBudget:budget,
         ...(manifestError?{diffManifestError:manifestError+'; zana_review_diff retries'}:{}),checks:verdict,
         lenses:LENSES,skills:['review-discipline',...LENSES.map(l=>'review-'+l)],
         instructions:'Load zana-4r. Read EVERY diff page with zana_review_diff (finalize refuses otherwise). One lens per fresh subagent with only spec, diff and checks; this conversation submits each lens once, then finalizes once.'};
@@ -261,7 +292,7 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
       const t=await remoteWrite(db=>{expire(db);return ticketBy(db,code);});
       if(t.state!=='CLAIMED')fail('TICKET_NOT_CLAIMED','ticket is '+t.state);
       if(t.reviewer_session!==session.sessionId)fail('NOT_REVIEWER','only the session that claimed the ticket may read its diff');
-      const pages=await ensureManifest(t);
+      const {pages}=await ensureManifest(t);
       if(page>=pages.length)fail('INVALID_PAGE','page '+page+' does not exist (total '+pages.length+')');
       const remaining=await remoteWrite(db=>{
         db.prepare('UPDATE review_diff_pages SET read_at=COALESCE(read_at,?) WHERE ticket_id=? AND page=?').run(nowIso(),t.ticket_id,page);
@@ -374,7 +405,6 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
             .run(t.mission_id,t.ticket_id,JSON.stringify(archived),nowIso());
           return changed;
         });
-        pageCache.delete(t.ticket_id);
         if(!done)return inconsistent(['review','zana/4r']);
         return {ticket:code,state:'FINALIZED',published:true,event,githubReviewId:reviewId,reviewUrl,adoptedExistingReview:adopted,
           status:{context:'zana/4r',state:statusState},sha:t.sha,lensHashes:Object.fromEntries(ordered.map(l=>[l.lens,l.hash]))};

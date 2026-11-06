@@ -41,6 +41,8 @@ export function remoteConfig(env=process.env){
     claimTtlMinutes:int(env.ZANA_TICKET_CLAIM_TTL_MINUTES,240,10,10080,'ZANA_TICKET_CLAIM_TTL_MINUTES'),
     toolDeadlineMs:int(env.ZANA_TOOL_DEADLINE_MS,45000,5000,300000,'ZANA_TOOL_DEADLINE_MS'),checksWorkflow,requiredChecks,mergeEnabled:merge==='true',mergeMethod,
     ticketTtlMinutes:int(env.ZANA_TICKET_TTL_MINUTES,120,5,1440,'ZANA_TICKET_TTL_MINUTES'),
+    reviewMaxDiffBytes:int(env.ZANA_REVIEW_MAX_DIFF_BYTES,1_800_000,100_000,1_900_000,'ZANA_REVIEW_MAX_DIFF_BYTES'),
+    prLineBudget:int(env.ZANA_PR_LINE_BUDGET,400,50,5000,'ZANA_PR_LINE_BUDGET'),
     apiUrl,downstreamUrl,toolsets,
     downstreamTimeoutMs:int(env.ZANA_DOWNSTREAM_TIMEOUT_MS,30000,1000,300000,'ZANA_DOWNSTREAM_TIMEOUT_MS'),
     authorToken:env.ZANA_DOWNSTREAM_GITHUB_TOKEN||null,reviewerToken:env.ZANA_REVIEWER_TOKEN||null});

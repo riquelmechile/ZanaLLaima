@@ -79,6 +79,8 @@ export class GitHubApi{
       try{message=JSON.parse(text).message??'';}catch{message='';}
       throw new GitHubApiError(res.status,'GitHub HTTP '+res.status+(message?': '+clean(message,this.secrets()):''));
     }
+    // 'measured' also returns the size of what GitHub sent, before redaction.
+    if(raw==='measured')return {text:redactText(text,this.secrets()),bytes:Buffer.byteLength(text,'utf8')};
     if(raw)return redactText(text,this.secrets());
     if(!text)return null;
     try{return JSON.parse(text);}catch{throw new GitHubApiError(502,'GitHub answered without JSON');}
@@ -95,10 +97,12 @@ export class GitHubApi{
   }
   // The diff of exactly base...commit (three dots, like a pull request), so a
   // ticket's pages never change while its SHA does not.
-  async compareDiff(repo,base,commit){
+  async compareDiff(repo,base,commit){return (await this.compareDiffMeasured(repo,base,commit)).text;}
+  // The redacted diff plus its real size: limits are checked on what GitHub sent.
+  async compareDiffMeasured(repo,base,commit){
     if(!validRefName(base))throw new GitHubApiError(400,'Invalid base');
     return this.request('GET',repoPath(repo)+'/compare/'+refPath(base)+'...'+sha(commit),
-      {accept:'application/vnd.github.diff',raw:true});
+      {accept:'application/vnd.github.diff',raw:'measured'});
   }
   async openPullsFor(repo,branch){
     const owner=repo.split('/')[0];
@@ -115,6 +119,19 @@ export class GitHubApi{
       if(data.length<100)return out;
     }
     throw new GitHubApiError(502,'Pull request has more than 300 commits; authorship cannot be verified');
+  }
+  // Hasta 30 páginas (3000 archivos, el máximo de GitHub); con la última llena
+  // la lista queda truncated y el presupuesto de líneas la trata como over.
+  async pullFiles(repo,number){
+    const out=[];
+    for(let page=1;page<=30;page++){
+      const data=await this.request('GET',repoPath(repo)+'/pulls/'+positive(number)+'/files?per_page=100&page='+page);
+      if(!Array.isArray(data))throw new GitHubApiError(502,'Unreadable file list');
+      out.push(...data.map(f=>({filename:String(f?.filename??''),additions:Number(f?.additions)||0,
+        deletions:Number(f?.deletions)||0,status:String(f?.status??'')})));
+      if(data.length<100)return out;
+    }
+    return Object.assign(out,{truncated:true});
   }
   async pullReviews(repo,number){
     const out=[];

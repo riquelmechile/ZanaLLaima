@@ -37,7 +37,8 @@ export const sessionRow=(db,sessionId)=>db?.prepare('SELECT * FROM remote_sessio
 export function remoteMission(db,missionId){
   const row=db?.prepare('SELECT * FROM remote_missions WHERE mission_id=?').get(missionId);
   return row?{missionId:row.mission_id,repo:row.repo,base:row.base,branch:row.branch,
-    codeUnits:JSON.parse(row.code_units),createdSession:row.created_session,createdAt:row.created_at}:null;
+    codeUnits:JSON.parse(row.code_units),createdSession:row.created_session,createdAt:row.created_at,
+    lineBudgetExtension:row.line_budget_extension?JSON.parse(row.line_budget_extension):null}:null;
 }
 // client_id is kept with the activity because remote_sessions is pruned.
 export function recordActivity(db,{sessionId,missionId,kind,tool,clientId=null}){

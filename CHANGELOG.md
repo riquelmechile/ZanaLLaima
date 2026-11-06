@@ -1,5 +1,9 @@
 # Registro de cambios
 
+## [0.7.0] - No publicado
+
+- **Límites de tamaño (PR4):** `zana_review_request` mide el diff `base...sha` antes del ticket (`DIFF_TOO_LARGE` sobre `ZANA_REVIEW_MAX_DIFF_BYTES`, 1800000 por defecto, sin excepción) y las líneas del PR sin lockfiles ni `.zanallaima.json` (`OVER_LINE_BUDGET` sobre `ZANA_PR_LINE_BUDGET`, 400 por defecto). Tool nueva `zana_budget_extend` (escritura, auditada como `write`, solo la sesión autora con la misión activa) y columna `line_budget_extension` en `remote_missions`. El ticket, el claim y `zana_delivery_status` traen `lineBudget`. La caché de páginas del diff pasa a la clave `repo:base:sha`. 30 tools en remoto.
+
 ## [0.6.0] - No publicado
 
 MCP remoto para la app de ChatGPT. Candidato sin merge, tag ni deploy; el deploy y el E2E real los hace el operador.

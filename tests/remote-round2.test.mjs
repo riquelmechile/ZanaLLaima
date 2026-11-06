@@ -1,0 +1,38 @@
+// Etapa B, ronda de corrección 2: tests negativos de P1 y W1/W2.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {remoteFixture,readDiff,sha} from './helpers/remote-fixture.mjs';
+import {remoteWrite} from '../src/store.mjs';
+
+const clean=lens=>({lens,findings:[],evidence:['read every page']});
+const blocker={lens:'risk',findings:[{severity:'BLOCKER',location:'src/sum.mjs:3',evidence:'returns a-b'}],evidence:['diff']};
+async function review(f,ticket,s,risk=clean('risk')){
+  assert.equal((await f.call('zana_review_claim',{ticket},s)).state,'CLAIMED');
+  await readDiff(f.call,ticket,s);
+  for(const l of [risk,clean('readability'),clean('reliability'),clean('resilience')])
+    assert.equal((await f.call('zana_review_lens_submit',{ticket,...l},s)).error,undefined);
+  return f.call('zana_review_finalize',{ticket,execution:'PARALLEL_SUBAGENTS'},s);
+}
+const outcome=x=>({success:true,summary:'done on '+x,evidence:['head '+x]});
+
+test('P1: correction_start revalidates the latest ticket inside the mission transaction (TOCTOU)',async()=>{
+  const f=await remoteFixture();
+  try{
+    const {author,missionId,branch,packet}=await f.authorReady();
+    await f.call('zana_complete_unit',{unitId:'code',token:packet.token,leaseGeneration:packet.leaseGeneration,outcome:outcome(sha('a'))},author);
+    const t1=await f.call('zana_review_request',{missionId},author);
+    assert.equal((await review(f,t1.ticket,await f.session(),blocker)).event,'REQUEST_CHANGES');
+    // Between the pre-check and the insertion, a newer ticket appears (the
+    // author already pushed a fix and asked for a new review).
+    const real=f.runtime.review.latest;
+    f.runtime.review.latest=async id=>{
+      const seen=await real(id);
+      f.api.state.push(branch,sha('b'));
+      await remoteWrite(db=>db.prepare("INSERT INTO review_tickets(ticket_id,code_hash,mission_id,repo,pr_number,sha,author_session,created_at,expires_at,state,updated_at) VALUES('newer','h-newer',?,'o/r',7,?,?,?,?,'OPEN',?)")
+        .run(id,sha('b'),author.sessionId,new Date(Date.now()+1000).toISOString(),new Date(Date.now()+3600e3).toISOString(),new Date().toISOString()));
+      return seen;
+    };
+    const r=await f.call('zana_correction_start',{missionId},author);
+    assert.match(r.error??'',/NO_CHANGES_REQUESTED/,'the stale pre-check must not add a correction unit');
+  }finally{await f.cleanup();}
+});

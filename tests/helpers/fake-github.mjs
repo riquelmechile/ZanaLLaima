@@ -19,7 +19,7 @@ async function bodyOf(req){const parts=[];for await(const c of req)parts.push(c)
 export async function fakeGitHubApi(){
   const state={repo:'o/r',defaultBranch:'main',branches:{main:sha('0')},pulls:[],checkRuns:{},statuses:{},
     reviews:{},commits:{},pullFiles:{},workflowRuns:{},runJobs:{},dispatches:[],merges:[],logs:{},comments:{},requests:[],
-    failNext:null};
+    failNext:null,repoId:4242,files:{}};
   const server=createServer(async(req,res)=>{
     const url=new URL(req.url,'http://x');
     const body=req.method==='GET'?'':await bodyOf(req);
@@ -30,8 +30,15 @@ export async function fakeGitHubApi(){
     if(state.failNext){const f=state.failNext;state.failNext=null;return send(f.status,{message:f.message});}
     const p=url.pathname.replace('/repos/o/r','');
     if(!url.pathname.startsWith('/repos/o/r'))return send(404,{message:'Not Found'});
-    if(p===''&&req.method==='GET')return send(200,{full_name:'o/r',default_branch:state.defaultBranch});
+    if(p===''&&req.method==='GET')return send(200,{id:state.repoId,full_name:'o/r',default_branch:state.defaultBranch});
     let m;
+    // files[path]: text (served as a base64 file) or a raw contents object.
+    if((m=/^\/contents\/(.+)$/.exec(p))){
+      const f=state.files[decodeURIComponent(m[1])];
+      if(f===undefined)return send(404,{message:'Not Found'});
+      return send(200,typeof f==='string'?{type:'file',encoding:'base64',size:Buffer.byteLength(f),
+        content:Buffer.from(f).toString('base64')}:f);
+    }
     if((m=/^\/branches\/(.+)$/.exec(p))){
       const b=decodeURIComponent(m[1]);
       return state.branches[b]?send(200,{name:b,commit:{sha:state.branches[b]}}):send(404,{message:'Branch not found'});

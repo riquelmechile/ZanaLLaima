@@ -10,7 +10,7 @@ import {inspectEffectTemporary} from './write-effect.mjs';
 import {beginRestoreMoves,abortRestoreMoves,classifyRestoreArtifacts,cleanupRestoreArtifacts,interruptedRestoreJournal} from './restore-journal.mjs';
 import {withRestoreLock} from './restore-lock.mjs';
 
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 const MAX_EVENTS = 2000;
 const MAX_ARCHIVES = 200;
 const BUSY_MS = 10000;
@@ -24,7 +24,8 @@ const parseEpoch=(value,at=Date.now())=>{
 };
 
 // Schema v7 (remote MCP mode): sessions, remote mission bindings, session
-// activity, check requests, review tickets and audit. Lens receipts reuse
+// activity, check requests, review tickets and audit; v8 adds project
+// memory and remote_missions.project_id. Lens receipts reuse
 // review_receipts (review_id = ticket id) and finalized reviews reuse
 // review_archive (review_id = ticket id).
 const REMOTE_TABLES=[
@@ -36,6 +37,10 @@ const REMOTE_TABLES=[
   'CREATE TABLE IF NOT EXISTS review_tickets (ticket_id TEXT PRIMARY KEY, code_hash TEXT NOT NULL UNIQUE, mission_id TEXT NOT NULL, repo TEXT NOT NULL, pr_number INTEGER NOT NULL, sha TEXT NOT NULL, author_session TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, state TEXT NOT NULL, reviewer_session TEXT, claimed_at TEXT, finalized_at TEXT, verdict TEXT, execution TEXT, github_review_id INTEGER, status_posted INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, author_client TEXT)',
   'CREATE TABLE IF NOT EXISTS review_diff_pages (ticket_id TEXT NOT NULL, page INTEGER NOT NULL, path TEXT NOT NULL, sha256 TEXT NOT NULL, read_at TEXT, PRIMARY KEY(ticket_id,page))',
   'CREATE TABLE IF NOT EXISTS remote_audit (seq INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, host TEXT, session_id TEXT, tool TEXT NOT NULL, mission_id TEXT, outcome TEXT NOT NULL, args_hmac TEXT, detail TEXT, category TEXT NOT NULL DEFAULT \'other\')',
+  // v8: project memory (src/project-memory.mjs). Never pruned by pruneRemote.
+  'CREATE TABLE IF NOT EXISTS projects (project_id TEXT PRIMARY KEY, github_repo_id INTEGER NOT NULL UNIQUE, repo TEXT NOT NULL, created_at TEXT NOT NULL, created_mission TEXT)',
+  "CREATE TABLE IF NOT EXISTS project_memory (seq INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('summary','decision','convention','issue','pending')), topic TEXT NOT NULL, body TEXT NOT NULL, mission_id TEXT, sha TEXT, session_id TEXT, created_at TEXT NOT NULL, superseded_by INTEGER, resolved_at TEXT)",
+  'CREATE INDEX IF NOT EXISTS project_memory_live ON project_memory(project_id,kind,topic) WHERE superseded_by IS NULL',
 ];
 const TICKET_RANK={OPEN:0,CLAIMED:1,FINALIZING:2,FINALIZED:3,STALE_SHA:3,EXPIRED:3,ABANDONED:3};
 const tokenHash = token => createHash('sha256').update(token).digest('hex');
@@ -122,6 +127,7 @@ function connect(path, readonly = false) {
         if(!ticketColumns.includes('operator_released'))db.exec('ALTER TABLE review_tickets ADD COLUMN operator_released INTEGER NOT NULL DEFAULT 0');
         const missionColumns=db.prepare('PRAGMA table_info(remote_missions)').all().map(x=>x.name);
         if(!missionColumns.includes('line_budget_extension'))db.exec('ALTER TABLE remote_missions ADD COLUMN line_budget_extension TEXT');
+        if(!missionColumns.includes('project_id'))db.exec('ALTER TABLE remote_missions ADD COLUMN project_id TEXT');
         const activityColumns=db.prepare('PRAGMA table_info(remote_activity)').all().map(x=>x.name);
         if(!activityColumns.includes('client_id'))db.exec('ALTER TABLE remote_activity ADD COLUMN client_id TEXT');
         // Rows written before client_id existed get it from their session

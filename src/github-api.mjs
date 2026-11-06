@@ -86,6 +86,19 @@ export class GitHubApi{
     try{return JSON.parse(text);}catch{throw new GitHubApiError(502,'GitHub answered without JSON');}
   }
   async repo(repo){return this.request('GET',repoPath(repo));}
+  // A small JSON file of the repository at ref (≤4 KB): null if absent (404),
+  // INVALID_JSON_FILE if it is not a file, is larger or does not parse.
+  async fileJson(repo,path,ref){
+    if(typeof path!=='string'||!/^[A-Za-z0-9._-]{1,100}(?:\/[A-Za-z0-9._-]{1,100}){0,9}$/.test(path)||
+       path.split('/').some(p=>p==='.'||p==='..')||!validRefName(ref))throw new GitHubApiError(400,'Invalid path or ref');
+    let data;
+    try{data=await this.request('GET',repoPath(repo)+'/contents/'+refPath(path)+'?ref='+encodeURIComponent(ref));}
+    catch(error){if(error.status===404)return null;throw error;}
+    if(data?.type!=='file'||data.encoding!=='base64'||typeof data.content!=='string'||!(data.size<=4096))
+      throw new GitHubApiError(422,'INVALID_JSON_FILE: '+path+' is not a base64 file of at most 4 KB');
+    try{return JSON.parse(Buffer.from(data.content,'base64').toString('utf8'));}
+    catch{throw new GitHubApiError(422,'INVALID_JSON_FILE: '+path+' is not valid JSON');}
+  }
   async branchHead(repo,branch){
     if(!validRefName(branch))throw new GitHubApiError(400,'Invalid branch name');
     const data=await this.request('GET',repoPath(repo)+'/branches/'+refPath(branch));

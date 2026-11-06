@@ -95,7 +95,7 @@ test('startRemote listens on 127.0.0.1 (port 0 = free port), refuses relative pa
     const health=await res.json();
     assert.equal(res.status,200);
     assert.deepEqual({status:health.status,schemaVersion:health.schemaVersion,reviewerToken:health.reviewerToken,staleTickets:health.staleTickets},
-      {status:'ok',schemaVersion:7,reviewerToken:'configured',staleTickets:0});
+      {status:'ok',schemaVersion:8,reviewerToken:'configured',staleTickets:0});
   }finally{
     if(started){
       started.server.closeAllConnections();

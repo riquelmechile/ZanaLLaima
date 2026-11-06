@@ -230,7 +230,7 @@ test('mutations: CLI remote-health returns the detailed health',async()=>{
     const envFile=join(f.dir,'server.env');
     await writeFile(envFile,'ZANA_STATE_FILE='+process.env.ZANA_STATE_FILE+'\n');
     const h=await runCli('remote-health',['--env-file',envFile]);
-    assert.equal(h.schemaVersion,7);
+    assert.equal(h.schemaVersion,8);
     assert.ok(['ok','degraded'].includes(h.status));
     assert.ok(Array.isArray(h.problems));
   }finally{

@@ -31,7 +31,7 @@ test('SQLite v5 receipts migrate to v6 retaining old hashes and null permission 
     await assert.rejects(readState(file),/Unsupported database schema/);
     const migrated=await transact(state=>{state.revision++;return state;},file);
     assert.equal(migrated.id,initial.id);
-    assert.equal((await storageStatus(file)).schemaVersion,7);
+    assert.equal((await storageStatus(file)).schemaVersion,8);
     const reopened=new DatabaseSync(databasePath(file),{readOnly:true});
     try{
       const row=reopened.prepare('SELECT pre_sha,post_sha,pre_mode,post_mode FROM write_effect_receipts WHERE effect_id=?')

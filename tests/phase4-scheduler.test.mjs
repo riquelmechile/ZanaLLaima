@@ -144,7 +144,7 @@ test('mission budgets and consumed slots persist exactly across a SQLite restart
     let second;
     await transact(m=>{second=startBatch(m,host).batch.packets;return m;},file);
     assert.equal(second.length,1);
-    assert.equal((await storageStatus(file)).schemaVersion,7);
+    assert.equal((await storageStatus(file)).schemaVersion,8);
     assert.equal((await readState(file)).units.filter(x=>x.status==='RUNNING').length,2);
   }finally{await rm(dir,{recursive:true,force:true});}
 });

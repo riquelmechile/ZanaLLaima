@@ -66,7 +66,8 @@ test('W3: unit completed before the ticket; REQUEST_CHANGES -> correction -> APP
     const t2=await f.call('zana_review_request',{missionId},author);
     assert.equal((await review(f,t2.ticket,await f.session())).event,'APPROVE');
     assert.equal((await f.call('zana_merge',{missionId},author)).state,'MERGED');
-    const closed=await f.call('zana_mission_close',{},author);
+    const closed=await f.call('zana_mission_close',{summary:{done:'Agregada sum(a,b) con su test y corregida la review',
+      decisions:[],conventions:[],pending:[],keyFiles:['src/sum.mjs']}},author);
     assert.equal(closed.status,'CLOSED',JSON.stringify(closed));
     assert.equal((await f.call('zana_mission_archive',{},author)).archived,true);
   }finally{await f.cleanup();}

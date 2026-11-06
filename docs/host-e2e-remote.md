@@ -13,7 +13,7 @@ Abrir una conversación nueva y pedir: "Con ZanaLLaima, crea una misión en riqu
 
 Registrar:
 - `zana_session_status` → `session.id` y `session.createdAt` de A.
-- La misión (`missionId`), la rama `zana/<missionId>`, los commits por `zana_ds_github`, `zana_checks_start`/`zana_checks_status` hasta `SUCCESS`, el PR y la respuesta de `zana_review_request` (ticket y hora). Orden esperado: con la unidad `RUNNING` (heartbeat con `leaseSeconds` = `maxLeaseSeconds`) los commits, el PR y los checks; con checks verdes, `zana_complete_unit`; recién después `zana_review_request`. Si se va a correr el caso "Push después del ticket" (sección 3), hacerlo **antes** de completar la unidad.
+- La misión (`missionId`), la rama `zana/<missionId>`, los commits por `zana_ds_github`, `zana_checks_start`/`zana_checks_status` hasta `SUCCESS`, el PR y la respuesta de `zana_review_request` (ticket y hora). Orden esperado: con la unidad `RUNNING` (heartbeat con `leaseSeconds` = `maxLeaseSeconds`) los commits, el PR y los checks; con checks verdes, `zana_complete_unit`; recién después `zana_review_request`. Con una unidad de código `RUNNING`, `zana_review_request` responde `UNIT_STILL_RUNNING`.
 
 ## 2. Conversación B (nueva)
 
@@ -31,7 +31,8 @@ Registrar:
 | --- | --- | --- |
 | B intenta escribir | En B, pedir que escriba un archivo en la rama de la misión | `REVIEWER_READ_ONLY` |
 | A reclama su ticket | En A, después de pedir un ticket, pedir que lo reclame A misma | `AUTHOR_SESSION` |
-| Push después del ticket | Antes de completar la unidad (sigue RUNNING) y con checks verdes: en A pedir un ticket; en una conversación C nueva reclamarlo, leer todas las páginas del diff y enviar los 4 lentes; luego hacer un push desde A y finalizar en C. Después A sigue el flujo normal: checks sobre el SHA nuevo, `zana_complete_unit` y ticket nuevo para B | `zana_review_finalize` en C responde `state: STALE_SHA`, `published: false` (sin review ni `zana/4r` en GitHub) |
+| Ticket con la unidad RUNNING | En A, con la unidad de código todavía RUNNING y checks verdes, pedir `zana_review_request` | `UNIT_STILL_RUNNING` |
+| Push después del ticket | Con la unidad completa: en A pedir un ticket; en una conversación C nueva reclamarlo, leer todas las páginas del diff y enviar los 4 lentes. A ya no puede escribir (`NO_RUNNING_UNIT`), así que el operador hace un commit en `zana/<missionId>` con su cuenta (web de GitHub o git); luego finalizar en C | `zana_review_finalize` en C responde `state: STALE_SHA`, `published: false` (sin review ni `zana/4r` en GitHub). Para seguir, A usa `zana_correction_start` solo si hubo REQUEST_CHANGES; si no, el operador revierte su commit |
 | Merge por el downstream | En A, pedir `merge_pull_request` por `zana_ds_github` | `ALWAYS_DENIED` |
 | Escribir en `main` | En A, con su unidad RUNNING (antes de completarla, o con la unidad de `zana_correction_start`), pedir `create_or_update_file` con `branch: main` | `OUTSIDE_MISSION_BRANCH` (sin unidad RUNNING de la sesión, el primer rechazo es `NO_RUNNING_UNIT`) |
 

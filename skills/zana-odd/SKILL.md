@@ -52,18 +52,18 @@ Eres la conversación **autora**. Escribes en GitHub solo con `zana_ds_github`, 
 ## 4. Checks hasta verde
 
 1. `zana_checks_start(missionId)`: no bloquea, devuelve `checkId` y `sha`.
-2. `zana_checks_status(checkId)` hasta `SUCCESS`. Con `FAILURE` lee las líneas finales del log, corrige con otro commit y vuelve a `zana_checks_start`. Si responde `partial`, vuelve a consultar.
+2. `zana_checks_status(checkId)` hasta `SUCCESS`. Con `FAILURE` lee las líneas finales del log de cada job fallido (`failures[].logTail`), corrige con otro commit y vuelve a `zana_checks_start`. Si responde `partial`, vuelve a consultar.
 
 ## 5. PR, completar la unidad y ticket
 
 1. `create_pull_request` con `head: zana/<missionId>` exacto y `base` = base de la misión. Solo puedes editar título y cuerpo.
 2. Con checks verdes sobre el head del PR, **completa la unidad**: `zana_complete_unit` con evidencia real (SHA, checkId, checks). Exige check verde sobre el head actual de la rama. Así no hay que mantener el lease vivo mientras el usuario revisa en otra conversación.
-3. `zana_review_request(missionId)`: no exige una unidad RUNNING. Cada ticket consume una ronda (`maxReviewRounds`).
+3. `zana_review_request(missionId)`: con una unidad de código todavía RUNNING responde `UNIT_STILL_RUNNING` (completa primero). Cada ticket consume una ronda (`maxReviewRounds`); un ticket nuevo reemplaza al anterior y pasa a ser la autoridad del merge.
 4. Entrega al usuario **el texto exacto** del campo `message` para que lo pegue en una **conversación nueva**. No reclames tu propio ticket.
 
 ## 6. Review, corrección y entrega
 
-1. `zana_delivery_status(missionId)` muestra la review sobre el SHA exacto, CI, `zana/4r` y si el PR es mergeable.
+1. `zana_delivery_status(missionId)` muestra el ticket vigente (`currentTicket`), la review sobre el SHA exacto, CI, `zana/4r` y si el PR es mergeable.
 2. Si pidió cambios: `zana_correction_start(missionId)` agrega una unidad de corrección `PENDING`; `zana_start_batch`, corrige en la rama, checks hasta verde, `zana_complete_unit` y un **ticket nuevo**. Sobre el mismo SHA se rechaza con `CHANGES_REQUESTED_SAME_SHA`, aunque el ticket anterior haya vencido.
 3. Con la review aprobada: `zana_merge(missionId)` solo si el usuario lo pide. Nunca `merge_pull_request` por el downstream.
 4. Después del merge: `zana_mission_close` y `zana_mission_archive`, para poder iniciar otra misión.

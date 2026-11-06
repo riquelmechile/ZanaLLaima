@@ -79,7 +79,7 @@ No existe todavía una prueba de una cuenta ChatGPT real, ni evidencia de modelo
 | `zana_correction_start` | no | sí | Agrega una unidad de corrección tras `REQUEST_CHANGES` (el último ticket se revalida dentro de la transacción de la misión) |
 | `zana_session_rebind` | no | sí | Pasa una unidad RUNNING con el lease vigente a la sesión actual (reinicio o sesión nueva) sin consumir intento; vencido, `zana_recover_expired` → `zana_unit_retry` |
 | `zana_mission_archive` | no | sí | Archiva una misión `CLOSED` o `CANCELLED` para iniciar otra |
-| `zana_delivery_status` | no | sí | Solo lectura |
+| `zana_delivery_status` | no | sí | Solo lectura; la autoridad es el ticket vigente de la misión |
 | `zana_merge` | no | sí | Solo con todo verde sobre un mismo head; `ZANA_MERGE_ENABLED=false` lo apaga |
 | `zana_ds_github` | no | sí | Router del GitHub MCP oficial, ver `docs/downstream-github.md` |
 
@@ -91,7 +91,7 @@ Cada tool remota tiene un plazo total (`ZANA_TOOL_DEADLINE_MS`, 45 s por defecto
 
 ### Auditoría
 
-Cada llamada a una tool remota y cada llamada al downstream queda en `remote_audit` (SQLite v7): host, sesión, tool, misión, resultado y HMAC-SHA256 de los argumentos con una llave guardada en la DB. Cada fila tiene categoría (`read`, `write`, `refused`, `merge`, `review`, `operator`). Las lecturas son una ventana de las 5000 más recientes; el resto se guarda 365 días. La actividad de misiones no activas se borra a los 90 días, las sesiones inactivas a los 30, los checks a los 30 y los tickets terminales a los 180. Nunca se guardan los argumentos ni un token; `tests/remote-http.test.mjs` y `tests/remote-downstream.test.mjs` comprueban la redacción.
+Cada llamada a una tool remota y cada llamada al downstream queda en `remote_audit` (SQLite v7): host, sesión, tool, misión, resultado y HMAC-SHA256 de los argumentos con una llave guardada en la DB. Cada fila tiene categoría (`read`, `write`, `refused`, `merge`, `review`, `operator`). Las lecturas son una ventana de las 5000 más recientes; el resto se guarda 365 días. La actividad de misiones no activas se borra a los 90 días, las sesiones inactivas a los 30, los checks a los 30 y los tickets terminales a los 180 (nunca los de la misión activa, que guardan sus bloqueos de mismo SHA). Las filas de actividad anteriores a `client_id` lo toman de su sesión al migrar. Nunca se guardan los argumentos ni un token; `tests/remote-http.test.mjs` y `tests/remote-downstream.test.mjs` comprueban la redacción.
 
 ## Limitaciones y siguientes gates
 

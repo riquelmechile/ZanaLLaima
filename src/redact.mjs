@@ -44,8 +44,10 @@ const CREDENTIALS=[
   [/\bglpat-[A-Za-z0-9_-]{20,}/g,'[redacted]'],
   [/\bnpm_[A-Za-z0-9]{36}/g,'[redacted]'],
   // Con prefijo (DB_PASSWORD, access_token); el valor entre comillas hasta la de cierre, o sin
-  // comillas de 6+ caracteres sin '(' ni operador: 'token: usar JWT' o 'token === null' no cambian.
-  [/(?<![A-Za-z0-9_])((?:[A-Za-z0-9]+_)*(?:secret|password|passwd|token|api[_-]?key|aws_secret_access_key))(["']?[ \t]*[=:][ \t]*)("[^"]*"|'[^']*'|(?![=:])[^\s(]{6,}(?=\s|$))/gi,'$1$2[redacted]']];
+  // comillas de 6+ caracteres que no sean un operador ni una llamada a código: 'token: usar JWT',
+  // 'token === null' o 'password: z.string()' no cambian (una llamada termina en ')');
+  // 'password=p@ss(word1' sí.
+  [/(?<![A-Za-z0-9_])((?:[A-Za-z0-9]+_)*(?:secret|password|passwd|token|api[_-]?key|aws_secret_access_key))(["']?[ \t]*[=:][ \t]*)("[^"]*"|'[^']*'|(?![=:])(?![A-Za-z_$][\w$.]{0,64}\(\S{0,128}\)[;,]?(?:\s|$))\S{6,})/gi,'$1$2[redacted]']];
 export const scrubCredentials=text=>CREDENTIALS.reduce((t,[re,to])=>t.replace(re,to),text);
 // Texto de memoria: secretos del entorno, tokens de GitHub/Bearer y las formas de arriba.
 export const redactStored=(input,secrets=[])=>scrubCredentials(redactText(input,secrets));

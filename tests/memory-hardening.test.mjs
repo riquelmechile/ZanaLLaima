@@ -63,10 +63,10 @@ const REDACTS={
   'asignación seguida de PEM':['token: -----BEGIN PRIVATE KEY-----\nMIIEvQIBADAN\n-----END PRIVATE KEY----- fin','token: [redacted] fin'],
 };
 for(const [name,[input,output]] of Object.entries(REDACTS))test('W1 redacción: '+name,()=>assert.equal(redactStored(input),output));
-for(const keep of ['token: usar JWT','password: z.string().min(8)','token === null','PASSWORD_FILE=/run/secreto','Basic configuración del servidor'])
+for(const keep of ['token: usar JWT','password: z.string().min(8)','token === null','token==expectedValue','const token = getToken();','PASSWORD_FILE=/run/secreto','Basic configuración del servidor'])
   test('W1 no redacta: '+keep,()=>assert.equal(redactStored(keep),keep));
 test('S-1: patrones acotados, 100 KB hostiles en menos de 200 ms',()=>{
-  for(const evil of ['eyJ-'.repeat(25_000),'a'.repeat(100_000)+'://','a_'.repeat(50_000)+'=']){
+  for(const evil of ['eyJ-'.repeat(25_000),'a'.repeat(100_000)+'://','a_'.repeat(50_000)+'=','-token:'.repeat(14_300)+'(','-a_token='.repeat(11_100)+'(']){
     const t0=performance.now();redactStored(evil);
     assert.ok(performance.now()-t0<200,'lento: '+evil.slice(0,8));
   }
@@ -244,4 +244,11 @@ test('S4: close de una misión que no está ACTIVE no llama a GitHub',async()=>{
     assert.match((await f.call('zana_mission_close',{summary},s)).error,/^MISSION_NOT_ACTIVE: .* is CANCELLED/);
     assert.equal(f.api.state.requests.length,before);
   }finally{await f.cleanup();}
+});
+
+test('N-1: una contraseña con paréntesis se redacta; una llamada a código no',()=>{
+  for(const text of ['password=p@ss(word1','DB_PASSWORD=Xk9(fL2#qP'])
+    assert.equal(redactStored(text).includes('[redacted]'),true,text);
+  assert.equal(redactStored('password=p@ss(word1').includes('p@ss'),false);
+  assert.equal(redactStored('api_key: getKey(cfg)'),'api_key: getKey(cfg)');
 });

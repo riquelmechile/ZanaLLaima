@@ -59,9 +59,10 @@ function requireServerPaths(command,env=process.env){
     if(!isAbsolute(env[name]))throw Error(name+' must be an absolute path (got '+env[name]+')');
     if(mustExist&&!existsSync(path))throw Error(name+' points to '+path+', which does not exist; refusing to create a new database');
   };
-  const create=command==='remote-serve';
-  check('ZANA_STATE_FILE',env.ZANA_STATE_FILE?databasePath(statePath()):'',!create&&!OAUTH_COMMANDS.has(command));
-  if(create||OAUTH_COMMANDS.has(command))check('ZANA_OAUTH_DB',env.ZANA_OAUTH_DB,!create);
+  // Each command requires only the database it uses; the server needs both.
+  const create=command==='remote-serve',oauth=OAUTH_COMMANDS.has(command);
+  if(create||!oauth)check('ZANA_STATE_FILE',env.ZANA_STATE_FILE?databasePath(statePath()):'',!create);
+  if(create||oauth)check('ZANA_OAUTH_DB',env.ZANA_OAUTH_DB,!create);
 }
 
 const aliases={

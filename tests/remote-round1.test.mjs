@@ -68,7 +68,8 @@ test('C2: operator CLI loads the server env explicitly and never creates a stray
   try{
     for(const k of ['ZANA_STATE_FILE','ZANA_OAUTH_DB','ZANA_ENV_FILE'])delete process.env[k];
     process.env.HOME=join(dir,'empty-home');
-    await assert.rejects(runCli('remote-clients',[]),/ZANA_STATE_FILE/);
+    await assert.rejects(runCli('remote-clients',[]),/ZANA_OAUTH_DB/);
+    await assert.rejects(runCli('remote-audit',[]),/ZANA_STATE_FILE/);
     // A relative path is refused, and nothing is created in the working directory.
     process.env.ZANA_STATE_FILE='rel/state.json';
     await assert.rejects(runCli('remote-audit',[]),/absolut/);
@@ -85,6 +86,18 @@ test('C2: operator CLI loads the server env explicitly and never creates a stray
     assert.ok(items.some(x=>x.tool==='zana_probe'),'operates on the server DB');
     assert.equal((await runCli('remote-clients',['--env-file',envFile])).clients.length,0);
     await assert.rejects(runCli('remote-revoke',['zc_'+'a'.repeat(24),'--env-file',envFile]),/CLIENT_NOT_FOUND/);
+    // Each command needs only its own DB: OAuth commands without ZANA_STATE_FILE,
+    // mission commands without ZANA_OAUTH_DB.
+    const oauthOnly=join(dir,'oauth-only.env'),stateOnly=join(dir,'state-only.env');
+    await writeFile(oauthOnly,'ZANA_OAUTH_DB='+oauthDb+'\n');
+    await writeFile(stateOnly,'ZANA_STATE_FILE='+state+'\n');
+    // (an explicit --env-file writes into process.env: clear it between runs)
+    for(const k of ['ZANA_STATE_FILE','ZANA_OAUTH_DB'])delete process.env[k];
+    assert.equal((await runCli('remote-clients',['--env-file',oauthOnly])).clients.length,0);
+    assert.equal(process.env.ZANA_STATE_FILE,undefined);
+    delete process.env.ZANA_OAUTH_DB;
+    assert.ok(Array.isArray((await runCli('remote-audit',['--env-file',stateOnly])).items));
+    assert.equal(process.env.ZANA_OAUTH_DB,undefined);
     // A missing DB is an error, not a fresh empty DB.
     await writeFile(envFile,'ZANA_STATE_FILE='+join(dir,'nope','state.json')+'\nZANA_OAUTH_DB='+oauthDb+'\n');
     await assert.rejects(runCli('remote-audit',['--env-file',envFile]),/does not exist/);

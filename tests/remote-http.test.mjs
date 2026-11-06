@@ -136,6 +136,11 @@ test('Streamable HTTP sessions: two conversations get two sessions; the reviewer
     const w=await b.call('zana_ds_github',{operation:'push_files',missionId:init.id,
       arguments:{owner:'o',repo:'r',branch:init.github.branch,files:[{path:'a',content:'x'}],message:'m'}});
     assert.match(w.error,/REVIEWER_READ_ONLY/);
+    // The MCP schema (zod) requires origin and accepts a proof.
+    const lens={ticket:req.ticket,lens:'risk',evidence:['diff'],findings:[{severity:'WARNING',location:'src/a.mjs:1',evidence:'x'}]};
+    assert.match((await b.call('zana_review_lens_submit',lens)).error,/Input validation error.*findings\.0\.origin/);
+    lens.findings[0]={...lens.findings[0],origin:'PREEXISTING',proof:'src/a.mjs:1 en main'};
+    assert.deepEqual((await b.call('zana_review_lens_submit',lens)).originDowngraded,[]);
     // A session id is bound to the identity that opened it.
     setEnrollment(s.settings.oauthDb,5);
     const other=await login(s.base,{host:'other-host'});

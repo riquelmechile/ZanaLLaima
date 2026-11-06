@@ -208,12 +208,37 @@ test('W6: el contexto y la búsqueda llegan marcados como dato no confiable; ski
   assert.match(read('SECURITY.md'),/## Memoria como dato no confiable[\s\S]*inyección de prompt \*\*persistente\*\*/);
 });
 
+test('W-B/W-C: el savepoint no deja huérfanos y un ROLLBACK total conserva su error',async()=>{
+  const f=await remoteFixture();
+  try{
+    const s=await f.session();
+    // Falla después de crear el proyecto: el savepoint deshace la fila de projects.
+    await remoteWrite(db=>db.exec("CREATE TRIGGER late BEFORE UPDATE OF project_id ON remote_missions BEGIN SELECT RAISE(ABORT,'late'); END"));
+    const late=await f.call('zana_mission_init',{spec,github:target},s);
+    assert.match(late.memory.error,/^MEMORY_UNAVAILABLE: .*late/);
+    assert.deepEqual([await q('SELECT * FROM projects'),await q('SELECT project_id FROM remote_missions')],[[],[{project_id:null}]]);
+    await f.call('zana_mission_cancel',{},s);await f.call('zana_mission_archive',{},s);
+    await remoteWrite(db=>db.exec("DROP TRIGGER late;CREATE TRIGGER rb BEFORE INSERT ON projects BEGIN SELECT RAISE(ROLLBACK,'rb-boom'); END"));
+    const rb=await f.call('zana_mission_init',{spec,github:target},s);
+    assert.match(rb.error,/rb-boom/);
+    assert.doesNotMatch(rb.error,/savepoint/);
+    await remoteWrite(db=>db.exec('DROP TRIGGER rb'));
+    // Las marcas cuentan en el tope: contexto lleno y aun así ≤4096 bytes, con untrusted antes de entries.
+    const {memory}=await f.call('zana_mission_init',{spec,github:target},s);
+    await remoteWrite(db=>{for(let i=0;i<300;i++)saveEntry(db,{projectId:memory.projectId,kind:'decision',topic:'d'+i,body:'x'.repeat(i%7)});});
+    const ctx=await remoteRead(db=>memoryContext(db,memory.projectId));
+    assert.ok(ctx.truncated&&Buffer.byteLength(JSON.stringify(ctx))<=4096);
+    assert.deepEqual(Object.keys(ctx),['projectId','untrusted','note','entries','truncated']);
+    assert.deepEqual(Object.keys(await f.call('zana_memory_context',{},s)).slice(0,4),['repo','projectId','untrusted','note']);
+  }finally{await f.cleanup();}
+});
+
 test('S4: close de una misión que no está ACTIVE no llama a GitHub',async()=>{
   const f=await remoteFixture();
   try{
     const s=await f.session();
     f.api.state.failNext={status:500,message:'down'};
-    await f.call('zana_mission_init',{spec,github:target},s);
+    assert.match((await f.call('zana_mission_init',{spec,github:target},s)).memory.error,/^MEMORY_UNAVAILABLE: .*HTTP 500/);
     await f.call('zana_mission_cancel',{},s);
     const before=f.api.state.requests.length;
     assert.match((await f.call('zana_mission_close',{summary},s)).error,/^MISSION_NOT_ACTIVE: .* is CANCELLED/);

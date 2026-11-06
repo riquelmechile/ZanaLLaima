@@ -87,7 +87,7 @@ export function memoryContext(db,projectId,{maxBytes=4096}={}){
     if(used+size>maxBytes){truncated=true;continue;}
     entries.push(entry);used+=size;
   }
-  return {projectId,entries,truncated,...marks};
+  return {projectId,...marks,entries,truncated};
 }
 
 // Una entrada redactada (siempre antes de cortar: un corte deja prefijos que

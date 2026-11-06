@@ -59,3 +59,24 @@ test('W1: a BLOCKER on an abandoned/expired ticket still blocks a re-request on 
     assert.equal((await f.call('zana_review_request',{missionId},author)).error,undefined);
   }finally{await f.cleanup();}
 });
+
+test('W2: with ZANA_DISTINCT_REVIEWER_CLIENT the reviewer client differs from every client active in the mission',async()=>{
+  const f=await remoteFixture({envExtra:{ZANA_DISTINCT_REVIEWER_CLIENT:'true'}});
+  try{
+    // The creator (client zc_test) builds the mission; another client asks for the ticket.
+    const {missionId}=await f.authorReady();
+    const requester=await f.session('gpt-b','zc_requester');
+    const t=await f.call('zana_review_request',{missionId},requester);
+    assert.equal(t.error,undefined,t.error);
+    const sameAsCreator=await f.session('zana-chatgpt','zc_test');
+    assert.match((await f.call('zana_review_claim',{ticket:t.ticket},sameAsCreator)).error??'',/SAME_CLIENT/);
+    const sameAsRequester=await f.session('gpt-b','zc_requester');
+    assert.match((await f.call('zana_review_claim',{ticket:t.ticket},sameAsRequester)).error??'',/SAME_CLIENT/);
+    // The client survives session pruning: it is stored with the activity.
+    await remoteWrite(db=>db.prepare("DELETE FROM remote_sessions WHERE client_id IN ('zc_test','zc_requester') AND session_id NOT IN (?,?)").run(sameAsCreator.sessionId,sameAsRequester.sessionId));
+    const again=await f.session('zana-chatgpt','zc_test');
+    assert.match((await f.call('zana_review_claim',{ticket:t.ticket},again)).error??'',/SAME_CLIENT/);
+    const independent=await f.session('gpt-c','zc_reviewer');
+    assert.equal((await f.call('zana_review_claim',{ticket:t.ticket},independent)).state,'CLAIMED');
+  }finally{await f.cleanup();}
+});

@@ -39,10 +39,14 @@ export function remoteMission(db,missionId){
   return row?{missionId:row.mission_id,repo:row.repo,base:row.base,branch:row.branch,
     codeUnits:JSON.parse(row.code_units),createdSession:row.created_session,createdAt:row.created_at}:null;
 }
-export function recordActivity(db,{sessionId,missionId,kind,tool}){
-  db.prepare('INSERT INTO remote_activity(session_id,mission_id,kind,tool,created_at) VALUES(?,?,?,?,?)')
-    .run(sessionId,missionId,kind,tool,nowIso());
+// client_id is kept with the activity because remote_sessions is pruned.
+export function recordActivity(db,{sessionId,missionId,kind,tool,clientId=null}){
+  db.prepare('INSERT INTO remote_activity(session_id,mission_id,kind,tool,created_at,client_id) VALUES(?,?,?,?,?,?)')
+    .run(sessionId,missionId,kind,tool,nowIso(),clientId);
 }
+// OAuth clients that acted on the mission (creator, unit holders, writers, requesters).
+export const missionClients=(db,missionId)=>db.prepare(
+  'SELECT DISTINCT client_id FROM remote_activity WHERE mission_id=? AND client_id IS NOT NULL').all(missionId).map(r=>r.client_id);
 export const sessionWrote=(db,sessionId,missionId)=>Boolean(db?.prepare(
   'SELECT 1 FROM remote_activity WHERE session_id=? AND mission_id=? LIMIT 1').get(sessionId,missionId));
 // Author rule for zana_merge: the session that created the mission, or one
@@ -88,6 +92,8 @@ export function pruneRemote(db,now=Date.now()){
   const old=db.prepare('SELECT ticket_id FROM review_tickets WHERE '+terminal+' AND updated_at<?').all(before(RETENTION_DAYS.tickets));
   for(const {ticket_id} of old){
     db.prepare('DELETE FROM review_diff_pages WHERE ticket_id=?').run(ticket_id);
+    // Lens receipts go with the ticket unless the finalized review is archived.
+    db.prepare('DELETE FROM review_receipts WHERE review_id=? AND review_id NOT IN (SELECT review_id FROM review_archive)').run(ticket_id);
     db.prepare('DELETE FROM review_tickets WHERE ticket_id=?').run(ticket_id);
   }
   db.prepare("DELETE FROM remote_sessions WHERE last_seen_at<? AND session_id NOT IN (SELECT author_session FROM review_tickets WHERE state NOT IN ('FINALIZED','STALE_SHA','EXPIRED','ABANDONED')) AND session_id NOT IN (SELECT reviewer_session FROM review_tickets WHERE reviewer_session IS NOT NULL AND state NOT IN ('FINALIZED','STALE_SHA','EXPIRED','ABANDONED'))")

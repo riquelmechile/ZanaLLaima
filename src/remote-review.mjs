@@ -7,7 +7,7 @@
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {canonicalJson} from './actor-assertion.mjs';
 import {missionPull} from './github-delivery.mjs';
-import {recordActivity,sessionRow,sessionWrote,nowIso,writeAudit} from './remote-state.mjs';
+import {recordActivity,sessionRow,sessionWrote,nowIso,writeAudit,missionClients} from './remote-state.mjs';
 import {budgetOf} from './budget.mjs';
 import {redactText,envSecrets} from './redact.mjs';
 
@@ -97,6 +97,7 @@ export function reviewBody({code,ticket,lenses,execution,event}){
   return body.length>MAX_BODY?body.slice(0,MAX_BODY-40)+'\n\n[cuerpo recortado por tamaño]':body;
 }
 
+export const latestIn=(db,missionId)=>db?.prepare('SELECT * FROM review_tickets WHERE mission_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(missionId)??null;
 export function createReview({github,reviewerGithub,config,checks,remoteWrite,remoteRead,transact,missionContext}){
   const locks=new Map();
   const pageCache=new Map();
@@ -109,6 +110,8 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
   const lensRows=(db,ticketId)=>db.prepare('SELECT lens_id,token,result FROM review_receipts WHERE review_id=?')
     .all(ticketId).map(r=>({lens:r.lens_id,hash:r.token,...JSON.parse(r.result)}));
   const hasBlocking=(db,ticketId)=>lensRows(db,ticketId).some(l=>blocking(l.findings));
+  const sameShaBlocker=(db,missionId,sha)=>db.prepare('SELECT * FROM review_tickets WHERE mission_id=? AND sha=? AND operator_released=0')
+    .all(missionId,sha).find(t=>t.verdict==='REQUEST_CHANGES'||hasBlocking(db,t.ticket_id))?.ticket_id??null;
   // Lazy expiry: OPEN past its deadline -> EXPIRED; CLAIMED/FINALIZING older
   // than the claim TTL -> ABANDONED (terminal, never blocks a merge).
   function expire(db,now=Date.now()){
@@ -167,12 +170,12 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
         const db=txc.db;
         if(!mission||mission.id!==missionId)fail('MISSION_NOT_ACTIVE','mission '+missionId+' is not the active mission');
         expire(db);
-        // Same SHA with requested changes (finalized, or blocking lenses on a
-        // live ticket): the code must change before another review.
-        for(const old of db.prepare('SELECT * FROM review_tickets WHERE mission_id=? AND sha=?').all(missionId,sha)){
-          if((old.state==='FINALIZED'&&old.verdict==='REQUEST_CHANGES')||(!TERMINAL.includes(old.state)&&hasBlocking(db,old.ticket_id)))
-            fail('CHANGES_REQUESTED_SAME_SHA','a review requested changes on '+sha+'; push a change before asking for a new ticket');
-        }
+        // Same SHA with requested changes (a REQUEST_CHANGES verdict or a
+        // BLOCKER/CRITICAL lens, in ANY state: abandoned, expired, stale or
+        // finalized): the code must change before another review. Waiting for
+        // a TTL never releases it; only an explicit operator abandon does.
+        const blocker=sameShaBlocker(db,missionId,sha);
+        if(blocker)fail('CHANGES_REQUESTED_SAME_SHA','a review requested changes on '+sha+' (ticket '+blocker+'); push a change before asking for a new ticket');
         const cap=budgetOf(mission).maxReviewRounds;
         if((mission.reviewCount||0)>=cap)fail('REVIEW_ROUNDS_EXHAUSTED','mission used its '+cap+' review rounds');
         // One live ticket per mission: older ones become STALE_SHA (other SHA) or ABANDONED (same SHA).
@@ -180,7 +183,7 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
         for(const old of superseded)
           db.prepare('UPDATE review_tickets SET state=?,updated_at=? WHERE ticket_id=?')
             .run(old.sha===sha?'ABANDONED':'STALE_SHA',nowIso(),old.ticket_id);
-        recordActivity(db,{sessionId:session.sessionId,missionId,kind:'REVIEW_REQUEST',tool:'zana_review_request'});
+        recordActivity(db,{sessionId:session.sessionId,clientId:session.clientId,missionId,kind:'REVIEW_REQUEST',tool:'zana_review_request'});
         db.prepare('INSERT INTO review_tickets(ticket_id,code_hash,mission_id,repo,pr_number,sha,author_session,author_client,created_at,expires_at,state,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)')
           .run(ticketId,hash(code),missionId,ctx.repo,pull.number,sha,session.sessionId,session.clientId??null,
             new Date(at).toISOString(),expiresAt,'OPEN',nowIso());
@@ -200,8 +203,10 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
         if(t.state==='EXPIRED')return {error:['TICKET_EXPIRED','ticket expired']};
         if(t.state!=='OPEN')return {error:['TICKET_ALREADY_CLAIMED','ticket already used ('+t.state+')']};
         if(t.author_session===session.sessionId)return {error:['AUTHOR_SESSION','the author session cannot claim its own ticket']};
-        if(config.distinctReviewerClient&&t.author_client&&t.author_client===session.clientId)
-          return {error:['SAME_CLIENT','ZANA_DISTINCT_REVIEWER_CLIENT requires another OAuth connection (another ChatGPT account) than the author']};
+        // The reviewer's OAuth client must differ from the requester's and from
+        // every client that acted on the mission (creator, unit holders, writers).
+        if(config.distinctReviewerClient&&(t.author_client===session.clientId||missionClients(db,t.mission_id).includes(session.clientId)))
+          return {error:['SAME_CLIENT','ZANA_DISTINCT_REVIEWER_CLIENT requires another registered OAuth client than any client that acted on the mission']};
         if(sessionWrote(db,session.sessionId,t.mission_id))
           return {error:['SESSION_WROTE','this session wrote in mission '+t.mission_id]};
         const me=sessionRow(db,session.sessionId);
@@ -333,8 +338,10 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
         return rows.filter(r=>hasBlocking(db,r.ticket_id)).map(r=>r.ticket_id);
       });
     },
-    // Latest ticket of the mission (for zana_correction_start).
-    latest:missionId=>remoteRead(db=>db?.prepare('SELECT * FROM review_tickets WHERE mission_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(missionId)??null),
+    // Latest ticket of the mission (for zana_correction_start). latestIn()
+    // reads it inside the caller's transaction.
+    latest:missionId=>remoteRead(db=>latestIn(db,missionId)),
+    latestIn,
     // Operator: list tickets and abandon one by id (audited by the caller).
     async list(missionId=null){
       return remoteWrite(db=>{
@@ -342,18 +349,22 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
         const rows=missionId?db.prepare('SELECT * FROM review_tickets WHERE mission_id=? ORDER BY created_at DESC').all(missionId)
           :db.prepare('SELECT * FROM review_tickets ORDER BY created_at DESC LIMIT 200').all();
         return rows.map(r=>({ticketId:r.ticket_id,missionId:r.mission_id,pullNumber:r.pr_number,sha:r.sha,state:r.state,
-          verdict:r.verdict,createdAt:r.created_at,claimedAt:r.claimed_at,blocking:hasBlocking(db,r.ticket_id)}));
+          verdict:r.verdict,createdAt:r.created_at,claimedAt:r.claimed_at,blocking:hasBlocking(db,r.ticket_id),
+          releasedByOperator:Boolean(r.operator_released)}));
       });
     },
     async abandon(ticketId,caller){
       return remoteWrite(db=>{
         const t=db.prepare('SELECT * FROM review_tickets WHERE ticket_id=?').get(ticketId);
         if(!t)fail('TICKET_NOT_FOUND','unknown ticket id '+ticketId);
-        if(TERMINAL.includes(t.state))fail('TICKET_TERMINAL','ticket is already '+t.state);
-        db.prepare("UPDATE review_tickets SET state='ABANDONED',updated_at=? WHERE ticket_id=?").run(nowIso(),ticketId);
+        // A finalized review stays; any other ticket is abandoned AND released,
+        // so its blockers no longer stop a new review of the same SHA.
+        if(t.state==='FINALIZED')fail('TICKET_TERMINAL','a finalized review cannot be abandoned');
+        if(t.operator_released)fail('TICKET_TERMINAL','ticket was already released by the operator');
+        db.prepare("UPDATE review_tickets SET state='ABANDONED',operator_released=1,updated_at=? WHERE ticket_id=?").run(nowIso(),ticketId);
         writeAudit(db,{caller,tool:'remote-ticket-abandon',missionId:t.mission_id,outcome:'ABANDONED',
-          args:{ticketId},detail:{previousState:t.state,sha:t.sha},category:'operator'});
-        return {ticketId,previousState:t.state,state:'ABANDONED'};
+          args:{ticketId},detail:{previousState:t.state,sha:t.sha,released:true},category:'operator'});
+        return {ticketId,previousState:t.state,state:'ABANDONED',released:true};
       });
     },
   };

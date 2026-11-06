@@ -16,7 +16,7 @@ test('catalog: every GitHub tool of the pinned server version is classified',()=
   const future={...CATALOG,tools:{...CATALOG.tools,delete_branch:{toolset:'repos',readOnlyHint:false,destructiveHint:true}}};
   assert.deepEqual(catalogProblems(future),['delete_branch: unclassified']);
   assert.deepEqual(catalogProblems({tools:{a:{zana:'read',readOnlyHint:false},b:{zana:'write',rule:'x'},c:{zana:'deny'}}}),
-    ['a: read without readOnlyHint','b: unknown write rule x','c: deny without reason']);
+    ['a: read without readOnlyHint','b: unknown write rule x','b: write without ALLOWED_KEYS','c: deny without reason']);
   for(const name of ['merge_pull_request','pull_request_review_write','delete_repository','create_pull_request_review',
     'update_pull_request_branch','fork_repository','create_repository'])
     assert.equal(CATALOG.tools[name].zana,'deny',name);

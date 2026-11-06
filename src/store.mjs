@@ -119,6 +119,9 @@ function connect(path, readonly = false) {
         if(!effectColumns.includes('post_mode'))db.exec('ALTER TABLE write_effect_receipts ADD COLUMN post_mode INTEGER');
         const ticketColumns=db.prepare('PRAGMA table_info(review_tickets)').all().map(x=>x.name);
         if(!ticketColumns.includes('author_client'))db.exec('ALTER TABLE review_tickets ADD COLUMN author_client TEXT');
+        if(!ticketColumns.includes('operator_released'))db.exec('ALTER TABLE review_tickets ADD COLUMN operator_released INTEGER NOT NULL DEFAULT 0');
+        const activityColumns=db.prepare('PRAGMA table_info(remote_activity)').all().map(x=>x.name);
+        if(!activityColumns.includes('client_id'))db.exec('ALTER TABLE remote_activity ADD COLUMN client_id TEXT');
         const auditColumns=db.prepare('PRAGMA table_info(remote_audit)').all().map(x=>x.name);
         if(!auditColumns.includes('category'))db.exec("ALTER TABLE remote_audit ADD COLUMN category TEXT NOT NULL DEFAULT 'other'");
         db.exec('CREATE INDEX IF NOT EXISTS remote_audit_category ON remote_audit(category,seq)');
@@ -721,7 +724,7 @@ function remoteFacts(db){
   return {
     sessions:db.prepare('SELECT * FROM remote_sessions').all(),
     missions:db.prepare('SELECT * FROM remote_missions').all(),
-    activity:db.prepare('SELECT session_id,mission_id,kind,tool,created_at FROM remote_activity').all(),
+    activity:db.prepare('SELECT session_id,mission_id,kind,tool,created_at,client_id FROM remote_activity').all(),
     checks:db.prepare('SELECT * FROM remote_checks').all(),
     tickets:db.prepare('SELECT * FROM review_tickets').all(),
     lenses:db.prepare('SELECT r.* FROM review_receipts r JOIN review_tickets t ON t.ticket_id=r.review_id').all(),

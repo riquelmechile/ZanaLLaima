@@ -40,7 +40,7 @@ export function createChecks({github,config,remoteWrite,remoteRead,missionContex
       if(!runs.length){await github.dispatchWorkflow(ctx.repo,workflow,ctx.branch);dispatched=true;}
       const checkId=randomUUID();
       await remoteWrite(db=>{
-        recordActivity(db,{sessionId:session.sessionId,missionId,kind:'CHECKS_START',tool:'zana_checks_start'});
+        recordActivity(db,{sessionId:session.sessionId,clientId:session.clientId,missionId,kind:'CHECKS_START',tool:'zana_checks_start'});
         db.prepare('INSERT INTO remote_checks(check_id,mission_id,sha,workflow,dispatched,session_id,created_at) VALUES(?,?,?,?,?,?,?)')
           .run(checkId,missionId,sha,workflow,dispatched?1:0,session.sessionId,new Date().toISOString());
       });

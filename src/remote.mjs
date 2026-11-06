@@ -119,14 +119,14 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
   }
   function guard(db,mission,session,tool,kind='MISSION_WRITE'){
     const rm=allow(db,mission,session);
-    recordActivity(db,{sessionId:session.sessionId,missionId:mission.id,kind,tool});
+    recordActivity(db,{sessionId:session.sessionId,clientId:session.clientId,missionId:mission.id,kind,tool});
     return rm;
   }
   // Operations that run their own transaction: check first, record only after success.
   async function checked(session,tool,run){
     const missionId=await rr((db,mission)=>{allow(db,mission,session);return mission.id;});
     const result=await run();
-    await rw(db=>recordActivity(db,{sessionId:session.sessionId,missionId,kind:'MISSION_WRITE',tool}));
+    await rw(db=>recordActivity(db,{sessionId:session.sessionId,clientId:session.clientId,missionId,kind:'MISSION_WRITE',tool}));
     return result;
   }
 
@@ -144,7 +144,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     // A write that reached GitHub (any outcome but REFUSED) is session activity.
     audit:entry=>rw(db=>{
       const wrote=entry.detail?.class==='write'&&entry.outcome!=='REFUSED';
-      if(wrote)recordActivity(db,{sessionId:entry.caller.sessionId,missionId:entry.missionId,
+      if(wrote)recordActivity(db,{sessionId:entry.caller.sessionId,clientId:entry.caller.clientId,missionId:entry.missionId,
         kind:'DOWNSTREAM_WRITE',tool:entry.tool});
       writeAudit(db,{caller:entry.caller,tool:entry.tool,missionId:entry.missionId,outcome:entry.outcome,
         args:entry.args,detail:{class:entry.cls,ms:entry.ms,error:entry.error,policy:entry.detail},
@@ -172,7 +172,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         const m=createMission(cleanSpec);
         ctx.db.prepare('INSERT INTO remote_missions(mission_id,repo,base,branch,code_units,created_session,created_at) VALUES(?,?,?,?,?,?,?)')
           .run(m.id,target.repo,target.base,missionBranch(m.id),JSON.stringify(codeUnits),session.sessionId,m.createdAt);
-        recordActivity(ctx.db,{sessionId:session.sessionId,missionId:m.id,kind:'MISSION_WRITE',tool:'zana_mission_init'});
+        recordActivity(ctx.db,{sessionId:session.sessionId,clientId:session.clientId,missionId:m.id,kind:'MISSION_WRITE',tool:'zana_mission_init'});
         return m;
       });
       return {...publicStatus(mission),github:{repo:target.repo,base:target.base,branch:missionBranch(mission.id)},codeUnits};
@@ -238,6 +238,11 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       await transact((existing,txc)=>{
         if(existing?.id!==id)throw new Error('MISSION_NOT_ACTIVE: mission '+id+' is not the active mission');
         guard(txc.db,existing,session,'zana_correction_start');
+        // Revalidate inside the mission transaction: the pre-check above ran
+        // before it, and a newer ticket may have appeared meanwhile (TOCTOU).
+        const now=review.latestIn(txc.db,id);
+        if(now?.ticket_id!==last.ticket_id||now.state!=='FINALIZED'||now.verdict!=='REQUEST_CHANGES')
+          throw new Error('NO_CHANGES_REQUESTED: the latest ticket of mission '+id+' changed and did not end in REQUEST_CHANGES');
         if((existing.status||'ACTIVE')!=='ACTIVE')throw new Error('MISSION_NOT_ACTIVE: mission '+id+' is '+existing.status);
         if(existing.units.some(u=>u.id===unitId))throw new Error('CORRECTION_EXISTS: unit '+unitId+' already corrects that review');
         if((existing.reviewCount||0)>=budgetOf(existing).maxReviewRounds)
@@ -331,7 +336,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         return {server:gateway.status(),catalogVersion:CATALOG.version,tools:tools.map(describe),problems:liveProblems(tools)};
       }
       const reviewer=id?await rr(db=>Boolean(db&&sessionReviews(db,session.sessionId,id))):false;
-      const result=await gateway.call({host:session.host,sessionId:session.sessionId,role:reviewer?'reviewer':'author'},
+      const result=await gateway.call({host:session.host,sessionId:session.sessionId,clientId:session.clientId,role:reviewer?'reviewer':'author'},
         operation,args,{missionId:id??null});
       return {passthrough:result};
     },

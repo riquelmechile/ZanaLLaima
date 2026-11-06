@@ -6,12 +6,12 @@ import {pathToFileURL} from 'node:url';
 import {operations} from './actions.mjs';
 import {applyOperatorAction,storageRestoreAbort,storageCleanupArtifacts,storageAdoptQuarantine,readState,databasePath,statePath} from './store.mjs';
 
-const usage='Commands: remote-serve, remote-enroll, remote-enroll-close, remote-clients, remote-revoke, remote-audit, remote-merge, remote-tickets, remote-ticket-abandon, operator-import, heartbeat, recover-expired, retry, cancel, close, archive, mission-history, authorization-status, storage-status, storage-history, storage-reviews, storage-migrate, storage-backup, storage-restore, storage-restore-abort, storage-cleanup-artifacts, storage-adopt-quarantine, reconcile-view, profile, init, status, next, start, complete, apply-write, review-open, review-next, review-start, review-submit, review-check, review-status, delivery-check';
+const usage='Commands: remote-serve, remote-enroll, remote-enroll-close, remote-clients, remote-revoke, remote-audit, remote-merge, remote-tickets, remote-ticket-abandon, remote-health, operator-import, heartbeat, recover-expired, retry, cancel, close, archive, mission-history, authorization-status, storage-status, storage-history, storage-reviews, storage-migrate, storage-backup, storage-restore, storage-restore-abort, storage-cleanup-artifacts, storage-adopt-quarantine, reconcile-view, profile, init, status, next, start, complete, apply-write, review-open, review-next, review-start, review-submit, review-check, review-status, delivery-check';
 const readJson=async path=>JSON.parse(await readFile(path,'utf8'));
 const readText=async path=>readFile(path,'utf8');
 const noArgs=new Set(['status','profile','review-status','review-check','storage-status',
   'storage-migrate','storage-restore-abort','reconcile-view','authorization-status','recover-expired','cancel','close','archive',
-  'remote-serve','remote-enroll-close','remote-clients']);
+  'remote-serve','remote-enroll-close','remote-clients','remote-health']);
 
 // The server environment, loaded explicitly: --env-file <path>, else
 // ZANA_ENV_FILE, else /home/<user>/.config/zanallaima/zanallaima.env when it
@@ -43,8 +43,11 @@ export function loadServerEnv(args,env=process.env){
     file=join(env.HOME,'.config','zanallaima','zanallaima.env');explicit=false;
   }
   if(!file)return null;
-  for(const [k,v] of Object.entries(parseEnvFile(readFileSync(file,'utf8'))))
+  for(const [k,v] of Object.entries(parseEnvFile(readFileSync(file,'utf8')))){
+    if(!explicit&&env[k]!==undefined&&env[k]!==v&&/^ZANA_(STATE_FILE|OAUTH_DB)$/.test(k))
+      process.stderr.write('Warning: '+k+' from the shell ('+env[k]+') differs from '+file+'; using the shell value. Pass --env-file to use the file.\n');
     if(explicit||env[k]===undefined)env[k]=v;
+  }
   return file;
 }
 const OAUTH_COMMANDS=new Set(['remote-enroll','remote-enroll-close','remote-clients','remote-revoke']);
@@ -164,6 +167,7 @@ async function runRemoteCommand({command,input}){
   const runtime=createRemoteRuntime();
   try{
     if(command==='remote-audit')return {items:await runtime.readAudit(input)};
+    if(command==='remote-health')return runtime.health();
     if(command==='remote-tickets')return {tickets:await runtime.review.list(input.missionId??null)};
     if(command==='remote-ticket-abandon')
       return runtime.review.abandon(input.ticketId,{host:'operator',sessionId:'operator-cli'});

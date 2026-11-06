@@ -37,6 +37,7 @@ export function catalogProblems(catalog=CATALOG){
     if(!['read','write','deny'].includes(t.zana))problems.push(name+': unclassified');
     if(t.zana==='read'&&t.readOnlyHint!==true)problems.push(name+': read without readOnlyHint');
     if(t.zana==='write'&&!WRITE_RULES.includes(t.rule))problems.push(name+': unknown write rule '+t.rule);
+    if(t.zana==='write'&&!ALLOWED_KEYS[name])problems.push(name+': write without ALLOWED_KEYS');
     if(t.zana==='deny'&&!t.reason)problems.push(name+': deny without reason');
   }
   return problems;
@@ -153,6 +154,8 @@ export function createGitHubPolicy({deps,config,catalog=CATALOG}){
       return {allowed:true,detail:{class:'read'}};
     }
     if(entry.zana==='deny')return deny('ALWAYS_DENIED',entry.reason);
+    // Fail closed: a write the policy has no exact argument keys for is denied.
+    if(!ALLOWED_KEYS[tool])return deny('UNCLASSIFIED',tool+' has no ALLOWED_KEYS entry; denied');
     if(typeof missionId!=='string'||!missionId)return deny('MISSION_REQUIRED','writes must name their missionId');
     if(!args||typeof args!=='object'||Array.isArray(args))return deny('INVALID_ARGUMENTS','arguments must be an object');
     const ctx=await deps.missionContext(missionId,caller.sessionId);

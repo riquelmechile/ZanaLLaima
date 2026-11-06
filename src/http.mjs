@@ -125,8 +125,15 @@ export function createHttpServer({runtime,oauth,settings,log=console}){
       const path=(req.url??'').split('?')[0];
       if(req.method==='GET'&&path==='/health'){
         const h=await runtime.health();
+        // Through the tunnel only status, version and counts; the detail (error
+        // text, paths, tokens configured) only on loopback without a proxy header.
+        const peer=String(req.socket?.remoteAddress??'').replace(/^::ffff:/,'');
+        const local=['127.0.0.1','::1'].includes(peer)&&!req.headers['cf-connecting-ip']&&
+          ['127.0.0.1','localhost'].includes(hostname(req.headers.host));
+        const body=local?{...h,name:'zana-llaima',version:packageVersion,mode:'remote',sessions:sessions.size}
+          :{status:h.status,version:packageVersion,sessions:sessions.size,staleTickets:h.staleTickets};
         res.writeHead(h.status==='ok'?200:503,{'content-type':'application/json','cache-control':'no-store'});
-        res.end(JSON.stringify({...h,name:'zana-llaima',version:packageVersion,mode:'remote',sessions:sessions.size}));
+        res.end(JSON.stringify(body));
         return;
       }
       const host=hostname(req.headers.host);

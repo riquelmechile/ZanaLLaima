@@ -41,7 +41,7 @@ chmod 600 /home/<usuario>/.config/zanallaima/zanallaima.env
 
 Completar también `ZANA_STATE_FILE` (por ejemplo `/home/<usuario>/.local/share/zanallaima/state.json`), `ZANA_OAUTH_DB` y `ZANA_GITHUB_REPOS` (`owner/repo` separados por coma). **Rutas absolutas, sin `~`**: systemd no expande `~` en el archivo de entorno, y el servidor y la CLI se niegan a arrancar con rutas relativas.
 
-Independencia verificable entre cuentas (opcional): `ZANA_DISTINCT_REVIEWER_CLIENT=true` exige que la conversación revisora use otra conexión OAuth que la autora (otra cuenta de ChatGPT, por ejemplo GPT-B, dada de alta en la ventana con otra etiqueta de host). Por defecto es `false`: el mismo GPT en una conversación nueva.
+Independencia verificable entre clientes (opcional): `ZANA_DISTINCT_REVIEWER_CLIENT=true` exige que la conversación revisora use **otro cliente OAuth registrado** que el que pidió el ticket y que todos los que actuaron en la misión (creadora, unidades, escrituras). Que sea otra cuenta de ChatGPT depende de que el operador solo dé de alta cuentas distintas (por ejemplo GPT-B, en la ventana con otra etiqueta de host): ZanaLLaima ve clientes OAuth, no cuentas. Por defecto es `false`: el mismo GPT en una conversación nueva.
 
 ## 3. Servicio `systemd --user`
 
@@ -54,7 +54,9 @@ loginctl enable-linger "$USER"
 curl -4 -s http://localhost:8787/health
 ```
 
-`/health` responde `200` con `{"status":"ok","name":"zana-llaima","mode":"remote","schemaVersion":7,"reviewerToken":"configured","staleTickets":0,...}`, o `503` con `"status":"degraded"` y `problems` si la DB no abre o falta un token. `staleTickets` cuenta tickets reclamados más viejos que el TTL. El proceso escucha solo en loopback IPv4; por eso `curl -4`.
+Con `nvm` (u otro gestor de versiones) `/usr/bin/env node` puede no encontrar Node, porque systemd no carga el perfil del shell. En ese caso poner en `ExecStart` la ruta absoluta que da `command -v node`, por ejemplo `ExecStart=/home/<usuario>/.nvm/versions/node/v22.23.4/bin/node src/http.mjs`, y actualizarla al cambiar de versión.
+
+`/health` local (loopback, sin encabezado del túnel) responde `200` con `{"status":"ok","name":"zana-llaima","mode":"remote","schemaVersion":7,"reviewerToken":"configured","staleTickets":0,...}`, o `503` con `"status":"degraded"` y `problems` (texto con rutas) si la DB no abre o falta un token. Por el túnel solo se exponen `status`, `version`, `sessions` y `staleTickets`, con el mismo código HTTP; el detalle queda en el `/health` local, en los logs y en `node src/cli.mjs remote-health`. `staleTickets` cuenta tickets reclamados más viejos que el TTL. El proceso escucha solo en loopback IPv4; por eso `curl -4`.
 
 ## 4. Cloudflare tunnel
 
@@ -62,7 +64,7 @@ Agregar a la configuración del túnel (ejemplo en `deploy/cloudflared-zanallaim
 
 ## 5. CLI del operador
 
-Todos los comandos `node src/cli.mjs ...` cargan el entorno del servidor de forma explícita: `--env-file <ruta>`, o `ZANA_ENV_FILE`, o por defecto `/home/<usuario>/.config/zanallaima/zanallaima.env` si existe (el archivo por defecto solo completa variables no definidas; uno explícito manda). Los `remote-*` exigen `ZANA_STATE_FILE` y `ZANA_OAUTH_DB` absolutos y que las DB ya existan: nunca crean una DB nueva por error. Ejemplo: `node src/cli.mjs remote-audit 50 --env-file /home/<usuario>/.config/zanallaima/zanallaima.env`.
+Todos los comandos `node src/cli.mjs ...` cargan el entorno del servidor de forma explícita: `--env-file <ruta>`, o `ZANA_ENV_FILE`, o por defecto `/home/<usuario>/.config/zanallaima/zanallaima.env` si existe (el archivo por defecto solo completa variables no definidas; uno explícito manda). Cada `remote-*` exige solo la DB que usa, con ruta absoluta y ya existente (nunca crea una DB nueva por error): `remote-enroll`, `remote-enroll-close`, `remote-clients` y `remote-revoke` usan `ZANA_OAUTH_DB`; `remote-audit`, `remote-health`, `remote-tickets`, `remote-ticket-abandon` y `remote-merge` usan `ZANA_STATE_FILE`. El archivo por defecto avisa si `ZANA_STATE_FILE` o `ZANA_OAUTH_DB` del shell difieren de los suyos. Ejemplo: `node src/cli.mjs remote-audit 50 --env-file /home/<usuario>/.config/zanallaima/zanallaima.env`.
 
 ## 6. Alta de las cuentas de Zana (registro cerrado)
 
@@ -79,8 +81,9 @@ Cada repo de `ZANA_GITHUB_REPOS` necesita el workflow de checks (`docs/checks-wo
 ## 8. Operación
 
 - Auditoría: `node src/cli.mjs remote-audit [limite] [missionId]`.
-- Tickets: `node src/cli.mjs remote-tickets [missionId]` y `node src/cli.mjs remote-ticket-abandon <ticketId>` (queda auditado). Un ticket reclamado y no finalizado pasa solo a `ABANDONED` tras `ZANA_TICKET_CLAIM_TTL_MINUTES`.
-- **Reinicios:** las sesiones MCP viven en memoria. Un reinicio del servicio (o una sesión ociosa más de 2 h) corta los flujos: ChatGPT abre una sesión nueva. La autora recupera su unidad con `zana_session_rebind` (sin consumir intento); una revisora a medio camino no puede seguir con la sesión nueva (`NOT_REVIEWER`) y el ticket queda para el TTL o para `remote-ticket-abandon`; el autor pide uno nuevo.
+- Salud con detalle: `node src/cli.mjs remote-health`.
+- Tickets: `node src/cli.mjs remote-tickets [missionId]` y `node src/cli.mjs remote-ticket-abandon <ticketId>` (queda auditado, categoría `operator`). Un ticket reclamado y no finalizado pasa solo a `ABANDONED` tras `ZANA_TICKET_CLAIM_TTL_MINUTES`. Si ese ticket (o cualquier otro, en cualquier estado) pidió cambios sobre un SHA (veredicto `REQUEST_CHANGES` o un lente con BLOCKER/CRITICAL), el autor no puede pedir otro ticket sobre ese SHA (`CHANGES_REQUESTED_SAME_SHA`): esperar el TTL no lo libera. Solo `remote-ticket-abandon` lo libera, y solo para un ticket no finalizado; úsalo solo si el bloqueo fue un error de la revisora.
+- **Reinicios:** las sesiones MCP viven en memoria. Un reinicio del servicio (o una sesión ociosa más de 2 h) corta los flujos: ChatGPT abre una sesión nueva. Como la autora completa su unidad **antes** de pedir el ticket, la espera de la review no depende de ningún lease. Si se corta a mitad de una unidad: con el lease vigente, `zana_session_rebind` la pasa a la sesión nueva sin consumir intento; con el lease vencido, `zana_recover_expired` → `zana_unit_retry` → `zana_start_batch`. Una revisora a medio camino no puede seguir con la sesión nueva (`NOT_REVIEWER`): el ticket queda para el TTL del claim o para `remote-ticket-abandon`, y el autor pide uno nuevo (si ese ticket ya tenía un BLOCKER sobre el SHA, rige la regla de arriba).
 - Plazos: cada tool tiene un tope total de `ZANA_TOOL_DEADLINE_MS` (45 s por defecto) y la REST de GitHub un circuit breaker compartido (5 fallos seguidos lo abren 30 s).
 - Merge del operador: `node src/cli.mjs remote-merge <missionId>` (mismas condiciones que `zana_merge`).
 - Respaldo y restore de la DB de misiones: igual que en stdio (`docs/sqlite-storage.md`). El ledger OAuth (`ZANA_OAUTH_DB`) es un archivo aparte: respaldarlo junto a la DB; un restore de misiones no lo toca.

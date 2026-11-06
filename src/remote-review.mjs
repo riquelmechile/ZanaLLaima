@@ -156,6 +156,9 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
     catch(error){
       if(/response too large/.test(String(error?.message)))
         fail('DIFF_TOO_LARGE','el diff pasa los 2 MB que entrega GitHub y el tope es '+config.reviewMaxDiffBytes+'; divide el cambio en misiones secuenciales');
+      // GitHub does not render a diff of more than 300 files (or too big): 406 or 422.
+      if([406,422].includes(error?.status)&&(error.codes.includes('too_large')||/diff exceeded/i.test(error.message)))
+        fail('DIFF_TOO_LARGE','GitHub no entrega el diff (HTTP '+error.status+': más de 300 archivos o demasiado grande); divide el cambio en misiones secuenciales');
       throw error;
     }
     // bytes is the size GitHub sent, before redaction, so redaction cannot shrink it under the cap.

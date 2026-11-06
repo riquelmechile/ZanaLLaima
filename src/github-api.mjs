@@ -21,7 +21,8 @@ export function breakerFor(origin){
   return BREAKERS.get(origin);
 }
 export class GitHubApiError extends Error{
-  constructor(status,message){super(message);this.name='GitHubApiError';this.status=status;}
+  // codes: the errors[].code of GitHub's answer (for example too_large).
+  constructor(status,message,codes=[]){super(message);this.name='GitHubApiError';this.status=status;this.codes=codes;}
 }
 export function validRepo(repo){
   return typeof repo==='string'&&REPO.test(repo)&&!repo.split('/').some(p=>p==='.'||p==='..');
@@ -75,9 +76,9 @@ export class GitHubApi{
     if(res.status>=500||res.status===429||rateLimited)failed();else{breaker.failures=0;breaker.openUntil=0;}
     if(text.length>MAX_BYTES)throw new GitHubApiError(502,'GitHub response too large');
     if(!res.ok){
-      let message='';
-      try{message=JSON.parse(text).message??'';}catch{message='';}
-      throw new GitHubApiError(res.status,'GitHub HTTP '+res.status+(message?': '+clean(message,this.secrets()):''));
+      let message='',codes=[];
+      try{const data=JSON.parse(text);message=data.message??'';codes=Array.isArray(data.errors)?data.errors.map(e=>String(e?.code)):[];}catch{message='';}
+      throw new GitHubApiError(res.status,'GitHub HTTP '+res.status+(message?': '+clean(message,this.secrets()):''),codes);
     }
     // 'measured' also returns the size of what GitHub sent, before redaction.
     if(raw==='measured')return {text:redactText(text,this.secrets()),bytes:Buffer.byteLength(text,'utf8')};

@@ -5,7 +5,7 @@ import {remoteFixture,readDiff,sha} from './helpers/remote-fixture.mjs';
 import {remoteWrite} from '../src/store.mjs';
 
 const clean=lens=>({lens,findings:[],evidence:['read every page']});
-const blocker={lens:'risk',findings:[{severity:'BLOCKER',location:'src/sum.mjs:3',evidence:'returns a-b'}],evidence:['diff']};
+const blocker={lens:'risk',findings:[{severity:'BLOCKER',location:'src/sum.mjs:3',evidence:'returns a-b',origin:'INTRODUCED'}],evidence:['diff']};
 async function review(f,ticket,s,risk=clean('risk')){
   assert.equal((await f.call('zana_review_claim',{ticket},s)).state,'CLAIMED');
   await readDiff(f.call,ticket,s);

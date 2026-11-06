@@ -15,6 +15,8 @@ import {lineBudget,lineLimit,EXTEND_MAX} from './line-budget.mjs';
 export const LENSES=Object.freeze(['risk','readability','reliability','resilience']);
 export const SEVERITIES=Object.freeze(['BLOCKER','CRITICAL','WARNING','SUGGESTION']);
 export const EXECUTIONS=Object.freeze(['PARALLEL_SUBAGENTS','SEQUENTIAL_SAME_CONVERSATION']);
+// Causal origin of a finding: only PREEXISTING (with proof from the base) stops blocking.
+export const ORIGINS=Object.freeze(['INTRODUCED','ACTIVATED','WORSENED','PREEXISTING','UNKNOWN']);
 const LOCATION=/^[^\s:][^:\n]{0,239}:\d{1,7}(?:-\d{1,7})?$/;
 const CODE=/^ZR-[A-Z2-7]{4}-[A-Z2-7]{4}-[A-Z2-7]{4}-[A-Z2-7]{4}$/;
 const MAX_BODY=60_000;
@@ -39,6 +41,8 @@ export function validateLens(lens,findings,evidence){
     if(typeof f.location!=='string'||!LOCATION.test(f.location))fail('MISSING_LOCATION','finding '+i+' needs location file:line');
     if(typeof f.evidence!=='string'||!f.evidence.trim()||f.evidence.length>4000)fail('MISSING_EVIDENCE','finding '+i+' needs concrete evidence');
     if(f.title!==undefined&&(typeof f.title!=='string'||f.title.length>300))fail('INVALID_FINDING','finding '+i+' title too long');
+    if(!ORIGINS.includes(f.origin))fail('INVALID_FINDING','finding '+i+' needs origin '+ORIGINS.join('|'));
+    if(f.proof!==undefined&&(typeof f.proof!=='string'||f.proof.length>2000))fail('INVALID_FINDING','finding '+i+' proof must be a string of at most 2000 characters');
   });
   if(!Array.isArray(evidence)||!evidence.length||evidence.length>20||
      evidence.some(e=>typeof e!=='string'||!e.trim()||e.length>2000))
@@ -76,22 +80,35 @@ export function diffManifest(pages){
   }
   return {totalPages:pages.length,pageBytes:DIFF_PAGE_BYTES,files};
 }
-const blocking=findings=>findings.some(f=>f.severity==='BLOCKER'||f.severity==='CRITICAL');
+// A proof is valid when it cites at least one file:line (same format as location).
+export const validProof=proof=>typeof proof==='string'&&
+  proof.split(/[\s`'"()[\],;]+/).some(t=>LOCATION.test(t.replace(/[.:]+$/,'')));
+// Stored lenses without origin count as UNKNOWN: they keep blocking.
+const preexisting=f=>f.origin==='PREEXISTING';
+const blocking=findings=>findings.some(f=>(f.severity==='BLOCKER'||f.severity==='CRITICAL')&&!preexisting(f));
+export const lensDigest=({ticketId,sha,lens,findings,evidence})=>hash(canonicalJson({ticket:ticketId,sha,lens,findings,evidence}));
 
 export function reviewBody({code,ticket,lenses,execution,event}){
-  const count=(l,s)=>l.findings.filter(f=>f.severity===s).length;
+  const count=(l,s)=>l.findings.filter(f=>f.severity===s&&!preexisting(f)).length;
+  const origin=f=>' Origen: `'+(f.origin??'UNKNOWN')+'`.';
   const lines=['## ZanaLLaima 4R','','<!-- zana-ticket:'+ticket.ticket_id+' -->',
     'Ticket `'+code+'` · PR #'+ticket.pr_number+' · SHA `'+ticket.sha+'`',
     'Ejecución declarada por el anfitrión: '+(execution==='PARALLEL_SUBAGENTS'?
       '4 subagentes en paralelo con contexto fresco':'4 lentes en secuencia en la misma conversación revisora'),
-    '','| Lente | BLOCKER | CRITICAL | WARNING | SUGGESTION | hash |','| --- | --- | --- | --- | --- | --- |',
-    ...lenses.map(l=>'| '+l.lens+' | '+SEVERITIES.map(s=>count(l,s)).join(' | ')+' | `'+l.hash.slice(0,16)+'` |'),''];
+    '','| Lente | BLOCKER | CRITICAL | WARNING | SUGGESTION | preexistentes | hash |','| --- | --- | --- | --- | --- | --- | --- |',
+    ...lenses.map(l=>'| '+l.lens+' | '+SEVERITIES.map(s=>count(l,s)).join(' | ')+' | '+l.findings.filter(preexisting).length+
+      ' | `'+l.hash.slice(0,16)+'` |'),''];
+  const item=f=>'- **'+f.severity+'** `'+f.location+'`'+(f.title?' — '+f.title:'')+'.';
   for(const l of lenses){
+    const own=l.findings.filter(f=>!preexisting(f));
     lines.push('### '+l.lens);
-    if(!l.findings.length)lines.push('Sin hallazgos. Evidencia: '+l.evidence.join('; '));
-    for(const f of l.findings)lines.push('- **'+f.severity+'** `'+f.location+'`'+(f.title?' — '+f.title:'')+'. Evidencia: '+f.evidence);
+    if(!own.length)lines.push('Sin hallazgos'+(l.findings.length?' del PR':'')+'. Evidencia: '+l.evidence.join('; '));
+    for(const f of own)lines.push(item(f)+origin(f)+' Evidencia: '+f.evidence);
     lines.push('');
   }
+  const old=lenses.flatMap(l=>l.findings.filter(preexisting).map(f=>({...f,lens:l.lens})));
+  if(old.length)lines.push('### Pendientes preexistentes (no bloquean)',
+    ...old.map(f=>item(f)+' Lente: '+f.lens+'. Evidencia: '+f.evidence+'. Prueba en la base: '+f.proof),'');
   lines.push('Veredicto: **'+event+'**.','',
     'Prueba: sesión revisora distinta de la autora, sin escrituras en la misión, creada después del ticket, sobre este SHA exacto con CI verde y 4 lentes con evidencia. No prueba el modelo ni el contexto fresco de los subagentes (palabra del anfitrión).');
   const body=redactText(lines.join('\n'),envSecrets());
@@ -290,7 +307,7 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
       let budget=null;
       try{budget=t.line_budget?JSON.parse(t.line_budget):null;}catch{budget={error:'UNREADABLE'};}
       const verdict=await checks.verdict(t.repo,t.sha);
-      return {ticket:code,state:'CLAIMED',missionId:t.mission_id,repo:t.repo,pullNumber:t.pr_number,sha:t.sha,
+      return {ticket:code,state:'CLAIMED',missionId:t.mission_id,repo:t.repo,pullNumber:t.pr_number,sha:t.sha,base:ctx.base,
         spec:{objective:ctx.objective,units:ctx.units},diffManifest:manifest,diffBytes,lineBudget:budget,
         ...(manifestError?{diffManifestError:manifestError+'; zana_review_diff retries'}:{}),checks:verdict,
         lenses:LENSES,skills:['review-discipline',...LENSES.map(l=>'review-'+l)],
@@ -320,12 +337,19 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
         if(t.reviewer_session!==session.sessionId)fail('NOT_REVIEWER','only the session that claimed the ticket may submit lenses');
         if(db.prepare('SELECT 1 FROM review_receipts WHERE review_id=? AND lens_id=?').get(t.ticket_id,lens))
           fail('LENS_ALREADY_SUBMITTED','lens '+lens+' was already submitted');
-        const clean=findings.map(f=>({severity:f.severity,location:f.location,evidence:f.evidence,...(f.title?{title:f.title}:{})}));
-        const lensHash=hash(canonicalJson({ticket:t.ticket_id,sha:t.sha,lens,findings:clean,evidence}));
+        // A PREEXISTING without a file:line proof is stored as UNKNOWN (it blocks).
+        const originDowngraded=[];
+        const clean=findings.map((f,i)=>{
+          const keep=f.origin!=='PREEXISTING'||validProof(f.proof);
+          if(!keep)originDowngraded.push(i);
+          return {severity:f.severity,location:f.location,evidence:f.evidence,...(f.title?{title:f.title}:{}),
+            origin:keep?f.origin:'UNKNOWN',...(f.proof!==undefined?{proof:f.proof}:{})};
+        });
+        const lensHash=lensDigest({ticketId:t.ticket_id,sha:t.sha,lens,findings:clean,evidence});
         db.prepare('INSERT INTO review_receipts(review_id,lens_id,token,result,created_at) VALUES(?,?,?,?,?)')
           .run(t.ticket_id,lens,lensHash,JSON.stringify({findings:clean,evidence,submittedAt:nowIso()}),nowIso());
         const done=db.prepare('SELECT lens_id FROM review_receipts WHERE review_id=?').all(t.ticket_id).map(r=>r.lens_id);
-        return {ticket:code,lens,hash:lensHash,blocking:blocking(clean),submitted:done,
+        return {ticket:code,lens,hash:lensHash,blocking:blocking(clean),originDowngraded,submitted:done,
           remaining:LENSES.filter(l=>!done.includes(l))};
       });
     },
@@ -419,7 +443,7 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
           status:{context:'zana/4r',state:statusState},sha:t.sha,lensHashes:Object.fromEntries(ordered.map(l=>[l.lens,l.hash]))};
       });
     },
-    // Live tickets (after expiry) whose submitted lenses carry BLOCKER or CRITICAL.
+    // Live tickets (after expiry) whose submitted lenses carry a non-PREEXISTING BLOCKER or CRITICAL.
     async openBlocking(missionId){
       return remoteWrite(db=>{
         expire(db);

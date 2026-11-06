@@ -19,7 +19,7 @@ import {runCli,loadServerEnv} from '../src/cli.mjs';
 import {pruneRemote,MAX_READ_AUDIT,audit as writeAuditRow} from '../src/remote-state.mjs';
 
 const clean=lens=>({lens,findings:[],evidence:['read every page']});
-const blocker={lens:'risk',findings:[{severity:'BLOCKER',location:'src/sum.mjs:3',evidence:'returns a-b'}],evidence:['diff']};
+const blocker={lens:'risk',findings:[{severity:'BLOCKER',location:'src/sum.mjs:3',evidence:'returns a-b',origin:'INTRODUCED'}],evidence:['diff']};
 const outcome=x=>({success:true,summary:'done on '+x,evidence:['head '+x]});
 const q=(sql,...a)=>remoteRead(db=>db.prepare(sql).all(...a));
 async function claimAndRead(f,ticket,s){

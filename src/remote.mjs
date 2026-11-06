@@ -17,7 +17,7 @@ import {remoteConfig,repoAllowed} from './remote-config.mjs';
 import {DownstreamGateway} from './downstream.mjs';
 import {createGitHubPolicy,CATALOG,liveProblems,missionBranch} from './github-policy.mjs';
 import {createChecks} from './checks.mjs';
-import {createReview,LENSES,SEVERITIES,EXECUTIONS} from './remote-review.mjs';
+import {createReview,LENSES,SEVERITIES,EXECUTIONS,ORIGINS} from './remote-review.mjs';
 import {compactWrite} from './downstream-compact.mjs';
 import {deliveryStatus,mergeMission,ticketView} from './github-delivery.mjs';
 import {listSkills,loadSkill} from './skills.mjs';
@@ -68,10 +68,11 @@ const NEW_TOOLS={
     z.object({missionId:missionId(),lines:z.number().int().min(1).max(EXTEND_MAX),reason:z.string().min(3).max(300)}).strict()],
   zana_review_claim:['Reviewer session (new conversation): claim a ticket; this session becomes read-only on the mission',false,
     z.object({ticket:ticket()}).strict()],
-  zana_review_lens_submit:['Reviewer session: submit one 4R lens with located, evidenced findings',false,
+  zana_review_lens_submit:['Reviewer session: submit one 4R lens with located, evidenced findings; each finding has its causal origin (PREEXISTING needs a proof citing file:line of the base, or it is stored as UNKNOWN)',false,
     z.object({ticket:ticket(),lens:z.enum(LENSES),
       findings:z.array(z.object({severity:z.enum(SEVERITIES),location:z.string().min(1).max(260),
-        evidence:z.string().min(1).max(4000),title:z.string().max(300).optional()}).strict()).max(50),
+        evidence:z.string().min(1).max(4000),title:z.string().max(300).optional(),
+        origin:z.enum(ORIGINS),proof:z.string().max(2000).optional()}).strict()).max(50),
       evidence:z.array(z.string().min(1).max(2000)).min(1).max(20)}).strict()],
   zana_review_diff:['Reviewer session: read one page of the ticket diff (per file, paged); finalize requires every page read',true,
     z.object({ticket:ticket(),page:z.number().int().min(0).max(100000)}).strict()],

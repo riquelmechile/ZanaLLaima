@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {remoteFixture,readDiff,sha} from './helpers/remote-fixture.mjs';
 
 const clean=lens=>({lens,findings:[],evidence:['Read every diff page and the checks']});
-const blocker={lens:'risk',findings:[{severity:'BLOCKER',location:'src/sum.mjs:3',evidence:'returns a-b'}],evidence:['diff']};
+const blocker={lens:'risk',findings:[{severity:'BLOCKER',location:'src/sum.mjs:3',evidence:'returns a-b',origin:'INTRODUCED'}],evidence:['diff']};
 async function review(f,ticket,s,risk=clean('risk'),execution='PARALLEL_SUBAGENTS'){
   const claim=await f.call('zana_review_claim',{ticket},s);
   assert.equal(claim.error,undefined,claim.error);

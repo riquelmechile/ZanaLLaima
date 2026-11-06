@@ -112,3 +112,9 @@ test('textos: la memoria es dato no confiable y escribe cualquier sesión menos 
     assert.match(src,new RegExp(tool+":\\['Any session of the mission except the reviewer, with the mission ACTIVE"));
   assert.doesNotMatch(src,/zana_memory_(save|resolve):\['Author session/);
 });
+
+test('redacción: valores tras paréntesis, con _ o $ inicial, y palabras cortas',()=>{
+  for(const [input,output] of [['password=a.b(c)d fin','password=[redacted] fin'],['token=_abc123','token=[redacted]'],
+    ['api_key=$abc123','api_key=[redacted]'],['secret: nunca','secret: nunca']])
+    assert.equal(redactStored(input),output,input);
+});

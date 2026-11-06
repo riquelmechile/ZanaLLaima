@@ -4,7 +4,7 @@
 
 Esta implementación reemplaza el transporte MCP `stdio` construido manualmente por el **SDK oficial TypeScript v2**, fijado en `@modelcontextprotocol/server@2.4.0`. Usa `@modelcontextprotocol/client@2.4.0` en las pruebas y `zod@4.6.7` para definir y validar los argumentos. El modo **stdio** es local y sin HTTP. El modo **remoto** (Streamable HTTP + OAuth, ver abajo) sirve a la app de ChatGPT. Ninguno llama a proveedores de inferencia.
 
-El SDK soporta la especificación MCP 2026-07-28 y negociación con clientes compatibles con versiones anteriores. En stdio el catálogo tiene **24 herramientas**, incluyendo `zana_capability_status`; en remoto tiene 25 (tabla abajo). La conexión real con ChatGPT la ejecuta el operador (`docs/host-e2e-remote.md`).
+El SDK soporta la especificación MCP 2026-07-28 y negociación con clientes compatibles con versiones anteriores. En stdio el catálogo tiene **24 herramientas**, incluyendo `zana_capability_status`; en remoto tiene 29 (tabla abajo). La conexión real con ChatGPT la ejecuta el operador (`docs/host-e2e-remote.md`).
 
 Fuentes normativas del SDK:
 - https://ts.sdk.modelcontextprotocol.io/v2/
@@ -68,23 +68,30 @@ No existe todavía una prueba de una cuenta ChatGPT real, ni evidencia de modelo
 | `zana_mission_init` | sí | sí | En remoto exige `github: {repo, base}`, unidades `READ` y `code: true` en las que cambian código |
 | `zana_mission_status`, `zana_next_batch`, `zana_mission_history` | sí | sí | |
 | `zana_start_batch`, `zana_unit_heartbeat`, `zana_recover_expired`, `zana_unit_retry`, `zana_mission_cancel`, `zana_mission_close` | sí | sí | En remoto la unidad queda atada a la sesión; una sesión revisora no puede usarlas |
-| `zana_complete_unit` | sí | sí | En remoto una unidad `code` exige check verde sobre el head actual de la rama |
+| `zana_complete_unit` | sí | sí | En remoto una unidad `code` exige check verde sobre el head actual de la rama, que se vuelve a leer después de los checks (`HEAD_MOVED`) |
 | `zana_apply_write` | sí | **no** | Congelada (ZL-004) |
 | `zana_review_open`, `zana_review_status`, `zana_review_next`, `zana_review_start`, `zana_review_submit`, `zana_review_check` | sí | **no** | Dependen de `git-evidence` local, congelado |
 | `zana_storage_status`, `zana_storage_history`, `zana_storage_reviews`, `zana_permission_status` | sí | **no** | Administración local: CLI del operador en el servidor |
 | `zana_session_status` | no | sí | Sesión, host, `createdAt` y rol en la misión activa |
 | `zana_skill_list`, `zana_skill_load` | no | sí | Skills de `skills/` |
 | `zana_checks_start`, `zana_checks_status` | no | sí | Checks en GitHub Actions por SHA exacto |
-| `zana_review_request`, `zana_review_claim`, `zana_review_lens_submit`, `zana_review_finalize` | no | sí | Ticket, conversación nueva y cuenta revisora |
+| `zana_review_request`, `zana_review_claim`, `zana_review_diff`, `zana_review_lens_submit`, `zana_review_finalize` | no | sí | Ticket, conversación nueva, diff paginado completo y cuenta revisora |
+| `zana_correction_start` | no | sí | Agrega una unidad de corrección tras `REQUEST_CHANGES` |
+| `zana_session_rebind` | no | sí | Pasa una unidad RUNNING a la sesión actual (reinicio o sesión nueva) sin consumir intento |
+| `zana_mission_archive` | no | sí | Archiva una misión `CLOSED` o `CANCELLED` para iniciar otra |
 | `zana_delivery_status` | no | sí | Solo lectura |
 | `zana_merge` | no | sí | Solo con todo verde sobre un mismo head; `ZANA_MERGE_ENABLED=false` lo apaga |
 | `zana_ds_github` | no | sí | Router del GitHub MCP oficial, ver `docs/downstream-github.md` |
 
-Total: 24 en stdio y 25 en remoto. La restauración, la adopción de cuarentenas, la ventana de alta OAuth, la revocación de clientes, la auditoría (`remote-audit`) y el merge del operador (`remote-merge`) son solo CLI en el servidor.
+Total: 24 en stdio y 29 en remoto. La restauración, la adopción de cuarentenas, la ventana de alta OAuth, la revocación de clientes, la auditoría (`remote-audit`) y el merge del operador (`remote-merge`) son solo CLI en el servidor.
+
+### Plazos
+
+Cada tool remota tiene un plazo total (`ZANA_TOOL_DEADLINE_MS`, 45 s por defecto). Si se excede responde `TOOL_DEADLINE`: la operación puede terminar igual, así que hay que leer el estado antes de reintentar. `zana_checks_status` y `zana_delivery_status` reparten ese plazo entre sus lecturas y devuelven `partial` con lo que no alcanzó (lo faltante nunca cuenta como verde); los logs de jobs fallidos tienen su propio presupuesto (10 s). La REST de GitHub tiene un circuit breaker compartido por los tokens autor y revisor: 5 fallos seguidos (red, 5xx o 429) lo abren 30 s.
 
 ### Auditoría
 
-Cada llamada a una tool remota y cada llamada al downstream queda en `remote_audit` (SQLite v7): host, sesión, tool, misión, resultado y HMAC-SHA256 de los argumentos con una llave guardada en la DB. Nunca se guardan los argumentos ni un token; `tests/remote-http.test.mjs` y `tests/remote-downstream.test.mjs` comprueban la redacción.
+Cada llamada a una tool remota y cada llamada al downstream queda en `remote_audit` (SQLite v7): host, sesión, tool, misión, resultado y HMAC-SHA256 de los argumentos con una llave guardada en la DB. Cada fila tiene categoría (`read`, `write`, `refused`, `merge`, `review`, `operator`). Las lecturas son una ventana de las 5000 más recientes; el resto se guarda 365 días. La actividad de misiones no activas se borra a los 90 días, las sesiones inactivas a los 30, los checks a los 30 y los tickets terminales a los 180. Nunca se guardan los argumentos ni un token; `tests/remote-http.test.mjs` y `tests/remote-downstream.test.mjs` comprueban la redacción.
 
 ## Limitaciones y siguientes gates
 

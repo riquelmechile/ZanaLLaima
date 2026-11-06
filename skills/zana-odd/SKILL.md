@@ -1,44 +1,58 @@
 ---
 name: zana-odd
-description: Flujo del autor en ZanaLLaima remoto — misión, unidades, rama zana/<missionId>, commits por el downstream de GitHub, checks en Actions hasta verde, PR y ticket de revisión.
+description: Flujo del autor en ZanaLLaima remoto — misión, unidad de código RUNNING hasta la aprobación, rama zana/<missionId>, commits por el downstream de GitHub, checks en Actions hasta verde, PR, ticket, corrección y merge.
 ---
 
 # zana-odd: flujo del autor
 
-Eres la conversación **autora**. Escribes en GitHub solo a través de `zana_ds_github`, solo en la rama de tu misión, y los tests corren en GitHub Actions. No tienes shell: la verdad es el SHA en GitHub y sus checks.
+Eres la conversación **autora**. Escribes en GitHub solo con `zana_ds_github`, solo en la rama de tu misión y solo mientras tu sesión tiene una unidad `RUNNING`. Los tests corren en GitHub Actions. No tienes shell: la verdad es el SHA en GitHub y sus checks.
 
 ## 1. Misión
 
-1. `zana_session_status` para ver tu sesión. `zana_mission_status` para ver si hay una misión activa; no la reemplaces.
-2. `zana_mission_init` con `spec` (objetivo, unidades, presupuesto) y `github: {repo, base}`. Las unidades son `READ`; marca `code: true` las que cambian código. Encadena las unidades de código con `dependsOn` para que no escriban la misma rama en paralelo.
-3. La rama de la misión es siempre `zana/<missionId>`.
+1. `zana_session_status` y `zana_mission_status`. Si hay una misión activa, no la reemplaces. Si está `CLOSED` o `CANCELLED`, `zana_mission_archive` libera el slot.
+2. `zana_mission_init` con `spec` y `github`. Ejemplo exacto:
 
-## 2. Unidades
+```json
+{"spec":{"objective":"Agregar sum(a,b) con su test","budget":{"maxLeaseSeconds":3600},
+  "units":[{"id":"code","effect":"READ","code":true,"instruction":"Implementar sum y su test"}]},
+ "github":{"repo":"riquelmechile/zanallaima-sandbox","base":"main"}}
+```
+
+   Las unidades son `READ`; `code: true` marca las que cambian código. Encadena las de código con `dependsOn` para no escribir la misma rama en paralelo. La rama es siempre `zana/<missionId>`.
+
+## 2. La unidad de código queda RUNNING hasta la aprobación
 
 1. `zana_next_batch` y `zana_start_batch`. Guarda `unitId`, `token`, `leaseGeneration` y `expiresAt`.
-2. Mientras la unidad esté `RUNNING` y sea de tu sesión, el downstream acepta tus escrituras en la rama de la misión. Renueva con `zana_unit_heartbeat` si la tarea es larga.
+2. Mantén la unidad viva con `zana_unit_heartbeat` antes de `expiresAt` durante todo el trabajo: commits, checks, PR, ticket y la espera de la review. **No la completes antes de que la review apruebe**: completada, ya no puedes escribir (`NO_RUNNING_UNIT`).
+3. Si el servidor se reinició o tu conversación tiene otra sesión MCP, recupera la unidad con `zana_session_rebind` (`missionId`, `unitId`, `token`, `leaseGeneration`). No consume intento. Si el lease venció, `zana_recover_expired` y `zana_unit_retry`, que sí consume intento.
 
 ## 3. Rama y commits por el downstream
 
-1. `zana_ds_github {"operation":"index"}` lista las tools y su clase (`read`, `write`, `deny`).
-2. Crea la rama una vez: `create_branch` con `branch: "zana/<missionId>"` y `from_branch` = la base de la misión. Pasa siempre `missionId`.
-3. Escribe con `create_or_update_file`, `delete_file` o `push_files` sobre `zana/<missionId>`. Nunca en la rama default ni en `.github/workflows/**`: el servidor lo rechaza.
-4. Cada rechazo trae un motivo legible (`NO_RUNNING_UNIT`, `OUTSIDE_MISSION_BRANCH`, `PROTECTED_PATH`, `ALWAYS_DENIED`...). No lo rodees con otra tool: corrige la causa.
+1. `zana_ds_github {"operation":"index"}` lista las tools; mira el campo `zana` (`read`, `write`, `deny`), no `cls`.
+2. En cada escritura pasa `missionId` en el nivel superior, al lado de `operation` y `arguments`:
+
+```json
+{"operation":"create_branch","missionId":"<missionId>",
+ "arguments":{"owner":"riquelmechile","repo":"zanallaima-sandbox","branch":"zana/<missionId>","from_branch":"main"}}
+```
+
+3. Escribe con `create_or_update_file`, `delete_file` o `push_files` sobre `zana/<missionId>`. Solo las claves del schema de cada tool (ver `docs/downstream-github.md`); nada de `.github/workflows/**`, `.git/`, `%`, `?` ni `#` en las rutas.
+4. Cada rechazo trae un código legible. No lo rodees con otra tool: corrige la causa.
 
 ## 4. Checks hasta verde
 
-1. `zana_checks_start(missionId)` dispara el workflow de checks sobre el head de la rama (o asocia los runs del push). No bloquea: devuelve `checkId` y `sha`.
-2. `zana_checks_status(checkId)` hasta `SUCCESS`. Si es `FAILURE`, lee las líneas finales del log, corrige con un commit nuevo y vuelve a empezar desde `zana_checks_start`.
-3. Una unidad `code: true` **no se completa** sin un check verde sobre el head actual de la rama. Completa con `zana_complete_unit` y evidencia real (SHA, checkId, nombres de los checks).
+1. `zana_checks_start(missionId)`: no bloquea, devuelve `checkId` y `sha`.
+2. `zana_checks_status(checkId)` hasta `SUCCESS`. Con `FAILURE` lee las líneas finales del log, corrige con otro commit y vuelve a `zana_checks_start`. Si responde `partial`, vuelve a consultar.
 
-## 5. PR y ticket de revisión
+## 5. PR y ticket
 
-1. Abre el PR con `create_pull_request` (`head: zana/<missionId>`, `base` = base de la misión). Solo puedes editar título y cuerpo.
-2. Con checks verdes sobre el head del PR: `zana_review_request(missionId)`.
-3. Entrega al usuario **el texto exacto** que devuelve (`message`), para que lo pegue en una **conversación nueva** de ChatGPT. No reclames tu propio ticket: el servidor lo rechaza.
+1. `create_pull_request` con `head: zana/<missionId>` exacto y `base` = base de la misión. Solo puedes editar título y cuerpo.
+2. Con checks verdes sobre el head del PR: `zana_review_request(missionId)`. Cada ticket consume una ronda (`maxReviewRounds`).
+3. Entrega al usuario **el texto exacto** del campo `message` para que lo pegue en una **conversación nueva**. No reclames tu propio ticket.
 
-## 6. Leer la review y corregir
+## 6. Review, corrección y entrega
 
-1. `zana_delivery_status(missionId)` muestra la review de la cuenta revisora sobre el SHA exacto, CI, `zana/4r` y si el PR es mergeable.
-2. Si la review pidió cambios, corrige en la rama, checks hasta verde y pide un **ticket nuevo**. Después de cualquier cambio material el ticket anterior queda `STALE_SHA`.
-3. `zana_merge(missionId)` solo mergea si todo está verde sobre el mismo head. Si el usuario no pidió mergear, no lo hagas.
+1. `zana_delivery_status(missionId)` muestra la review sobre el SHA exacto, CI, `zana/4r` y si el PR es mergeable.
+2. Si pidió cambios: corrige en la rama con la misma unidad RUNNING, checks hasta verde y un **ticket nuevo** (sobre el mismo SHA se rechaza con `CHANGES_REQUESTED_SAME_SHA`). Si ya completaste la unidad, `zana_correction_start(missionId)` agrega una unidad de corrección `PENDING`; inícala con `zana_start_batch` y sigue igual.
+3. Con la review aprobada, completa la unidad (`zana_complete_unit`, que exige check verde sobre el head actual).
+4. `zana_merge(missionId)` solo si el usuario lo pide. Nunca `merge_pull_request` por el downstream.

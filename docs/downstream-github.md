@@ -29,9 +29,12 @@ Allowlist y fail closed sobre la lista real de tools (`data/github-mcp-tools.jso
   - `create_or_update_file`, `delete_file`, `push_files`: `branch` = `zana/<missionId>`, rutas relativas sin `..`, nunca `.github/workflows/**` ni `.git/`;
   - `create_pull_request`: `head` = rama de la misión, `base` = base de la misión, solo `title`, `body` y `draft`;
   - `update_pull_request`, `update_pull_request_title`, `update_pull_request_body`: solo título y cuerpo del PR abierto desde la rama de la misión hacia su base;
-  - `add_reply_to_pull_request_comment`, `add_issue_comment`: solo texto (sin reacciones) en el PR de la misión;
+  - `add_reply_to_pull_request_comment`, `add_issue_comment`: solo texto (sin reacciones) en el PR de la misión. `add_issue_comment` es del toolset `issues`, que no viene en `ZANA_DOWNSTREAM_GITHUB_TOOLSETS` por defecto; para comentar la conversación del PR el operador agrega `issues` (las demás tools de issues quedan `UNCLASSIFIED` y denegadas);
   - `actions_run_trigger`: solo `method: run_workflow` del workflow de checks (`ZANA_CHECKS_WORKFLOW`) con `ref` = rama de la misión y sin `inputs`.
   - Además, la rama de la misión no puede ser la rama default del repo.
+  - Cada tool permitida acepta **solo las claves exactas de su schema** (`ALLOWED_KEYS` en `src/github-policy.mjs`), sin las que la política no admite: reacciones, revisores, `allow_symlink_write`, `inputs`, `state`, `base` o `draft` al editar. Una clave de más (`Branch`, `Path`, `ref`...) se rechaza con `FIELD_NOT_ALLOWED`.
+  - Las rutas no pueden tener `%`, `?`, `#`, barra invertida ni caracteres de control (el downstream podría decodificar `%2e%2e` o `%2F`).
+  - `head` del PR se compara exacto con la rama de la misión; solo el prefijo `owner:` es insensible a mayúsculas.
 - **Siempre denegado:** merge (solo `zana_merge`), reviews con el token autor, cambios de estado/draft/revisores del PR, actualizar la rama desde la base, crear/borrar/forkear repos, cualquier tool fuera del catálogo y cualquier tool clasificada como lectura que deje de declarar `readOnlyHint` (`CLASSIFICATION_DRIFT`). El catálogo no tiene tools de settings, protección de ramas, secretos, webhooks ni colaboradores con escritura; si aparecen, quedan `UNCLASSIFIED` y se deniegan.
 - Cada rechazo devuelve un código y un motivo legible (`NO_RUNNING_UNIT`, `OUTSIDE_MISSION_BRANCH`, `PROTECTED_PATH`, `REVIEWER_READ_ONLY`, `ALWAYS_DENIED`, `UNCLASSIFIED`...) y queda en la auditoría.
 

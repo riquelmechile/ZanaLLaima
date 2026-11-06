@@ -16,8 +16,8 @@ ZanaLLaima (zana-main, loopback + túnel Cloudflare)
 
 **Cómo se trabaja:**
 
-1. **Conversación autora.** GPT carga `zana-odd`, crea una misión con `github: {repo, base}`, reserva unidades y escribe en GitHub **solo** por `zana_ds_github`, **solo** en `zana/<missionId>` y solo mientras su sesión tiene una unidad `RUNNING`. Los tests corren en Actions (`zana_checks_start`/`zana_checks_status`); una unidad de código no se completa sin check verde sobre su SHA final. Abre el PR y pide un ticket (`zana_review_request`).
-2. **Conversación revisora (nueva).** El usuario pega "Revisa el ticket ZR-... con ZanaLLaima". Esa sesión reclama el ticket (no puede ser la autora, no pudo haber escrito y debe ser posterior al ticket), queda en solo lectura, corre los 4 lentes con `zana-4r` y finaliza. ZanaLLaima relee el head del PR: si cambió, `STALE_SHA`; si no, publica la review **firmada por `sebastianriquelme95-max`** sobre ese SHA y el status `zana/4r`.
+1. **Conversación autora.** GPT carga `zana-odd`, crea una misión con `github: {repo, base}`, reserva unidades y escribe en GitHub **solo** por `zana_ds_github`, **solo** en `zana/<missionId>` y solo mientras su sesión tiene una unidad `RUNNING`. Los tests corren en Actions (`zana_checks_start`/`zana_checks_status`). La unidad de código queda `RUNNING` (con heartbeat) mientras se abre el PR, se pide el ticket (`zana_review_request`) y se corrige; se completa recién con la review aprobada y con check verde sobre su SHA final. Si se completó antes y la review pide cambios, `zana_correction_start` agrega una unidad de corrección.
+2. **Conversación revisora (nueva).** El usuario pega "Revisa el ticket ZR-... con ZanaLLaima". Esa sesión reclama el ticket (no puede ser la autora, no pudo haber escrito y debe ser posterior al ticket), queda en solo lectura, lee todas las páginas del diff (`zana_review_diff`), corre los 4 lentes con `zana-4r` y finaliza. ZanaLLaima relee el head del PR: si cambió, `STALE_SHA`; si no, publica la review **firmada por `sebastianriquelme95-max`** sobre ese SHA y el status `zana/4r`.
 3. **Entrega.** `zana_delivery_status` muestra aprobación exacta, CI, `zana/4r` y mergeable. `zana_merge` solo mergea con todo verde sobre el mismo head (`sha` = head verificado). La protección de `main` es la segunda llave.
 
 **La verdad es el SHA en GitHub y sus checks.** Los tokens (autor y revisora) viven solo en el servidor; nunca en el repo, en logs ni en resultados de tools. Qué prueba y qué no la separación de sesiones: [docs/solo-rdd.md](docs/solo-rdd.md).
@@ -61,7 +61,11 @@ Los módulos principales:
 - \`src/budget.mjs\`: límites de tiempo, intentos, concurrencia y resultados.
 - \`src/write-effect.mjs\` y \`src/write-operations.mjs\`: efectos de archivo y permisos de WRITE al momento de ejecutarlos.
 - \`src/review.mjs\`, \`src/git-evidence.mjs\` y \`src/delivery.mjs\`: RDD y gate manual de entrega.
-- \`src/mcp.mjs\`: servidor MCP oficial, local y sin HTTP.
+- `src/mcp.mjs`: servidor MCP oficial en modo stdio (local, sin HTTP).
+- `src/http.mjs`, `src/oauth.mjs`, `src/remote.mjs`: modo remoto (Streamable HTTP con sesiones, OAuth con registro cerrado, las 29 tools remotas).
+- `src/downstream.mjs`, `src/github-policy.mjs`, `src/github-api.mjs`: gateway del GitHub MCP, política allowlist y cliente REST con breaker.
+- `src/checks.mjs`, `src/remote-review.mjs`, `src/github-delivery.mjs`, `src/skills.mjs`: checks en Actions, tickets y diff paginado, entrega y merge, skills.
+- `src/remote-state.mjs`, `src/remote-config.mjs`, `src/deadline.mjs`, `src/redact.mjs`, `src/actor-assertion.mjs`: sesiones, auditoría y retención, configuración, plazos por tool, redacción de secretos y aserción de actor.
 - \`scripts/ci-attest.mjs\`: emisor de sobre CI firmado, solo con llave privada provista por Zana.
 
 ## Modo local stdio (congelado)
@@ -74,7 +78,7 @@ export ZANA_REVIEW_TARGET_REF=refs/heads/main
 node src/mcp.mjs
 \`\`\`
 
-En modo stdio el servidor dispone de **24 herramientas MCP**. El catálogo se comprueba automáticamente contra esta cifra en \`tests/sdk-mcp.test.mjs\`. Las herramientas stdio no administran claves privadas, no importan firmas del operador, no restauran respaldos ni hacen merge. El modo remoto expone 25 (ver [docs/mcp-v2.md](docs/mcp-v2.md)), entre ellas `zana_merge` con sus condiciones.
+En modo stdio el servidor dispone de **24 herramientas MCP**. El catálogo se comprueba automáticamente contra esta cifra en \`tests/sdk-mcp.test.mjs\`. Las herramientas stdio no administran claves privadas, no importan firmas del operador, no restauran respaldos ni hacen merge. El modo remoto expone 29 (ver [docs/mcp-v2.md](docs/mcp-v2.md)), entre ellas `zana_merge` con sus condiciones.
 
 Las acciones administrativas siguen en el CLI local:
 

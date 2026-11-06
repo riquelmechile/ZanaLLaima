@@ -6,8 +6,8 @@ Motor de misiones para **una sola cuenta GPT**, sin llamadas propias a APIs de i
 
 1. Al empezar, cargar `zana-odd` con `zana_skill_load` y seguirla. Al recibir un ticket `ZR-...`, cargar `zana-4r` en esa conversación.
 2. La verdad es el SHA en GitHub y sus checks de Actions. No hay shell: escribir **solo** con `zana_ds_github`, solo en `zana/<missionId>` y solo con una unidad `RUNNING` de la propia sesión. Nunca en la rama default ni en `.github/workflows/**`.
-3. Una unidad de código no se completa sin check verde sobre su SHA final (`zana_checks_start`/`zana_checks_status`).
-4. La revisión la hace el mismo GPT en una **conversación nueva**; la sesión revisora queda en solo lectura. No reclamar el propio ticket ni rodear un rechazo (`AUTHOR_SESSION`, `SESSION_WROTE`, `SESSION_PREDATES_TICKET`, `REVIEWER_READ_ONLY`).
+3. La unidad de código queda RUNNING (con heartbeat) hasta que la review apruebe, y no se completa sin check verde sobre su SHA final (`zana_checks_start`/`zana_checks_status`). Si se completó antes y la review pidió cambios, `zana_correction_start`. Tras un reinicio, `zana_session_rebind`.
+4. La revisión la hace el mismo GPT en una **conversación nueva**, cuya primera tool es `zana_review_claim`; la sesión revisora queda en solo lectura y debe leer todo el diff (`zana_review_diff`). No reclamar el propio ticket ni rodear un rechazo (`AUTHOR_SESSION`, `SESSION_WROTE`, `SESSION_PREDATES_TICKET`, `REVIEWER_READ_ONLY`).
 5. Declarar `execution` tal como ocurrió (`PARALLEL_SUBAGENTS` o `SEQUENTIAL_SAME_CONVERSATION`). Los lentes no corrigen código. No inventar evidencia.
 6. `zana_merge` solo si el usuario lo pide y todo está verde sobre el mismo head. No aprobar ni descartar reviews, no desplegar.
 7. Los tokens viven solo en el servidor. No pedirlos, no mostrarlos, no ponerlos en el repo.

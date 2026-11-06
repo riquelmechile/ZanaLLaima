@@ -1,5 +1,7 @@
 # systemd --user unit for the ZanaLLaima remote MCP (zana-main).
 # Install: see docs/deploy-remote.md. The operator deploys; agents do not.
+# %h is the systemd specifier for the home directory (expanded by systemd,
+# unlike ~). Every path inside the EnvironmentFile must be absolute.
 [Unit]
 Description=ZanaLLaima remote MCP (Streamable HTTP on 127.0.0.1)
 After=network-online.target

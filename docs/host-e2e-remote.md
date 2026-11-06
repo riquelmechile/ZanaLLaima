@@ -13,25 +13,29 @@ Abrir una conversación nueva y pedir: "Con ZanaLLaima, crea una misión en riqu
 
 Registrar:
 - `zana_session_status` → `session.id` y `session.createdAt` de A.
-- La misión (`missionId`), la rama `zana/<missionId>`, los commits por `zana_ds_github`, `zana_checks_start`/`zana_checks_status` hasta `SUCCESS`, el PR y la respuesta de `zana_review_request` (ticket y hora).
+- La misión (`missionId`), la rama `zana/<missionId>`, los commits por `zana_ds_github`, `zana_checks_start`/`zana_checks_status` hasta `SUCCESS`, el PR y la respuesta de `zana_review_request` (ticket y hora). La unidad de código sigue `RUNNING` (con heartbeat) hasta que la review apruebe.
 
 ## 2. Conversación B (nueva)
 
-Abrir **otra conversación nueva** y pegar exactamente el mensaje del ticket ("Revisa el ticket ZR-... con ZanaLLaima").
+Abrir **otra conversación nueva** y pegar exactamente el mensaje del ticket ("Revisa el ticket ZR-... con ZanaLLaima"). Su primera tool debe ser `zana_review_claim`.
 
 Registrar:
 - `zana_session_status` de B: `session.id` **debe ser distinto** del de A y `createdAt` posterior al ticket. Anotar en `sessionSeparationObserved` lo que se vio (por ejemplo, si al reabrir A apareció otra sesión).
-- `zana_review_claim` aceptado, los 4 lentes (`execution` declarado) y `zana_review_finalize`.
+- `zana_review_claim` aceptado, las páginas leídas con `zana_review_diff`, los 4 lentes (`execution` declarado) y `zana_review_finalize`.
 - En GitHub: la review firmada por `sebastianriquelme95-max` sobre el SHA, y el status `zana/4r`.
+- Si se usa `ZANA_DISTINCT_REVIEWER_CLIENT=true`, B debe ser otra cuenta de ChatGPT; con la misma cuenta el claim da `SAME_CLIENT`.
 
-## 3. Casos negativos en vivo
+## 3. Casos negativos en vivo (códigos reales)
 
-1. En B: pedir que escriba un archivo en la rama de la misión → `REVIEWER_READ_ONLY`.
-2. En A: pedir que reclame su propio ticket (pedir antes un ticket nuevo) → `AUTHOR_SESSION`.
-3. Pedir un ticket nuevo en A, reclamarlo en una conversación C nueva, hacer un push nuevo desde A y finalizar en C → `STALE_SHA`, sin review publicada.
-4. En A: pedir `merge_pull_request` por el downstream o escribir en `main` → `ALWAYS_DENIED` u `OUTSIDE_MISSION_BRANCH`.
+| Caso | Cómo | Código esperado |
+| --- | --- | --- |
+| B intenta escribir | En B, pedir que escriba un archivo en la rama de la misión | `REVIEWER_READ_ONLY` |
+| A reclama su ticket | En A, pedir un ticket y que lo reclame A misma | `AUTHOR_SESSION` |
+| Push después del ticket | Con la review de B ya aprobada: en A pedir un ticket nuevo (mismo SHA, permitido porque B aprobó), reclamarlo en una conversación C nueva y leer el diff; luego hacer un push desde A (su unidad sigue RUNNING) y finalizar en C | `zana_review_finalize` responde `state: STALE_SHA`, `published: false` |
+| Merge por el downstream | En A, pedir `merge_pull_request` por `zana_ds_github` | `ALWAYS_DENIED` |
+| Escribir en `main` | En A, con su unidad RUNNING, pedir `create_or_update_file` con `branch: main` | `OUTSIDE_MISSION_BRANCH` (si la unidad ya no está RUNNING, el primer rechazo es `NO_RUNNING_UNIT`) |
 
-Para cada caso, copiar el id de la fila de auditoría: `node src/cli.mjs remote-audit 100 <missionId>`.
+Para cada caso, copiar el id de la fila de auditoría: `node src/cli.mjs remote-audit 100 <missionId> --env-file <env del servidor>`.
 
 ## 4. Reporte
 

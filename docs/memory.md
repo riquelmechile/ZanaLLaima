@@ -34,7 +34,7 @@ Si el estado no es `OK`, la conversación autora escribe `memory.pointer.content
 - **Al cerrar:** `zana_mission_close` exige `summary` (`done`, `decisions`, `conventions`, `pending`, `keyFiles`) y lo guarda en la misma transacción del cierre. Sin él responde `SUMMARY_REQUIRED`. El `close` del CLI del operador no pide resumen: es la vía de emergencia.
 - **Para buscar:** `zana_memory_search` busca palabras en el proyecto actual (o `projectId`), o en todos con `all: true`. Primero las entradas vivas; las reemplazadas vienen con `superseded: true`.
 
-Todo `topic` (hasta 80 caracteres) y `body` (hasta 1000) pasa por la redacción de tokens antes de guardarse: los secretos del entorno del servidor, tokens de GitHub, `Bearer` y formas comunes de credencial (`sk-…`, `AKIA…`, `xox…`, llaves PEM). Otras formas no se reconocen: no guardes secretos en la memoria. Nada se borra por antigüedad; las tablas viajan en el backup del SQLite.
+Todo `topic` (hasta 80 caracteres) y `body` (hasta 1000) pasa por la redacción de tokens antes de guardarse: los secretos del entorno del servidor, tokens de GitHub, `Bearer` y formas comunes de credencial (`sk-…`, JWT, `AIza…`, Stripe `sk_live_…`, `AKIA…`/`ASIA…`, Slack `xox…`/`xapp-…`, `glpat-…`, `npm_…`, llaves PEM y PGP, URLs con `usuario:clave@` y asignaciones como `password=…`, que conservan la clave). Se redacta antes de cortar a la longitud máxima. Otras formas no se reconocen: no guardes secretos en la memoria. Nada se borra por antigüedad; las tablas viajan en el backup del SQLite.
 
 ## Lecturas y memoria general
 

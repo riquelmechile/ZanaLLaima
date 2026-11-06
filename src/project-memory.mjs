@@ -4,7 +4,7 @@
 // projectId, que sirve únicamente a través del OAuth del servidor. Las
 // funciones que reciben `db` corren dentro de un remoteWrite/transact.
 import {randomBytes} from 'node:crypto';
-import {redactText} from './redact.mjs';
+import {redactStored} from './redact.mjs';
 import {nowIso} from './remote-state.mjs';
 
 export const POINTER_PATH='.zanallaima.json';
@@ -84,17 +84,12 @@ export function memoryContext(db,projectId,{maxBytes=4096}={}){
   return {projectId,entries,truncated};
 }
 
-// Memory is durable, so it also drops common credential shapes that are not in
-// the server's environment (OpenAI/Anthropic-style keys, AWS, Slack, PEM keys).
-const CREDENTIALS=[/\bsk-[A-Za-z0-9_-]{20,}/g,/\bAKIA[0-9A-Z]{16}\b/g,/\bxox[abprs]-[A-Za-z0-9-]{10,}/g,
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g];
-const scrub=text=>CREDENTIALS.reduce((t,re)=>t.replace(re,'[redacted]'),text);
-
-// Una entrada redactada; la viva anterior con el mismo (proyecto, kind, topic)
+// Una entrada redactada (siempre antes de cortar: un corte deja prefijos que
+// ningún patrón reconoce); la viva anterior con el mismo (proyecto, kind, topic)
 // queda superseded_by la nueva.
 export function saveEntry(db,{projectId,kind,topic,body,missionId=null,sha=null,sessionId=null,secrets=[]}){
   if(!MEMORY_KINDS.includes(kind))throw new Error('INVALID_MEMORY_KIND: '+kind);
-  const t=scrub(redactText(topic,secrets)).slice(0,80),b=scrub(redactText(body,secrets)).slice(0,1000);
+  const t=redactStored(topic,secrets).slice(0,80),b=redactStored(body,secrets).slice(0,1000);
   const old=db.prepare('SELECT seq FROM project_memory WHERE project_id=? AND kind=? AND topic=? AND superseded_by IS NULL').all(projectId,kind,t);
   const seq=Number(db.prepare('INSERT INTO project_memory(project_id,kind,topic,body,mission_id,sha,session_id,created_at) VALUES(?,?,?,?,?,?,?,?)')
     .run(projectId,kind,t,b,missionId,sha,sessionId,nowIso()).lastInsertRowid);
@@ -106,9 +101,10 @@ export function saveEntry(db,{projectId,kind,topic,body,missionId=null,sha=null,
 // El resumen obligatorio de zana_mission_close (§6.5), en la transacción del cierre.
 export function saveSummary(db,{projectId,missionId,summary,sha=null,sessionId=null,secrets=[]}){
   const base={projectId,missionId,sha,sessionId,secrets};
-  // The key files survive the 1000-char cap: done is shortened first.
-  const files=summary.keyFiles.length?('\nArchivos clave: '+summary.keyFiles.join(', ')).slice(0,400):'';
-  const saved=[saveEntry(db,{...base,kind:'summary',topic:missionId,body:summary.done.slice(0,1000-files.length)+files})];
+  // Los archivos clave sobreviven al tope de 1000: se acorta done. Todo se redacta antes del corte.
+  const files=summary.keyFiles.length?('\nArchivos clave: '+redactStored(summary.keyFiles.join(', '),secrets)).slice(0,400):'';
+  const done=redactStored(summary.done,secrets);
+  const saved=[saveEntry(db,{...base,kind:'summary',topic:missionId,body:done.slice(0,1000-files.length)+files})];
   for(const [field,kind] of [['decisions','decision'],['conventions','convention'],['pending','pending']])
     for(const {topic,body} of summary[field])saved.push(saveEntry(db,{...base,kind,topic,body}));
   return {projectId,saved:saved.length,superseded:saved.reduce((n,s)=>n+s.superseded.length,0)};

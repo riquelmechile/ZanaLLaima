@@ -12,13 +12,17 @@ export const excluded=path=>{
 };
 // files: [{filename,additions,deletions}]; truncated: GitHub devolvió el máximo
 // de páginas y puede haber más archivos (se trata como sobre el presupuesto).
-export function lineBudget(files,{limit,truncated=files.truncated===true}){
+// changedFiles: pull.changed_files; si la lista tiene otro largo está incompleta.
+export function lineBudget(files,{limit,changedFiles,truncated=files.truncated===true}){
+  const mismatch=Number.isSafeInteger(changedFiles)&&changedFiles!==files.length;
+  truncated||=mismatch;
   let lines=0,lockfileLines=0;
   for(const f of files){
     const n=(Number(f.additions)||0)+(Number(f.deletions)||0);
     if(excluded(f.filename))lockfileLines+=n;else lines+=n;
   }
-  return {limit,lines,lockfileLines,files:files.length,over:truncated||lines>limit,...(truncated?{truncated:true}:{})};
+  return {limit,lines,lockfileLines,files:files.length,over:truncated||lines>limit,...(truncated?{truncated:true}:{}),
+    ...(mismatch?{changedFiles}:{})};
 }
 // Límite vigente de la misión: su extensión (zana_budget_extend) o el del servidor.
 export const lineLimit=(rm,config)=>rm?.lineBudgetExtension?.limit??config.prLineBudget;

@@ -72,7 +72,9 @@ test('size limits: budget, extension, reviewer refusal, diff cap and delivery st
     // 31 pages of files: the list is truncated at 30 and treated as over.
     f.api.state.diffText=undefined;
     f.api.state.pullFiles[7]=Array.from({length:3100},(_,i)=>file('f'+i,0));
+    f.api.state.pulls[0].changed_files=3100;
     assert.match((await f.call('zana_review_request',{missionId},author)).error,/^OVER_LINE_BUDGET: el PR cambia más de 3000 archivos; no hay extensión posible/);
+    delete f.api.state.pulls[0].changed_files;
     // Over the largest possible extension: no question to the user, just split.
     f.api.state.pullFiles[7]=[file('src/a.mjs',6000)];
     assert.match((await f.call('zana_review_request',{missionId},author)).error,/^OVER_LINE_BUDGET: el PR cambia 6000 líneas .* extensión máxima es 5000/);

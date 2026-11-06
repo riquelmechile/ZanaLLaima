@@ -390,7 +390,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       const ctx=await missionContext(id,null,{allowInactive:true});
       // Informative only: the budget is enforced at zana_review_request, not at the merge.
       const lineBudgetOf=async pull=>{
-        try{return lineBudget(await github.pullFiles(ctx.repo,pull.number),{limit:lineLimit(ctx,config)});}
+        try{return lineBudget(await github.pullFiles(ctx.repo,pull.number),{limit:lineLimit(ctx,config),changedFiles:pull.changed_files});}
         catch(error){return {error:clean(error,secrets())};}
       };
       return deliveryStatus({github,config,ctx,openBlockingTickets:await review.openBlocking(id),currentTicket:await review.latest(id),lineBudgetOf});

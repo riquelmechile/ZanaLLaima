@@ -203,11 +203,13 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
       const reject=(...args)=>{pageCache.delete(measured.key);fail(...args);};
       if(diffBytes>config.reviewMaxDiffBytes)
         reject('DIFF_TOO_LARGE','el diff pesa '+diffBytes+' bytes y el tope es '+config.reviewMaxDiffBytes+'; divide el cambio en misiones secuenciales');
-      const budget=lineBudget(await github.pullFiles(ctx.repo,pull.number),{limit:lineLimit(ctx,config)});
+      const budget=lineBudget(await github.pullFiles(ctx.repo,pull.number),{limit:lineLimit(ctx,config),changedFiles:pull.changed_files});
       // The file list is read from the PR's current head: it must still be the
       // measured SHA before any budget answer, which would give another SHA's figures.
       const after=String((await github.pull(ctx.repo,pull.number))?.head?.sha??'');
       if(after!==sha)reject('HEAD_MOVED','el head del PR cambió de '+sha+' a '+after+' mientras se medía; vuelve a pedir el ticket');
+      if(budget.changedFiles!==undefined&&budget.files<3000)
+        reject('OVER_LINE_BUDGET','GitHub listó '+budget.files+' de los '+budget.changedFiles+' archivos del PR; la medida está incompleta: vuelve a pedir el ticket o divide el cambio');
       if(budget.truncated)
         reject('OVER_LINE_BUDGET','el PR cambia más de 3000 archivos; no hay extensión posible: divide el cambio en misiones secuenciales');
       if(budget.over&&budget.lines>EXTEND_MAX)

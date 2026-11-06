@@ -44,7 +44,7 @@ test('memory tools: save redacta y supersede, resolve, contexto por misión, pro
     // A mission without a project resolves it on the first save.
     const other=await next(f,s);
     await remoteWrite(db=>db.prepare('UPDATE remote_missions SET project_id=NULL WHERE mission_id=?').run(other.id));
-    assert.match((await f.call('zana_memory_context',{},s)).error,/NO_PROJECT: that mission has no project yet/);
+    assert.match((await f.call('zana_memory_context',{},s)).error,/NO_PROJECT: that mission has no project yet \(it is resolved at the first zana_memory_save or at zana_mission_close\)/);
     const late=await save('issue','bug','falla','');
     assert.match(late.error,/MISSION_NOT_ACTIVE/);
     const saved=await save('issue','bug','falla al compilar',other.id);

@@ -36,3 +36,26 @@ test('P1: correction_start revalidates the latest ticket inside the mission tran
     assert.match(r.error??'',/NO_CHANGES_REQUESTED/,'the stale pre-check must not add a correction unit');
   }finally{await f.cleanup();}
 });
+
+test('W1: a BLOCKER on an abandoned/expired ticket still blocks a re-request on the same SHA until the operator releases it',async()=>{
+  const f=await remoteFixture();
+  try{
+    const {author,missionId}=await f.authorReady();
+    // CLAIMED + BLOCKER, then the claim TTL passes (ABANDONED).
+    const t1=await f.call('zana_review_request',{missionId},author);
+    const s1=await f.session();
+    await f.call('zana_review_claim',{ticket:t1.ticket},s1);
+    await f.call('zana_review_lens_submit',{ticket:t1.ticket,...blocker},s1);
+    await remoteWrite(db=>db.prepare("UPDATE review_tickets SET claimed_at='2000-01-01T00:00:00.000Z'").run());
+    assert.match((await f.call('zana_review_request',{missionId},author)).error??'',/CHANGES_REQUESTED_SAME_SHA/,
+      'waiting for the TTL must not buy a new review of the same SHA');
+    // FINALIZING with REQUEST_CHANGES that expires: same rule.
+    await remoteWrite(db=>db.prepare("UPDATE review_tickets SET state='FINALIZING',verdict='REQUEST_CHANGES',claimed_at='2000-01-01T00:00:00.000Z'").run());
+    assert.match((await f.call('zana_review_request',{missionId},author)).error??'',/CHANGES_REQUESTED_SAME_SHA/);
+    // Only an explicit operator abandon releases it.
+    const id=(await f.runtime.review.list(missionId))[0].ticketId;
+    await remoteWrite(db=>db.prepare("UPDATE review_tickets SET state='CLAIMED',claimed_at=? WHERE ticket_id=?").run(new Date().toISOString(),id));
+    await f.runtime.review.abandon(id,{host:'operator',sessionId:'operator-cli'});
+    assert.equal((await f.call('zana_review_request',{missionId},author)).error,undefined);
+  }finally{await f.cleanup();}
+});

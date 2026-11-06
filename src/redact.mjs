@@ -1,5 +1,5 @@
 // Secret redaction for remote mode.
-// Adapted from riquelmechile/panter-ai@1a99048 src/core/downstream.ts
+// Adapted from panter-ai@1a99048 src/core/downstream.ts
 // (clean, redactDeep). Tokens live only in the server environment; nothing
 // that leaves this process (tool results, errors, audit, logs) may carry one.
 

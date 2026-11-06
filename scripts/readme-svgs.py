@@ -97,19 +97,19 @@ def marker(mid,color):
 
 # ---------- Arquitectura ----------
 ARCH={
-'es':dict(title='Arquitectura de ZanaLLaima',desc='La app de ChatGPT se conecta por MCP con OAuth a ZanaLLaima en zana-main. ZanaLLaima usa el MCP oficial de GitHub para escribir solo en la rama de la misión, GitHub Actions corre los tests y la cuenta revisora firma la review; el merge exige el SHA exacto.',
+'es':dict(title='Arquitectura de ZanaLLaima',desc='La app de ChatGPT se conecta por MCP con OAuth a ZanaLLaima en tu propio servidor. ZanaLLaima usa el MCP oficial de GitHub para escribir solo en la rama de la misión, GitHub Actions corre los tests y la cuenta revisora firma la review; el merge exige el SHA exacto.',
   app='App de ChatGPT',app_items=['Conversación autora','Conversación revisora','(nueva, solo lectura)','Los 4 lentes R1–R4'],
   link1='MCP + OAuth',link2=['HTTPS','túnel Cloudflare'],
-  zl='ZanaLLaima',zl_sub='MCP remoto en zana-main',zl_items=['Misiones, unidades y presupuesto','Skills: zana-odd y zana-4r','Tickets de revisión por SHA','Política: solo rama zana/<misión>','zana_merge con SHA exacto'],
+  zl='ZanaLLaima',zl_sub='MCP remoto en tu servidor',zl_items=['Misiones, unidades y presupuesto','Skills: zana-odd y zana-4r','Tickets de revisión por SHA','Política: solo rama zana/<misión>','zana_merge con SHA exacto'],
   ghmcp='GitHub MCP oficial',ghmcp_sub=['Lee el repo y escribe','solo en la rama de la misión'],
   gh='GitHub',gh_sub=['PR + review firmada por','la cuenta revisora y zana/4r'],
   act='GitHub Actions',act_sub=['Corre los tests (checks)'],
   l_allow='allowlist',l_review='review · merge',l_push='push',l_checks=['resultado','de checks'],
   foot='Los tokens viven solo en el servidor. La verdad es el SHA en GitHub y sus checks.'),
-'en':dict(title='ZanaLLaima architecture',desc='The ChatGPT app connects over MCP with OAuth to ZanaLLaima on zana-main. ZanaLLaima uses the official GitHub MCP to write only to the mission branch, GitHub Actions runs the tests and the reviewer account signs the review; merging requires the exact SHA.',
+'en':dict(title='ZanaLLaima architecture',desc='The ChatGPT app connects over MCP with OAuth to ZanaLLaima on your own server. ZanaLLaima uses the official GitHub MCP to write only to the mission branch, GitHub Actions runs the tests and the reviewer account signs the review; merging requires the exact SHA.',
   app='ChatGPT app',app_items=['Author conversation','Reviewer conversation','(new, read-only)','The 4 lenses R1–R4'],
   link1='MCP + OAuth',link2=['HTTPS','Cloudflare tunnel'],
-  zl='ZanaLLaima',zl_sub='Remote MCP on zana-main',zl_items=['Missions, units and budget','Skills: zana-odd and zana-4r','Review tickets bound to a SHA','Policy: only branch zana/<mission>','zana_merge with the exact SHA'],
+  zl='ZanaLLaima',zl_sub='Remote MCP on your server',zl_items=['Missions, units and budget','Skills: zana-odd and zana-4r','Review tickets bound to a SHA','Policy: only branch zana/<mission>','zana_merge with the exact SHA'],
   ghmcp='Official GitHub MCP',ghmcp_sub=['Reads the repo, writes','only to the mission branch'],
   gh='GitHub',gh_sub=['PR + review signed by the','reviewer account and zana/4r'],
   act='GitHub Actions',act_sub=['Runs the tests (checks)'],

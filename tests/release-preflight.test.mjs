@@ -84,11 +84,16 @@ test('trusted CI signer rejects PR checkout and secret exposure',()=>{
   assert.ok(assess({sourceFiles:{coverage,setup:setup.replace(
     'reviewers[0][id]','reviewers[0][wrong]')}})
     .errors.includes('CI_ENVIRONMENT_POLICY_UNSAFE'));
+  // The reviewer login comes only from ZANA_CI_REVIEWER, validated before any mutation.
+  const unsafeReviewer=s=>assess({sourceFiles:{coverage,setup:s}}).errors.includes('CI_ENVIRONMENT_POLICY_UNSAFE');
+  assert.equal(unsafeReviewer(setup.replace('^[A-Za-z0-9]([A-Za-z0-9-]{0,38})$','^.+$')),true);
+  assert.equal(unsafeReviewer(setup.replace('REVIEWER="${ZANA_CI_REVIEWER:-}"',"REVIEWER='someone'")),true);
+  assert.equal(unsafeReviewer(setup.replace("ENVIRONMENT='ci-attestation'","ENVIRONMENT='ci-attestation'\nREVIEWER='someone'")),true);
 });
 
 test('placeholder CI public key cannot masquerade as configured attestation',()=>{
   const placeholder=readFileSync('keys/ci-verifier.pub','utf8');
-  assert.match(placeholder,/PENDIENTE DE ZANA/);
+  assert.match(placeholder,/PENDIENTE DEL OPERADOR/);
   const result=assess({sourceFiles:{coverage,ciPublicKey:placeholder}});
   assert.equal(result.externalGates.ciVerifierPublicKey,'MISSING_OR_INVALID');
   assert.equal(result.externalGates.trustedCIAttribution,'NOT_CONNECTED');

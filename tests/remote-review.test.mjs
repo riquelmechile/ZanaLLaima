@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {remoteFixture,REVIEWER_TOKEN,AUTHOR_TOKEN,sha,sleep,readDiff} from './helpers/remote-fixture.mjs';
+import {remoteFixture,REVIEWER_TOKEN,REVIEWER_LOGIN,AUTHOR_TOKEN,sha,sleep,readDiff} from './helpers/remote-fixture.mjs';
 import {ticketCode,validateLens,reviewBody} from '../src/remote-review.mjs';
 import {remoteWrite} from '../src/store.mjs';
 
@@ -266,7 +266,7 @@ test('merge: every missing condition refused, disabled by config, STALE_SHA on m
     assert.ok(m.blockers.some(b=>/CI on .*FAILURE/.test(b)));
     f.api.state.checkRuns[sha('a')][0].conclusion='success';
     // The reviewer authored a commit: not independent.
-    f.api.state.commits[7].push({author:{login:'sebastianriquelme95-max'}});
+    f.api.state.commits[7].push({author:{login:REVIEWER_LOGIN}});
     m=await f.call('zana_merge',{missionId},author);
     assert.ok(m.blockers.some(b=>/REVIEWER_IS_AUTHOR/.test(b)));
     f.api.state.commits[7].pop();
@@ -314,4 +314,16 @@ test('ticket codes and review body helpers',()=>{
     lenses:lenses.map(l=>({...l,findings:Array.from({length:50},()=>finding('WARNING',{evidence:'x'.repeat(4000)}))})),
     execution:'PARALLEL_SUBAGENTS',event:'APPROVE'});
   assert.match(huge,/cuerpo recortado/);
+});
+
+test('finalize without ZANA_REVIEWER_LOGIN fails closed and publishes nothing',async()=>{
+  const f=await remoteFixture({envExtra:{ZANA_REVIEWER_LOGIN:''}});
+  try{
+    const {ticket,reviewer}=await claimed(f);
+    await allLenses(f,ticket,reviewer);
+    const r=await f.call('zana_review_finalize',{ticket,execution:'PARALLEL_SUBAGENTS'},reviewer);
+    assert.match(r.error,/REVIEWER_LOGIN_MISSING/);
+    assert.equal((f.api.state.reviews[7]??[]).length,0);
+    assert.equal((f.api.state.statuses?.[sha('a')]??[]).length,0);
+  }finally{await f.cleanup();}
 });

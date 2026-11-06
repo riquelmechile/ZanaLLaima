@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Configuración local: ejecutar solo por Zana. No mostrar llaves privadas.
+# Configuración local: la ejecuta solo el operador. No mostrar llaves privadas.
 set -euo pipefail
 IFS=$'\n\t'
 REPO='riquelmechile/ZanaLLaima'
 ENVIRONMENT='ci-attestation'
-REVIEWER='sebastianriquelme95-max'
+# Login de la cuenta revisora: se entrega por entorno, nunca queda en el repo.
+REVIEWER="${ZANA_CI_REVIEWER:-}"
 ROOT="$(cd -- "$(dirname -- "$0")/.." && pwd -P)"
 KEY_DIR="$HOME/.config/zana-llaima"
 PRIVATE_KEY="$KEY_DIR/ci-attest-private.pem"
@@ -34,6 +35,8 @@ if [[ "${1:-}" == '--dry-run' && "$#" -eq 1 ]]; then
   exit 0
 fi
 if [[ "$#" -ne 0 ]]; then fail 'Único argumento permitido: --dry-run'; fi
+[[ "$REVIEWER" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,38})$ ]] ||
+  fail 'Define ZANA_CI_REVIEWER con el login de GitHub de la cuenta revisora.'
 for program in openssl gh mktemp sha256sum chmod stat cut cmp grep mv mkdir; do
   command -v "$program" >/dev/null 2>&1 || fail "Falta comando requerido: $program"
 done
@@ -75,6 +78,9 @@ ci_fp="$(openssl pkey -pubin -in "$TMP_PUBLIC" -pubout -outform DER 2>/dev/null 
 [[ "$ci_fp" != "$operator_fp" ]] ||
   fail 'La llave CI coincide con la del operador: firmantes deben ser distintos.'
 
+# Login canónico de la revisora antes de cualquier cambio en GitHub.
+REVIEWER="$(gh api "users/$REVIEWER" --jq '.login')" ||
+  fail 'No se pudo consultar al revisor independiente.'
 # Desactivar antes de configurar. No se habilita automáticamente al terminar.
 gh variable set ZANA_CI_ATTESTATION_READY --repo "$REPO" --body false >/dev/null
 reviewer_id="$(gh api "users/$REVIEWER" --jq '.id')" ||
@@ -104,7 +110,7 @@ verified="$(gh api --paginate "$policy_api" --jq '.branch_policies[].name')"
 [[ "$verified" == main ]] || fail "Branch policy insegura: $verified"
 reviewers="$(gh api "repos/$REPO/environments/$ENVIRONMENT" \
   --jq '.protection_rules[] | select(.type=="required_reviewers") | .reviewers[]? | .reviewer.login')"
-grep -Fxq "$REVIEWER" <<< "$reviewers" ||
+grep -Fxqi "$REVIEWER" <<< "$reviewers" ||
   fail "El environment no requiere aprobación de $REVIEWER."
 self_review="$(gh api "repos/$REPO/environments/$ENVIRONMENT" --jq '.prevent_self_review')"
 [[ "$self_review" == true ]] || fail 'El environment permite self-review; no configurar la firma CI.'

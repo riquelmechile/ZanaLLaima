@@ -1,6 +1,6 @@
 # E2E de ZanaLLaima con un anfitrión real
 
-**Responsable:** Zana, usando Codex CLI local. **Estado:** PASO HUMANO, no ejecutado por el cierre de desarrollo. El reporte debe permanecer \`HOST_REPORTED_UNVERIFIED\`; no equivale a auditoría de independencia.
+**Responsable:** el operador, usando Codex CLI local. **Estado:** PASO HUMANO, no ejecutado por el cierre de desarrollo. El reporte debe permanecer \`HOST_REPORTED_UNVERIFIED\`; no equivale a auditoría de independencia.
 
 ## Preparación
 
@@ -85,11 +85,11 @@ Ejecutar los cuatro lentes: \`risk\`, \`reliability\`, \`resilience\` y \`readab
 
 Copiar [examples/host-e2e-report.json](../examples/host-e2e-report.json), sustituir los \`null\` únicamente por observaciones verificadas y adjuntar enlaces a logs/redacciones pertinentes. Registrar modelo, esfuerzo, versión, timestamp UTC, IDs de subagentes si la UI los muestra, denegación del WRITE directo, recibos SHA, recuperación y ciclo 4R.
 
-**PASO HUMANO:** Zana ejecuta el procedimiento, revisa evidencia sensible y commitea el reporte en la rama adecuada. ZL-018 permanece abierto hasta tener ese reporte real.
+**PASO HUMANO:** el operador ejecuta el procedimiento, revisa evidencia sensible y commitea el reporte en la rama adecuada. ZL-018 permanece abierto hasta tener ese reporte real.
 
 Ningún resultado E2E modifica por sí mismo las reglas de PR, genera una aprobación independiente ni autoriza un merge o deploy.
 
-## Anexo para Zana: generar y firmar un grant WRITE fuera de Codex
+## Anexo para el operador: generar y firmar un grant WRITE fuera de Codex
 
 **PASO HUMANO.** La llave privada se crea y se mantiene fuera de cualquier sesión del agente:
 

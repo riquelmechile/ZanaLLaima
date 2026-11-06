@@ -419,6 +419,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     }catch(error){problems.push('database: '+clean(error,secrets()));}
     if(!config.authorToken)problems.push('ZANA_DOWNSTREAM_GITHUB_TOKEN missing');
     if(!config.reviewerToken)problems.push('ZANA_REVIEWER_TOKEN missing');
+    if(!config.reviewerLogin)problems.push('ZANA_REVIEWER_LOGIN missing');
     return {status:problems.length?'degraded':'ok',problems,schemaVersion,staleTickets,
       authorToken:config.authorToken?'configured':'missing',reviewerToken:config.reviewerToken?'configured':'missing',
       downstream:gateway.status().state};

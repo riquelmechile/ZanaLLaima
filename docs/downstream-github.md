@@ -1,6 +1,6 @@
 # Downstream GitHub MCP y política de ZanaLLaima
 
-ZanaLLaima monta el **GitHub MCP oficial** (`https://api.githubcopilot.com/mcp/`, toolsets `context,repos,pull_requests,git,actions` enviados en la cabecera `X-MCP-Toolsets`) detrás de un gateway copiado de Panter-ai (`src/downstream.mjs`, procedencia `riquelmechile/panter-ai@1a99048`, `src/core/downstream.ts` y `docs/DOWNSTREAM_MCP.md`). El host lo usa con un solo router:
+ZanaLLaima monta el **GitHub MCP oficial** (`https://api.githubcopilot.com/mcp/`, toolsets `context,repos,pull_requests,git,actions` enviados en la cabecera `X-MCP-Toolsets`) detrás de un gateway copiado de Panter-ai (`src/downstream.mjs`, procedencia `panter-ai@1a99048`, `src/core/downstream.ts` y `docs/DOWNSTREAM_MCP.md`). El host lo usa con un solo router:
 
 ```
 zana_ds_github { "operation": "index" }

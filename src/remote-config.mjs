@@ -16,8 +16,11 @@ const int=(v,def,min,max,name)=>{
 export function remoteConfig(env=process.env){
   const repos=list(env.ZANA_GITHUB_REPOS);
   for(const r of repos)if(!validRepo(r))throw new Error('ZANA_GITHUB_REPOS has an invalid repository: '+r);
-  const reviewerLogin=env.ZANA_REVIEWER_LOGIN||'sebastianriquelme95-max';
-  if(!LOGIN.test(reviewerLogin))throw new Error('ZANA_REVIEWER_LOGIN is not a GitHub login');
+  // No default: the reviewer account is the operator's own and is set only in
+  // the server env. Missing → null: the server refuses to start, /health is
+  // degraded and delivery is never ready; read-only operator CLI still works.
+  const reviewerLogin=String(env.ZANA_REVIEWER_LOGIN??'').trim()||null;
+  if(reviewerLogin&&!LOGIN.test(reviewerLogin))throw new Error('ZANA_REVIEWER_LOGIN is not a GitHub login');
   const checksWorkflow=env.ZANA_CHECKS_WORKFLOW||'zana-checks.yml';
   if(!/^[A-Za-z0-9._-]{1,100}\.ya?ml$/.test(checksWorkflow))throw new Error('ZANA_CHECKS_WORKFLOW must be a workflow file name');
   const merge=env.ZANA_MERGE_ENABLED??'true';

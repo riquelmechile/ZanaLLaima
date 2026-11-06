@@ -1,7 +1,7 @@
 # Cloudflare tunnel ingress for ZanaLLaima (example; the operator owns the tunnel).
 tunnel: <TUNNEL_ID>
-credentials-file: /home/<user>/.cloudflared/<TUNNEL_ID>.json
+credentials-file: /home/<usuario>/.cloudflared/<TUNNEL_ID>.json
 ingress:
-  - hostname: zanallaima.quintoestado.com
+  - hostname: zanallaima.<tu-dominio>   # igual a ZANA_PUBLIC_HOST
     service: http://127.0.0.1:8787
   - service: http_status:404

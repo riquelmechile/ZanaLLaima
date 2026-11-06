@@ -55,7 +55,11 @@ export function assessBuildPolicy({pkg,lock,workflow,attestationWorkflow='',trac
     /npm ci|pull_request\.head\.sha|pull_request_target:/.test(attestationWorkflow))
     fail(errors,'CI_ATTESTATION_JOB_UNSAFE');
   const setup=sourceFiles.setup||'';
-  if(!/REVIEWER='sebastianriquelme95-max'/.test(setup)||
+  const reviewerAssignments=setup.match(/^\s*REVIEWER=.*$/gm)||[];
+  if(!/^REVIEWER="\$\{ZANA_CI_REVIEWER:-\}"$/m.test(setup)||
+    !setup.includes('[[ "$REVIEWER" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,38})$ ]] ||')||
+    !/fail 'Define ZANA_CI_REVIEWER/.test(setup)||
+    reviewerAssignments.some(l=>!/^REVIEWER="\$\{ZANA_CI_REVIEWER:-\}"$/.test(l)&&!/^REVIEWER="\$\(gh api "users\/\$REVIEWER" --jq '\.login'\)" \|\|$/.test(l))||
     !/reviewers\[0\]\[id\]/.test(setup)||
     !/required_reviewers/.test(setup)||
     !/\$verified\" == main/.test(setup)||

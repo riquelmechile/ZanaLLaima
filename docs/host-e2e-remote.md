@@ -4,12 +4,12 @@
 
 ## 0. Preparación
 
-1. Repo sandbox, por ejemplo `riquelmechile/zanallaima-sandbox`, en `ZANA_GITHUB_REPOS`, con `main` protegida (checks y review requeridos) y el workflow de `docs/checks-workflow.md`.
-2. Conector ZanaLLaima agregado en la app de ChatGPT (paso 5 del deploy).
+1. Repo sandbox, por ejemplo `<owner>/zanallaima-sandbox`, en `ZANA_GITHUB_REPOS`, con `main` protegida (checks y review requeridos) y el workflow de `docs/checks-workflow.md`.
+2. Conector ZanaLLaima agregado en la app de ChatGPT (paso 7 de `docs/deploy-remote.md`).
 
 ## 1. Conversación A (autora)
 
-Abrir una conversación nueva y pedir: "Con ZanaLLaima, crea una misión en riquelmechile/zanallaima-sandbox para agregar una función `sum(a,b)` con su test".
+Abrir una conversación nueva y pedir: "Con ZanaLLaima, crea una misión en <owner>/zanallaima-sandbox para agregar una función `sum(a,b)` con su test".
 
 Registrar:
 - `zana_session_status` → `session.id` y `session.createdAt` de A.
@@ -22,7 +22,7 @@ Abrir **otra conversación nueva** y pegar exactamente el mensaje del ticket ("R
 Registrar:
 - `zana_session_status` de B: `session.id` **debe ser distinto** del de A y `createdAt` posterior al ticket. Anotar en `sessionSeparationObserved` lo que se vio (por ejemplo, si al reabrir A apareció otra sesión).
 - `zana_review_claim` aceptado, las páginas leídas con `zana_review_diff`, los 4 lentes (`execution` declarado) y `zana_review_finalize`.
-- En GitHub: la review firmada por `sebastianriquelme95-max` sobre el SHA, y el status `zana/4r`.
+- En GitHub: la review firmada por la cuenta revisora (`ZANA_REVIEWER_LOGIN`) sobre el SHA, y el status `zana/4r`.
 - Si se usa `ZANA_DISTINCT_REVIEWER_CLIENT=true`, B debe usar otro cliente OAuth registrado que todos los que actuaron en la misión; con el mismo cliente el claim da `SAME_CLIENT`. Que sea otra cuenta de ChatGPT depende de que el operador solo haya dado de alta cuentas distintas.
 
 ## 3. Casos negativos en vivo (códigos reales)

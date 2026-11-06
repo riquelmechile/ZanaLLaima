@@ -8,6 +8,8 @@ import * as z from 'zod/v4';
 
 export const AUTHOR_TOKEN='github_pat_'+'A'.repeat(40);
 export const REVIEWER_TOKEN='ghp_'+'R'.repeat(36);
+export const REVIEWER_LOGIN='reviewer-bot';
+export const AUTHOR_LOGIN='author-dev';
 export const sha=c=>c.repeat(40);
 const CATALOG=JSON.parse(readFileSync(new URL('../../data/github-mcp-tools.json',import.meta.url),'utf8'));
 
@@ -52,7 +54,7 @@ export async function fakeGitHubApi(){
     if((m=/^\/pulls\/(\d+)\/reviews$/.exec(p))){
       if(req.method==='GET')return send(200,state.reviews[m[1]]??[]);
       const r=JSON.parse(body);const id=1000+(state.reviews[m[1]]??[]).length;
-      const login=token===REVIEWER_TOKEN?'sebastianriquelme95-max':'riquelmechile';
+      const login=token===REVIEWER_TOKEN?REVIEWER_LOGIN:AUTHOR_LOGIN;
       (state.reviews[m[1]]??=[]).push({id,user:{login},state:r.event==='APPROVE'?'APPROVED':'CHANGES_REQUESTED',
         commit_id:r.commit_id,body:r.body});
       return send(200,{id,html_url:'https://github.com/o/r/pull/'+m[1]+'#pullrequestreview-'+id});
@@ -71,7 +73,7 @@ export async function fakeGitHubApi(){
     if((m=/^\/commits\/([0-9a-f]{40})\/statuses$/.exec(p)))return send(200,state.statuses[m[1]]??[]);
     if((m=/^\/statuses\/([0-9a-f]{40})$/.exec(p))){
       const r=JSON.parse(body);
-      const login=token===REVIEWER_TOKEN?'sebastianriquelme95-max':'riquelmechile';
+      const login=token===REVIEWER_TOKEN?REVIEWER_LOGIN:AUTHOR_LOGIN;
       (state.statuses[m[1]]??=[]).unshift({...r,creator:{login}});
       return send(201,{id:1,...r});
     }
@@ -104,9 +106,9 @@ export async function fakeGitHubApi(){
     (state.runJobs[runId]??=[]).push({id:jobId,name,run_id:runId});
     state.logs[jobId]='line 1\n\x1b[31merror: expected 2 got 3\x1b[0m\ntoken '+AUTHOR_TOKEN+'\n';};
   state.openPull=(branch,number=7,base='main')=>{state.pulls.push({number,state:'open',draft:false,mergeable:true,
-    mergeable_state:'clean',html_url:'https://github.com/o/r/pull/'+number,user:{login:'riquelmechile'},
+    mergeable_state:'clean',html_url:'https://github.com/o/r/pull/'+number,user:{login:AUTHOR_LOGIN},
     head:{ref:branch,sha:state.branches[branch],repo:{full_name:'o/r'}},base:{ref:base}});
-    state.commits[number]=[{author:{login:'riquelmechile'},committer:{login:'web-flow'}}];};
+    state.commits[number]=[{author:{login:AUTHOR_LOGIN},committer:{login:'web-flow'}}];};
   return {url,state,close:()=>new Promise(ok=>{server.closeAllConnections?.();server.close(ok);})};
 }
 

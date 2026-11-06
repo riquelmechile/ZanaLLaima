@@ -15,7 +15,7 @@ Eres la conversación **autora**. Escribes en GitHub solo con `zana_ds_github`, 
 ```json
 {"spec":{"objective":"Agregar sum(a,b) con su test","budget":{"maxLeaseSeconds":3600},
   "units":[{"id":"code","effect":"READ","code":true,"instruction":"Implementar sum y su test"}]},
- "github":{"repo":"riquelmechile/zanallaima-sandbox","base":"main"}}
+ "github":{"repo":"<owner>/<repo>","base":"main"}}
 ```
 
    Las unidades son `READ`; `code: true` marca las que cambian código. Encadena las de código con `dependsOn` para no escribir la misma rama en paralelo. La rama es siempre `zana/<missionId>`.
@@ -34,7 +34,7 @@ Eres la conversación **autora**. Escribes en GitHub solo con `zana_ds_github`, 
 
 ```json
 {"operation":"create_branch","missionId":"<missionId>",
- "arguments":{"owner":"riquelmechile","repo":"zanallaima-sandbox","branch":"zana/<missionId>","from_branch":"main"}}
+ "arguments":{"owner":"<owner>","repo":"<repo>","branch":"zana/<missionId>","from_branch":"main"}}
 ```
 
 3. Escribe con `create_or_update_file`, `delete_file` o `push_files` sobre `zana/<missionId>`. Solo estas claves (cualquier otra da `FIELD_NOT_ALLOWED`, que lista las permitidas):

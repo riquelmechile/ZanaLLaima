@@ -4,6 +4,7 @@
 
 MCP remoto para la app de ChatGPT. Candidato sin merge, tag ni deploy; el deploy y el E2E real los hace el operador.
 
+- **Repo público sin datos del operador:** `ZANA_PUBLIC_HOST` y `ZANA_REVIEWER_LOGIN` ya no tienen valor por defecto. Sin ellos el servidor no arranca, `/health` queda `degraded` y `zana_delivery_status` responde `NOT_CONFIGURED`; la CLI de solo lectura sigue funcionando. `setup-ci-signing.sh` recibe la cuenta revisora en `ZANA_CI_REVIEWER`. `docs/deploy-remote.md` pasa a ser una guía de instalación paso a paso y genérica (cuentas y tokens, repos administrados, servidor, env, systemd, túnel, conector de ChatGPT y problemas comunes).
 - **Transporte y auth (ZL-020):** `src/http.mjs` con Streamable HTTP con sesiones en `127.0.0.1`, `Mcp-Session-Id` atado a la identidad OAuth y `createdAt` en SQLite; `src/oauth.mjs` con OAuth embebido adaptado de Panter-ai y **registro cerrado** (ventana `remote-enroll` del operador + clave de consentimiento); `/health`; `deploy/` con unidad `systemd --user`, ejemplo de env y túnel; `docs/deploy-remote.md`.
 - **Downstream GitHub:** `src/downstream.mjs` (gateway de Panter-ai: clases, `writes`, timeout, circuit breaker, auditoría con HMAC, aserción de actor `src/actor-assertion.mjs`) y `src/github-policy.mjs`, allowlist fail-closed sobre `data/github-mcp-tools.json` (GitHub MCP Server v2.1.0, 58 tools: 25 lectura, 11 escritura acotada a la misión, 22 denegadas).
 - **Checks en Actions:** `zana_checks_start`/`zana_checks_status` por SHA exacto con cola de log redactada; `zana_complete_unit` de una unidad de código exige check verde sobre el head actual. Plantilla en `docs/checks-workflow.md`.
@@ -131,7 +132,7 @@ Versión candidata en PR #1. Sin tag, release ni despliegue.
 - \`zana_apply_write\`: frontera de efectos locales con permiso firmado Ed25519, lease, rutas y comprobación de preimagen; 24 herramientas MCP.
 - Intenciones durables, recibos de SHA previos y posteriores y estado \`OUTCOME_UNKNOWN\` ante caídas antes de confirmar el recibo. Esquema SQLite v5.
 - Anclaje Linux por descriptores y rechazo de rutas con symlinks, hardlinks o destinos irregulares.
-- Emisor opcional de atestaciones CI Ed25519 y job de GitHub Actions de ámbito restringido; depende del secreto y llave pública provistos por Zana.
+- Emisor opcional de atestaciones CI Ed25519 y job de GitHub Actions de ámbito restringido; depende del secreto y llave pública provistos por el operador.
 - Pruebas adversariales de filesystem, permisos, firmas, recuperaciones, CLI y control de capacidades.
 - Guías de conexión a Codex CLI y ejecución humana del E2E.
 
@@ -144,5 +145,5 @@ Versión candidata en PR #1. Sin tag, release ni despliegue.
 ### Pendiente antes de liberar
 
 - Llaves reales de operador y CI, environment protegido y atestación CI emitida por GitHub.
-- Verificación de aislamiento del sistema operativo y E2E Codex por Zana.
+- Verificación de aislamiento del sistema operativo y E2E Codex por el operador.
 - Revisión independiente, aprobación de PR sobre SHA exacto y decisión humana de merge.

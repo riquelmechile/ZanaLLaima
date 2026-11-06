@@ -1,7 +1,7 @@
 // Minimal GitHub REST client for remote mode. One instance per token (author
 // or reviewer); the token never leaves this module except in the
 // Authorization header sent to the configured API origin.
-// Request discipline adapted from riquelmechile/panter-ai@1a99048
+// Request discipline adapted from panter-ai@1a99048
 // src/core/github-delivery.ts and src/core/github-workforce.ts (pinned origin,
 // no redirects, bounded responses, repository path checks).
 import {clean,redactText} from './redact.mjs';

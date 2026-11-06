@@ -7,7 +7,7 @@
 En Linux, con Node 22.16+ y Codex CLI instalado:
 
 \`\`\`sh
-cd /home/zana/ZanaLLaima
+cd /ruta/a/ZanaLLaima
 git rev-parse HEAD
 npm ci --ignore-scripts --no-audit --no-fund
 npm run check
@@ -24,10 +24,10 @@ Comando de configuración del **Codex CLI local**:
 codex mcp add zana-llaima \
   --env ZANA_STATE_FILE="$HOME/.local/state/zana-llaima/e2e.json" \
   --env ZANA_WORKSPACE_ROOT="$HOME/zana-e2e-workspace" \
-  --env ZANA_REVIEW_REPO="/home/zana/ZanaLLaima" \
+  --env ZANA_REVIEW_REPO="/ruta/a/ZanaLLaima" \
   --env ZANA_REVIEW_TARGET_REF="refs/heads/main" \
   --env ZANA_OPERATOR_PUBLIC_KEY_PATH="$HOME/.config/zana-llaima/operator-public.pem" \
-  -- node /home/zana/ZanaLLaima/src/mcp.mjs
+  -- node /ruta/a/ZanaLLaima/src/mcp.mjs
 
 codex mcp list
 codex mcp get zana-llaima
@@ -35,7 +35,7 @@ codex mcp get zana-llaima
 
 \`--env\` configura el proceso servidor, no el modelo o esfuerzo del anfitrión. El servidor ofrece 24 herramientas MCP; comprobar \`zana_profile\`, \`zana_capability_status\` y \`zana_storage_status\`.
 
-Se puede configurar también en \`~/.codex/config.toml\` mediante \`[mcp_servers.zana-llaima]\`, \`command="node"\`, \`args=["/home/zana/ZanaLLaima/src/mcp.mjs"]\` y \`env={...}\`.
+Se puede configurar también en \`~/.codex/config.toml\` mediante \`[mcp_servers.zana-llaima]\`, \`command="node"\`, \`args=["/ruta/a/ZanaLLaima/src/mcp.mjs"]\` y \`env={...}\`.
 
 Referencia de la interfaz de CLI: https://github.com/openai/codex/blob/main/codex-rs/cli/src/mcp_cmd.rs
 
@@ -53,7 +53,7 @@ Configuración recomendada para la prueba de seguridad:
 
 No ejecutar la prueba contra el repositorio de trabajo que se pretende proteger. Usar un workspace de E2E independiente.
 
-## 4. Qué debe registrar Zana
+## 4. Qué debe registrar el operador
 
 En la UI/CLI del anfitrión, anotar versión de Codex, modelo y esfuerzo **tal como aparecen**, hora UTC, herramientas listadas y resultado de cada operación. Si no se observa un subagente nativo real, registrar \`null\` y declarar modo secuencial, no inventar IDs.
 

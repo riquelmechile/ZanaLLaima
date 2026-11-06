@@ -154,6 +154,7 @@ export function revokeClient(path,clientId){
   const ledger=new Ledger(path);
   try{
     return {revoked:ledger.mutate(d=>{
+      if(!d.clients.some(c=>c.id===clientId))throw new OAuthCheckError('CLIENT_NOT_FOUND: no registered client '+clientId);
       const grants=d.grants.filter(g=>g.clientId===clientId);
       for(const g of grants)g.revoked=true;
       for(const t of d.tokens)if(t.clientId===clientId)t.revoked=true;

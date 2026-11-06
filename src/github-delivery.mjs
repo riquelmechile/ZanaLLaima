@@ -7,6 +7,7 @@
 // UNAVAILABLE. Panter's label, issue, conventional-commit and review-budget
 // gates are not copied: ZanaLLaima adds no gates beyond its contract.
 import {evaluateRuns} from './checks.mjs';
+import {createDeadline} from './deadline.mjs';
 
 export async function independentReview(github,repo,number,head,pull,reviewer){
   const login=reviewer.toLowerCase();
@@ -45,39 +46,55 @@ export function fourRStatus(statuses,reviewer){
   return mine.length?mine[0].state:'MISSING';
 }
 
-export async function deliveryStatus({github,config,ctx,openBlockingTickets=[]}){
+export async function deliveryStatus({github,config,ctx,openBlockingTickets=[],deadline=createDeadline(config.toolDeadlineMs)}){
   const pull=await missionPull(github,ctx);
   if(!pull)return {missionId:ctx.missionId,state:'NO_PULL_REQUEST',ready:false,
     blockers:['No single open pull request from '+ctx.branch+' to '+ctx.base],readOnly:true};
   const head=String(pull.head?.sha??'');
-  const ci=evaluateRuns(await github.checkRuns(ctx.repo,head),head,config.requiredChecks);
-  const fourR=fourRStatus(await github.statuses(ctx.repo,head),config.reviewerLogin);
-  const review=await independentReview(github,ctx.repo,pull.number,head,pull,config.reviewerLogin);
+  // Each read gets what is left of the tool deadline; a step that does not fit
+  // is reported as partial and counts as a blocker (never as green).
+  const ci=await deadline.step(async()=>evaluateRuns(await github.checkRuns(ctx.repo,head),head,config.requiredChecks),'ci',
+    {fallback:{state:'UNKNOWN',runs:[],missing:[]}});
+  const fourR=await deadline.step(async()=>fourRStatus(await github.statuses(ctx.repo,head),config.reviewerLogin),'zana/4r',
+    {fallback:'UNKNOWN'});
+  const review=await deadline.step(()=>independentReview(github,ctx.repo,pull.number,head,pull,config.reviewerLogin),'review',
+    {fallback:{login:config.reviewerLogin.toLowerCase(),state:'UNAVAILABLE',unavailableReason:'DEADLINE'}});
   const mergeable=pull.mergeable===true&&pull.draft!==true&&pull.state==='open';
   const blockers=[];
   if(review.state!=='APPROVED_EXACT_SHA')blockers.push('Review of '+review.login+': '+review.state);
   if(ci.state!=='SUCCESS')blockers.push('CI on '+head+': '+ci.state);
   if(fourR!=='success')blockers.push('zana/4r on '+head+': '+fourR);
-  if(!mergeable)blockers.push('Pull request not mergeable ('+(pull.mergeable_state??String(pull.mergeable))+')');
+  if(!mergeable)blockers.push('Pull request not mergeable ('+(pull.draft===true?'draft':pull.mergeable_state??String(pull.mergeable))+')');
   if(openBlockingTickets.length)blockers.push('Open review tickets with BLOCKER or CRITICAL: '+openBlockingTickets.join(', '));
   return {missionId:ctx.missionId,repo:ctx.repo,pullNumber:pull.number,pullUrl:pull.html_url??null,headSha:head,
     review,ci:{state:ci.state,runs:ci.runs,missing:ci.missing},fourR,mergeable,
-    mergeableState:pull.mergeable_state??null,openBlockingTickets,ready:blockers.length===0,blockers,readOnly:true};
+    mergeableState:pull.mergeable_state??null,openBlockingTickets,ready:blockers.length===0,blockers,
+    ...(deadline.partial.length?{partial:deadline.partial}:{}),readOnly:true};
 }
 
 // Merge only when deliveryStatus is green on one head SHA. The merge API gets
 // sha = that head (equivalent to --match-head-commit): if the head moved,
-// GitHub refuses and ZanaLLaima answers STALE_SHA without retrying.
-export async function mergeMission({github,config,ctx,openBlockingTickets}){
+// GitHub refuses and ZanaLLaima answers STALE_SHA without retrying. If the
+// answer is lost, the pull request is read again: merged means MERGED.
+export async function mergeMission({github,config,ctx,openBlockingTickets,onAttempt=async()=>{}}){
   if(!config.mergeEnabled)return {merged:false,state:'MERGE_DISABLED',reason:'ZANA_MERGE_ENABLED=false'};
   const status=await deliveryStatus({github,config,ctx,openBlockingTickets});
   if(!status.ready)return {merged:false,state:'NOT_READY',blockers:status.blockers,headSha:status.headSha??null};
+  await onAttempt(status.headSha);
+  const recovered=async()=>{
+    let pull=null;
+    try{pull=await github.pull(ctx.repo,status.pullNumber);}catch{pull=null;}
+    return pull?.merged===true?{merged:true,state:'MERGED',pullNumber:status.pullNumber,headSha:status.headSha,
+      mergeCommitSha:pull.merge_commit_sha??null,method:config.mergeMethod,recovered:true}:null;
+  };
   try{
     const result=await github.merge(ctx.repo,status.pullNumber,{headSha:status.headSha,method:config.mergeMethod});
-    if(result?.merged!==true)return {merged:false,state:'MERGE_REFUSED',headSha:status.headSha,reason:String(result?.message??'')};
+    if(result?.merged!==true)return (await recovered())??{merged:false,state:'MERGE_REFUSED',headSha:status.headSha,reason:String(result?.message??'')};
     return {merged:true,state:'MERGED',pullNumber:status.pullNumber,headSha:status.headSha,
       mergeCommitSha:result.sha??null,method:config.mergeMethod};
   }catch(error){
+    const done=await recovered();
+    if(done)return done;
     if(error?.status===409||(error?.status===422&&/head|sha|modified/i.test(error.message)))
       return {merged:false,state:'STALE_SHA',headSha:status.headSha,reason:error.message};
     throw error;

@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createServer} from 'node:net';
 import {join} from 'node:path';
 import {remoteFixture} from './helpers/remote-fixture.mjs';
 import {transact} from '../src/store.mjs';
@@ -62,20 +61,29 @@ test('no mission: mutating tools fail cleanly',async()=>{
   }finally{await f.cleanup();}
 });
 
-test('startRemote listens on 127.0.0.1 and serves /health',async()=>{
+test('startRemote listens on 127.0.0.1 (port 0 = free port), refuses relative paths and serves /health',async()=>{
   const f=await remoteFixture();
-  const port=await new Promise(ok=>{const s=createServer();s.listen(0,'127.0.0.1',()=>{const p=s.address().port;s.close(()=>ok(p));});});
-  assert.throws(()=>httpSettings({ZANA_HTTP_PORT:'0'}),/ZANA_HTTP_PORT/);
-  const started=await startRemote({...f.env,ZANA_HTTP_PORT:String(port),ZANA_OAUTH_DB:join(f.dir,'o.sqlite'),
-    ZANA_OAUTH_CONSENT_PASSWORD:'p'.repeat(40),ZANA_PUBLIC_HOST:'zanallaima.test'});
+  const base={...f.env,ZANA_HTTP_PORT:'0',ZANA_OAUTH_DB:join(f.dir,'o.sqlite'),
+    ZANA_OAUTH_CONSENT_PASSWORD:'p'.repeat(40),ZANA_PUBLIC_HOST:'zanallaima.test'};
+  let started;
   try{
+    assert.throws(()=>httpSettings({ZANA_HTTP_PORT:'-1'}),/ZANA_HTTP_PORT/);
+    await assert.rejects(startRemote({...base,ZANA_OAUTH_DB:'rel/o.sqlite'}),/absolute/);
+    started=await startRemote(base);
     assert.equal(started.settings.bind,'127.0.0.1');
+    assert.ok(started.settings.port>0);
     assert.equal(started.settings.publicUrl,'https://zanallaima.test/mcp');
-    const health=await (await fetch('http://127.0.0.1:'+port+'/health')).json();
-    assert.equal(health.status,'ok');
+    const res=await fetch('http://127.0.0.1:'+started.settings.port+'/health');
+    const health=await res.json();
+    assert.equal(res.status,200);
+    assert.deepEqual({status:health.status,schemaVersion:health.schemaVersion,reviewerToken:health.reviewerToken,staleTickets:health.staleTickets},
+      {status:'ok',schemaVersion:7,reviewerToken:'configured',staleTickets:0});
   }finally{
-    started.server.closeAllConnections();
-    await new Promise(ok=>started.server.close(ok));
-    started.oauth.close();await started.runtime.close();await f.cleanup();
+    if(started){
+      started.server.closeAllConnections();
+      await new Promise(ok=>started.server.close(ok));
+      started.oauth.close();await started.runtime.close();
+    }
+    await f.cleanup();
   }
 });

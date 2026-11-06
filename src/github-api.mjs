@@ -11,6 +11,15 @@ const SHA=/^[0-9a-f]{40}$/;
 const MAX_BYTES=2_000_000;
 const REF_SEGMENT=/^[A-Za-z0-9._@+=,-]{1,200}$/;
 
+// Circuit breaker shared by every client of one API origin (author and
+// reviewer): consecutive network errors, 5xx or 429 open it for OPEN_MS and
+// calls then fail fast instead of piling up behind a slow GitHub.
+const BREAKERS=new Map();
+const FAILURES_TO_OPEN=5,OPEN_MS=30_000;
+export function breakerFor(origin){
+  if(!BREAKERS.has(origin))BREAKERS.set(origin,{failures:0,openUntil:0});
+  return BREAKERS.get(origin);
+}
 export class GitHubApiError extends Error{
   constructor(status,message){super(message);this.name='GitHubApiError';this.status=status;}
 }
@@ -47,6 +56,10 @@ export class GitHubApi{
   secrets(){return this.token?[this.token]:[];}
   async request(method,path,{body,accept='application/vnd.github+json',raw=false}={}){
     if(!this.token)throw new GitHubApiError(503,'GitHub token not configured on the server');
+    const breaker=breakerFor(this.origin);
+    if(Date.now()<breaker.openUntil)
+      throw new GitHubApiError(503,'GitHub REST circuit open until '+new Date(breaker.openUntil).toISOString()+' after '+breaker.failures+' failures');
+    const failed=()=>{breaker.failures++;if(breaker.failures>=FAILURES_TO_OPEN)breaker.openUntil=Date.now()+OPEN_MS;};
     let res;
     try{
       res=await this.fetcher(this.origin+path,{method,redirect:'error',
@@ -55,7 +68,8 @@ export class GitHubApi{
           authorization:'Bearer '+this.token,
           ...(body!==undefined?{'content-type':'application/json'}:{})},
         ...(body!==undefined?{body:JSON.stringify(body)}:{})});
-    }catch(error){throw new GitHubApiError(502,'GitHub unreachable: '+clean(error,this.secrets()));}
+    }catch(error){failed();throw new GitHubApiError(502,'GitHub unreachable: '+clean(error,this.secrets()));}
+    if(res.status>=500||res.status===429)failed();else{breaker.failures=0;breaker.openUntil=0;}
     const text=await res.text();
     if(text.length>MAX_BYTES)throw new GitHubApiError(502,'GitHub response too large');
     if(!res.ok){
@@ -76,6 +90,13 @@ export class GitHubApi{
   async pull(repo,number){return this.request('GET',repoPath(repo)+'/pulls/'+positive(number));}
   async pullDiff(repo,number){
     return this.request('GET',repoPath(repo)+'/pulls/'+positive(number),{accept:'application/vnd.github.diff',raw:true});
+  }
+  // The diff of exactly base...commit (three dots, like a pull request), so a
+  // ticket's pages never change while its SHA does not.
+  async compareDiff(repo,base,commit){
+    if(!validRefName(base))throw new GitHubApiError(400,'Invalid base');
+    return this.request('GET',repoPath(repo)+'/compare/'+refPath(base)+'...'+sha(commit),
+      {accept:'application/vnd.github.diff',raw:true});
   }
   async openPullsFor(repo,branch){
     const owner=repo.split('/')[0];

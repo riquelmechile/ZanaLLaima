@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {remoteFixture,REVIEWER_TOKEN,AUTHOR_TOKEN,sha,sleep} from './helpers/remote-fixture.mjs';
+import {remoteFixture,REVIEWER_TOKEN,AUTHOR_TOKEN,sha,sleep,readDiff} from './helpers/remote-fixture.mjs';
 import {ticketCode,validateLens,reviewBody} from '../src/remote-review.mjs';
 import {remoteWrite} from '../src/store.mjs';
 
@@ -13,6 +13,7 @@ async function claimed(f){
   const reviewer=await f.session();
   const claim=await f.call('zana_review_claim',{ticket:req.ticket},reviewer);
   assert.equal(claim.error,undefined,claim.error);
+  await readDiff(f.call,req.ticket,reviewer);
   return {...ready,req,reviewer,claim,ticket:req.ticket};
 }
 async function allLenses(f,ticket,reviewer,risk=clean('risk')){
@@ -103,12 +104,17 @@ test('review request needs an open mission PR with green checks; claim rules',as
     assert.match((await f.call('zana_review_claim',{ticket:'ZR-AAAA-AAAA-AAAA-AAAA'},before)).error,/TICKET_NOT_FOUND/);
     assert.match((await f.call('zana_review_claim',{ticket:'not-a-ticket'},before)).error,/TICKET_NOT_FOUND/);
     const reviewer=await f.session();
+    let late;
     const ok=await f.call('zana_review_claim',{ticket:req.ticket},reviewer);
     assert.equal(ok.state,'CLAIMED');
     assert.equal(ok.sha,sha('a'));
-    assert.equal(ok.diff.includes(AUTHOR_TOKEN),false,'diff is redacted');
+    assert.equal(ok.diffManifest.totalPages,1);
+    const page=await f.call('zana_review_diff',{ticket:req.ticket,page:0},reviewer);
+    assert.equal(page.text.includes(AUTHOR_TOKEN),false,'diff is redacted');
+    assert.deepEqual(page.unread,[]);
+    assert.match((await f.call('zana_review_diff',{ticket:req.ticket,page:1},reviewer)).error,/INVALID_PAGE/);
+    assert.match((await f.call('zana_review_diff',{ticket:req.ticket,page:0},late=await f.session())).error,/NOT_REVIEWER/);
     assert.deepEqual(ok.lenses,['risk','readability','reliability','resilience']);
-    const late=await f.session();
     assert.match((await f.call('zana_review_claim',{ticket:req.ticket},late)).error,/TICKET_ALREADY_CLAIMED/);
     // Expired ticket.
     const req2=await f.call('zana_review_request',{missionId:noPr.missionId},noPr.author);

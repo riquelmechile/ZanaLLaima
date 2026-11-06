@@ -33,10 +33,11 @@ const REMOTE_TABLES=[
   'CREATE TABLE IF NOT EXISTS remote_activity (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, mission_id TEXT NOT NULL, kind TEXT NOT NULL, tool TEXT NOT NULL, created_at TEXT NOT NULL)',
   'CREATE INDEX IF NOT EXISTS remote_activity_session ON remote_activity(mission_id,session_id)',
   'CREATE TABLE IF NOT EXISTS remote_checks (check_id TEXT PRIMARY KEY, mission_id TEXT NOT NULL, sha TEXT NOT NULL, workflow TEXT NOT NULL, dispatched INTEGER NOT NULL, session_id TEXT NOT NULL, created_at TEXT NOT NULL)',
-  'CREATE TABLE IF NOT EXISTS review_tickets (ticket_id TEXT PRIMARY KEY, code_hash TEXT NOT NULL UNIQUE, mission_id TEXT NOT NULL, repo TEXT NOT NULL, pr_number INTEGER NOT NULL, sha TEXT NOT NULL, author_session TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, state TEXT NOT NULL, reviewer_session TEXT, claimed_at TEXT, finalized_at TEXT, verdict TEXT, execution TEXT, github_review_id INTEGER, status_posted INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL)',
-  'CREATE TABLE IF NOT EXISTS remote_audit (seq INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, host TEXT, session_id TEXT, tool TEXT NOT NULL, mission_id TEXT, outcome TEXT NOT NULL, args_hmac TEXT, detail TEXT)',
+  'CREATE TABLE IF NOT EXISTS review_tickets (ticket_id TEXT PRIMARY KEY, code_hash TEXT NOT NULL UNIQUE, mission_id TEXT NOT NULL, repo TEXT NOT NULL, pr_number INTEGER NOT NULL, sha TEXT NOT NULL, author_session TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, state TEXT NOT NULL, reviewer_session TEXT, claimed_at TEXT, finalized_at TEXT, verdict TEXT, execution TEXT, github_review_id INTEGER, status_posted INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, author_client TEXT)',
+  'CREATE TABLE IF NOT EXISTS review_diff_pages (ticket_id TEXT NOT NULL, page INTEGER NOT NULL, path TEXT NOT NULL, sha256 TEXT NOT NULL, read_at TEXT, PRIMARY KEY(ticket_id,page))',
+  'CREATE TABLE IF NOT EXISTS remote_audit (seq INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, host TEXT, session_id TEXT, tool TEXT NOT NULL, mission_id TEXT, outcome TEXT NOT NULL, args_hmac TEXT, detail TEXT, category TEXT NOT NULL DEFAULT \'other\')',
 ];
-const TICKET_RANK={OPEN:0,CLAIMED:1,FINALIZING:2,FINALIZED:3,STALE_SHA:3,EXPIRED:3};
+const TICKET_RANK={OPEN:0,CLAIMED:1,FINALIZING:2,FINALIZED:3,STALE_SHA:3,EXPIRED:3,ABANDONED:3};
 const tokenHash = token => createHash('sha256').update(token).digest('hex');
 const fail = (message) => { throw new Error(message); };
 // SQLite may automatically roll back (SQLITE_FULL / RAISE(ROLLBACK)).
@@ -116,6 +117,11 @@ function connect(path, readonly = false) {
         const effectColumns=db.prepare('PRAGMA table_info(write_effect_receipts)').all().map(x=>x.name);
         if(!effectColumns.includes('pre_mode'))db.exec('ALTER TABLE write_effect_receipts ADD COLUMN pre_mode INTEGER');
         if(!effectColumns.includes('post_mode'))db.exec('ALTER TABLE write_effect_receipts ADD COLUMN post_mode INTEGER');
+        const ticketColumns=db.prepare('PRAGMA table_info(review_tickets)').all().map(x=>x.name);
+        if(!ticketColumns.includes('author_client'))db.exec('ALTER TABLE review_tickets ADD COLUMN author_client TEXT');
+        const auditColumns=db.prepare('PRAGMA table_info(remote_audit)').all().map(x=>x.name);
+        if(!auditColumns.includes('category'))db.exec("ALTER TABLE remote_audit ADD COLUMN category TEXT NOT NULL DEFAULT 'other'");
+        db.exec('CREATE INDEX IF NOT EXISTS remote_audit_category ON remote_audit(category,seq)');
         const unitColumns=db.prepare('PRAGMA table_info(units)').all().map(x=>x.name);
         if(!unitColumns.includes('attempts')) db.exec('ALTER TABLE units ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0');
         db.exec('PRAGMA user_version = ' + SCHEMA_VERSION + '; COMMIT');
@@ -720,7 +726,8 @@ function remoteFacts(db){
     tickets:db.prepare('SELECT * FROM review_tickets').all(),
     lenses:db.prepare('SELECT r.* FROM review_receipts r JOIN review_tickets t ON t.ticket_id=r.review_id').all(),
     archive:db.prepare('SELECT a.mission_id,a.review_id,a.content,a.created_at FROM review_archive a JOIN review_tickets t ON t.ticket_id=a.review_id').all(),
-    audit:db.prepare('SELECT at,host,session_id,tool,mission_id,outcome,args_hmac,detail FROM remote_audit').all(),
+    audit:db.prepare('SELECT at,host,session_id,tool,mission_id,outcome,args_hmac,detail,category FROM remote_audit').all(),
+    diffPages:db.prepare('SELECT * FROM review_diff_pages').all(),
     auditKey:db.prepare("SELECT value FROM metadata WHERE key='remote_audit_key'").get()?.value??null,
   };
 }
@@ -741,6 +748,11 @@ function mergeRemoteFacts(db,facts){
       insertRow(db,'review_tickets',row,'OR REPLACE');
   }
   for(const row of facts.lenses)insertRow(db,'review_receipts',row);
+  // A page read is a monotone fact too.
+  for(const row of facts.diffPages??[]){
+    insertRow(db,'review_diff_pages',row);
+    if(row.read_at)db.prepare('UPDATE review_diff_pages SET read_at=COALESCE(read_at,?) WHERE ticket_id=? AND page=?').run(row.read_at,row.ticket_id,row.page);
+  }
   for(const row of facts.archive)insertRow(db,'review_archive',row);
   const sameActivity=db.prepare('SELECT 1 FROM remote_activity WHERE session_id=? AND mission_id=? AND kind=? AND tool=? AND created_at=?');
   for(const row of facts.activity)

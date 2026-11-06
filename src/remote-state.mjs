@@ -8,7 +8,12 @@ import {redactDeep,envSecrets} from './redact.mjs';
 
 export const nowIso=()=>new Date().toISOString();
 const SESSION=/^[A-Za-z0-9._:-]{8,200}$/;
-export const MAX_AUDIT=5000;
+// Retention: read-only audit rows are a bounded window; writes, refusals,
+// merges and reviews are kept by age. Activity, sessions, checks and terminal
+// tickets are pruned by age (activity only for missions that are not active).
+export const MAX_READ_AUDIT=5000;
+export const RETENTION_DAYS=Object.freeze({audit:365,activity:90,sessions:30,checks:30,tickets:180});
+const DAY=86_400_000;
 
 // Bind a transport session id to the OAuth identity that opened it, and keep
 // the moment it was created (the "session created before the ticket" rule).
@@ -40,6 +45,12 @@ export function recordActivity(db,{sessionId,missionId,kind,tool}){
 }
 export const sessionWrote=(db,sessionId,missionId)=>Boolean(db?.prepare(
   'SELECT 1 FROM remote_activity WHERE session_id=? AND mission_id=? LIMIT 1').get(sessionId,missionId));
+// Author rule for zana_merge: the session that created the mission, or one
+// that held (started or rebound) one of its units.
+export const sessionIsMissionAuthor=(db,sessionId,missionId)=>Boolean(db&&(
+  db.prepare('SELECT 1 FROM remote_missions WHERE mission_id=? AND created_session=?').get(missionId,sessionId)||
+  db.prepare("SELECT 1 FROM remote_activity WHERE session_id=? AND mission_id=? AND kind IN ('UNIT_START','UNIT_REBIND') LIMIT 1")
+    .get(sessionId,missionId)));
 // A session that claimed any ticket of the mission stays read-only on it.
 export const sessionReviews=(db,sessionId,missionId)=>Boolean(db?.prepare(
   'SELECT 1 FROM review_tickets WHERE reviewer_session=? AND mission_id=? LIMIT 1').get(sessionId,missionId));
@@ -53,16 +64,34 @@ function auditKey(db){
 }
 // Who (host and session), what tool, mission, outcome and a keyed hash of the
 // arguments. Never the arguments themselves and never a token.
-export function writeAudit(db,{caller,tool,missionId=null,outcome,args,detail=null}){
+export const AUDIT_CATEGORIES=Object.freeze(['read','write','refused','merge','review','operator','other']);
+export function writeAudit(db,{caller,tool,missionId=null,outcome,args,detail=null,category='other'}){
+  if(!AUDIT_CATEGORIES.includes(category))category='other';
   const argsHmac=args===undefined?null:
     createHmac('sha256',auditKey(db)).update(canonicalJson(args)).digest('hex');
   const text=detail===null?null:JSON.stringify(redactDeep(detail,envSecrets()));
   const safe=text!==null&&text.length>2000?JSON.stringify({truncated:true}):text;
-  db.prepare('INSERT INTO remote_audit(at,host,session_id,tool,mission_id,outcome,args_hmac,detail) VALUES(?,?,?,?,?,?,?,?)')
+  const row=db.prepare('INSERT INTO remote_audit(at,host,session_id,tool,mission_id,outcome,args_hmac,detail,category) VALUES(?,?,?,?,?,?,?,?,?)')
     .run(nowIso(),caller?.host??null,caller?.sessionId??null,String(tool).slice(0,120),missionId,
-      String(outcome).slice(0,40),argsHmac,safe);
-  // Bounded trail: keep the newest MAX_AUDIT rows.
-  db.prepare('DELETE FROM remote_audit WHERE seq <= (SELECT MAX(seq) FROM remote_audit) - ?').run(MAX_AUDIT);
+      String(outcome).slice(0,40),argsHmac,safe,category);
+  if(Number(row.lastInsertRowid)%100===0)pruneRemote(db);
+}
+export function pruneRemote(db,now=Date.now()){
+  const before=days=>new Date(now-days*DAY).toISOString();
+  const reads=db.prepare("SELECT seq FROM remote_audit WHERE category='read' ORDER BY seq DESC LIMIT 1 OFFSET ?").get(MAX_READ_AUDIT);
+  if(reads)db.prepare("DELETE FROM remote_audit WHERE category='read' AND seq<=?").run(reads.seq);
+  db.prepare('DELETE FROM remote_audit WHERE at<?').run(before(RETENTION_DAYS.audit));
+  const active=db.prepare('SELECT id FROM active_mission WHERE slot=1').get()?.id??'';
+  db.prepare('DELETE FROM remote_activity WHERE created_at<? AND mission_id!=?').run(before(RETENTION_DAYS.activity),active);
+  db.prepare('DELETE FROM remote_checks WHERE created_at<?').run(before(RETENTION_DAYS.checks));
+  const terminal="state IN ('FINALIZED','STALE_SHA','EXPIRED','ABANDONED')";
+  const old=db.prepare('SELECT ticket_id FROM review_tickets WHERE '+terminal+' AND updated_at<?').all(before(RETENTION_DAYS.tickets));
+  for(const {ticket_id} of old){
+    db.prepare('DELETE FROM review_diff_pages WHERE ticket_id=?').run(ticket_id);
+    db.prepare('DELETE FROM review_tickets WHERE ticket_id=?').run(ticket_id);
+  }
+  db.prepare("DELETE FROM remote_sessions WHERE last_seen_at<? AND session_id NOT IN (SELECT author_session FROM review_tickets WHERE state NOT IN ('FINALIZED','STALE_SHA','EXPIRED','ABANDONED')) AND session_id NOT IN (SELECT reviewer_session FROM review_tickets WHERE reviewer_session IS NOT NULL AND state NOT IN ('FINALIZED','STALE_SHA','EXPIRED','ABANDONED'))")
+    .run(before(RETENTION_DAYS.sessions));
 }
 export const audit=(entry,file)=>remoteWrite(db=>writeAudit(db,entry),file);
 export function readAudit({limit=50,missionId=null}={},file){
@@ -73,6 +102,6 @@ export function readAudit({limit=50,missionId=null}={},file){
       ?db.prepare('SELECT * FROM remote_audit WHERE mission_id=? ORDER BY seq DESC LIMIT ?').all(missionId,limit)
       :db.prepare('SELECT * FROM remote_audit ORDER BY seq DESC LIMIT ?').all(limit);
     return rows.map(r=>({id:r.seq,at:r.at,host:r.host,sessionId:r.session_id,tool:r.tool,missionId:r.mission_id,
-      outcome:r.outcome,argsHmac:r.args_hmac,detail:r.detail?JSON.parse(r.detail):null}));
+      outcome:r.outcome,category:r.category,argsHmac:r.args_hmac,detail:r.detail?JSON.parse(r.detail):null}));
   },file);
 }

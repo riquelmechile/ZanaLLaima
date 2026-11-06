@@ -1,16 +1,65 @@
 #!/usr/bin/env node
 import {readFile} from 'node:fs/promises';
-import {resolve} from 'node:path';
+import {existsSync,readFileSync} from 'node:fs';
+import {resolve,join,isAbsolute} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {operations} from './actions.mjs';
-import {applyOperatorAction,storageRestoreAbort,storageCleanupArtifacts,storageAdoptQuarantine,readState} from './store.mjs';
+import {applyOperatorAction,storageRestoreAbort,storageCleanupArtifacts,storageAdoptQuarantine,readState,databasePath,statePath} from './store.mjs';
 
-const usage='Commands: remote-serve, remote-enroll, remote-enroll-close, remote-clients, remote-revoke, remote-audit, remote-merge, operator-import, heartbeat, recover-expired, retry, cancel, close, archive, mission-history, authorization-status, storage-status, storage-history, storage-reviews, storage-migrate, storage-backup, storage-restore, storage-restore-abort, storage-cleanup-artifacts, storage-adopt-quarantine, reconcile-view, profile, init, status, next, start, complete, apply-write, review-open, review-next, review-start, review-submit, review-check, review-status, delivery-check';
+const usage='Commands: remote-serve, remote-enroll, remote-enroll-close, remote-clients, remote-revoke, remote-audit, remote-merge, remote-tickets, remote-ticket-abandon, operator-import, heartbeat, recover-expired, retry, cancel, close, archive, mission-history, authorization-status, storage-status, storage-history, storage-reviews, storage-migrate, storage-backup, storage-restore, storage-restore-abort, storage-cleanup-artifacts, storage-adopt-quarantine, reconcile-view, profile, init, status, next, start, complete, apply-write, review-open, review-next, review-start, review-submit, review-check, review-status, delivery-check';
 const readJson=async path=>JSON.parse(await readFile(path,'utf8'));
 const readText=async path=>readFile(path,'utf8');
 const noArgs=new Set(['status','profile','review-status','review-check','storage-status',
   'storage-migrate','storage-restore-abort','reconcile-view','authorization-status','recover-expired','cancel','close','archive',
   'remote-serve','remote-enroll-close','remote-clients']);
+
+// The server environment, loaded explicitly: --env-file <path>, else
+// ZANA_ENV_FILE, else /home/<user>/.config/zanallaima/zanallaima.env when it
+// exists. An explicit file overrides the process environment; the default
+// file only fills variables that are not set. KEY=VALUE lines, # comments,
+// optional surrounding quotes, no expansion.
+export function parseEnvFile(text){
+  const out={};
+  for(const raw of text.split(/\r?\n/)){
+    const line=raw.trim();
+    if(!line||line.startsWith('#'))continue;
+    const m=/^(?:export\s+)?([A-Z_][A-Z0-9_]*)=(.*)$/.exec(line);
+    if(!m)throw Error('Invalid line in env file: '+line.slice(0,40));
+    let value=m[2].trim();
+    if(value.length>=2&&(value[0]==='"'||value[0]==="'")&&value.at(-1)===value[0])value=value.slice(1,-1);
+    out[m[1]]=value;
+  }
+  return out;
+}
+export function loadServerEnv(args,env=process.env){
+  const i=args.indexOf('--env-file');
+  let file=null,explicit=true;
+  if(i>=0){
+    file=args[i+1];
+    if(!file)throw Error('--env-file requires a path');
+    args.splice(i,2);
+  }else if(env.ZANA_ENV_FILE)file=env.ZANA_ENV_FILE;
+  else if(env.HOME&&existsSync(join(env.HOME,'.config','zanallaima','zanallaima.env'))){
+    file=join(env.HOME,'.config','zanallaima','zanallaima.env');explicit=false;
+  }
+  if(!file)return null;
+  for(const [k,v] of Object.entries(parseEnvFile(readFileSync(file,'utf8'))))
+    if(explicit||env[k]===undefined)env[k]=v;
+  return file;
+}
+const OAUTH_COMMANDS=new Set(['remote-enroll','remote-enroll-close','remote-clients','remote-revoke']);
+// remote-* act on the server's databases: absolute paths that already exist
+// (remote-serve may create them on the first start).
+function requireServerPaths(command,env=process.env){
+  const check=(name,path,mustExist)=>{
+    if(!env[name])throw Error(name+' is not set; pass --env-file <server env> or set ZANA_ENV_FILE');
+    if(!isAbsolute(env[name]))throw Error(name+' must be an absolute path (got '+env[name]+')');
+    if(mustExist&&!existsSync(path))throw Error(name+' points to '+path+', which does not exist; refusing to create a new database');
+  };
+  const create=command==='remote-serve';
+  check('ZANA_STATE_FILE',env.ZANA_STATE_FILE?databasePath(statePath()):'',!create&&!OAUTH_COMMANDS.has(command));
+  if(create||OAUTH_COMMANDS.has(command))check('ZANA_OAUTH_DB',env.ZANA_OAUTH_DB,!create);
+}
 
 const aliases={
   'review-open':'reviewOpen','review-submit':'reviewSubmit',
@@ -88,6 +137,11 @@ export async function parseCliCommand(command,args=[],{json=readJson,text=readTe
     if(args.length!==1)throw Error('remote-merge requires <missionId>');
     input={missionId:args[0]};
   }
+  else if(command==='remote-tickets')input={...(args[0]?{missionId:args[0]}:{})};
+  else if(command==='remote-ticket-abandon'){
+    if(args.length!==1)throw Error('remote-ticket-abandon requires <ticketId>');
+    input={ticketId:args[0]};
+  }
   else if(command==='remote-audit')
     input={limit:args[0]?Number(args[0]):50,...(args[1]?{missionId:args[1]}:{})};
   else if(!noArgs.has(command))throw Error(usage);
@@ -99,6 +153,7 @@ export async function parseCliCommand(command,args=[],{json=readJson,text=readTe
 async function runRemoteCommand({command,input}){
   const {httpSettings,startRemote}=await import('./http.mjs');
   const {setEnrollment,listClients,revokeClient}=await import('./oauth.mjs');
+  requireServerPaths(command);
   const db=httpSettings().oauthDb;
   if(command==='remote-serve'){const {settings}=await startRemote();return {listening:settings.bind+':'+settings.port};}
   if(command==='remote-enroll')return setEnrollment(db,input.minutes);
@@ -109,11 +164,16 @@ async function runRemoteCommand({command,input}){
   const runtime=createRemoteRuntime();
   try{
     if(command==='remote-audit')return {items:await runtime.readAudit(input)};
+    if(command==='remote-tickets')return {tickets:await runtime.review.list(input.missionId??null)};
+    if(command==='remote-ticket-abandon')
+      return runtime.review.abandon(input.ticketId,{host:'operator',sessionId:'operator-cli'});
     return await runtime.ops.zana_merge(input,{operator:true,host:'operator',sessionId:'operator-cli'});
   }finally{await runtime.close();}
 }
 
 export async function runCli(command,args=[],{json,text}={}){
+  args=Array.isArray(args)?[...args]:args;
+  if(Array.isArray(args))loadServerEnv(args);
   const parsed=await parseCliCommand(command,args,{json,text});
   if(parsed.command.startsWith('remote-'))return runRemoteCommand(parsed);
   if(parsed.command==='operator-import')return applyOperatorAction(parsed.input.envelope);

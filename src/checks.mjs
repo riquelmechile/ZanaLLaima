@@ -4,6 +4,7 @@
 // blocking. checksStatus reads the check runs of that exact SHA; on failure it
 // returns the redacted tail of the failed job logs.
 import {randomUUID} from 'node:crypto';
+import {createDeadline,LOG_BUDGET_MS} from './deadline.mjs';
 
 const OK=new Set(['success','neutral','skipped']);
 const MAX_FAILED_LOGS=3;
@@ -52,20 +53,29 @@ export function createChecks({github,config,remoteWrite,remoteRead,missionContex
       const row=await remoteRead(db=>db?.prepare('SELECT * FROM remote_checks WHERE check_id=?').get(checkId)??null);
       if(!row)throw new Error('Unknown checkId');
       const ctx=await missionContext(row.mission_id,null,{allowInactive:true});
-      const result=await verdict(ctx.repo,row.sha);
-      let head=null;
-      try{head=await github.branchHead(ctx.repo,ctx.branch);}catch{head=null;}
+      const deadline=createDeadline(config.toolDeadlineMs);
+      const result=await deadline.step(()=>verdict(ctx.repo,row.sha),'check-runs',
+        {fallback:{state:'UNKNOWN',sha:row.sha,missing:[],runs:[]}});
+      let head=null,headError=null;
+      try{head=await deadline.step(()=>github.branchHead(ctx.repo,ctx.branch),'branch-head',{fallback:null});}
+      catch(error){headError=String(error?.message??error).slice(0,200);}
+      if(head===null&&!headError&&deadline.partial.includes('branch-head'))headError='branch head read exceeded the tool deadline';
       const failures=[];
       if(result.state==='FAILURE'){
+        // Job logs get their own budget, shared by all failed jobs.
+        const logs=createDeadline(Math.min(LOG_BUDGET_MS,deadline.remaining()));
         for(const run of result.runs.filter(r=>r.status==='completed'&&!OK.has(r.conclusion)).slice(0,MAX_FAILED_LOGS)){
           let logTail;
-          try{logTail=await github.jobLogTail(ctx.repo,run.id,60);}
+          try{logTail=await logs.step(()=>github.jobLogTail(ctx.repo,run.id,60),'log:'+run.name,
+            {fallback:['(log omitted: log time budget exhausted)']});}
           catch(error){logTail=['(log unavailable: '+String(error?.message??error).slice(0,200)+')'];}
           failures.push({name:run.name,url:run.url,logTail});
         }
+        deadline.partial.push(...logs.partial);
       }
-      return {checkId,missionId:row.mission_id,...result,failures,
-        branchHead:head,headMoved:head!==null&&head!==row.sha};
+      return {checkId,missionId:row.mission_id,...result,failures,branchHead:head,
+        headMoved:head===null?null:head!==row.sha,...(head===null?{headMovedReason:headError??'unknown'}:{}),
+        partial:deadline.partial.length?deadline.partial:undefined};
     },
   };
 }

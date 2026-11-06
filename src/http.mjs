@@ -12,7 +12,7 @@
 import {createServer} from 'node:http';
 import {randomUUID} from 'node:crypto';
 import {readFileSync} from 'node:fs';
-import {dirname,join,resolve} from 'node:path';
+import {dirname,join,resolve,isAbsolute} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {WebStandardStreamableHTTPServerTransport,isInitializeRequest} from '@modelcontextprotocol/server';
 import {EmbeddedOAuth} from './oauth.mjs';
@@ -56,8 +56,9 @@ async function sendWeb(res,response){
 }
 
 export function httpSettings(env=process.env){
+  // 0 picks a free port (tests); production uses a fixed port behind the tunnel.
   const port=Number(env.ZANA_HTTP_PORT??8787);
-  if(!Number.isInteger(port)||port<1||port>65535)throw new Error('ZANA_HTTP_PORT must be 1-65535');
+  if(!Number.isInteger(port)||port<0||port>65535)throw new Error('ZANA_HTTP_PORT must be 0-65535');
   const publicHost=env.ZANA_PUBLIC_HOST||'zanallaima.quintoestado.com';
   const publicUrl=env.ZANA_PUBLIC_MCP_URL||'https://'+publicHost+'/mcp';
   const origins=String(env.ZANA_ALLOWED_ORIGINS??'https://chatgpt.com').split(',').map(x=>x.trim()).filter(Boolean);
@@ -123,9 +124,9 @@ export function createHttpServer({runtime,oauth,settings,log=console}){
     try{
       const path=(req.url??'').split('?')[0];
       if(req.method==='GET'&&path==='/health'){
-        res.writeHead(200,{'content-type':'application/json','cache-control':'no-store'});
-        res.end(JSON.stringify({status:'ok',name:'zana-llaima',version:packageVersion,mode:'remote',
-          sessions:sessions.size,downstream:runtime.gateway.status().state}));
+        const h=await runtime.health();
+        res.writeHead(h.status==='ok'?200:503,{'content-type':'application/json','cache-control':'no-store'});
+        res.end(JSON.stringify({...h,name:'zana-llaima',version:packageVersion,mode:'remote',sessions:sessions.size}));
         return;
       }
       const host=hostname(req.headers.host);
@@ -158,6 +159,9 @@ export function createHttpServer({runtime,oauth,settings,log=console}){
 
 export async function startRemote(env=process.env){
   const settings=httpSettings(env);
+  for(const name of ['ZANA_STATE_FILE','ZANA_OAUTH_DB'])
+    if(!(env[name]??process.env[name])||!isAbsolute(env[name]??process.env[name]))
+      throw new Error(name+' must be set to an absolute path (systemd does not expand ~)');
   await ensureSchema();
   const oauth=new EmbeddedOAuth({path:settings.oauthDb,resource:settings.publicUrl,
     redirectUris:settings.redirectUris,password:settings.password});
@@ -165,6 +169,7 @@ export async function startRemote(env=process.env){
   const server=createHttpServer({runtime,oauth,settings});
   runtime.gateway.refresh().catch(error=>console.error('GitHub downstream:',clean(error,envSecrets(env))));
   await new Promise((ok,fail)=>{server.once('error',fail);server.listen(settings.port,settings.bind,ok);});
+  settings.port=server.address().port;
   console.error('ZanaLLaima remote MCP ready on '+settings.bind+':'+settings.port+'/mcp ('+settings.publicUrl+')');
   return {server,runtime,oauth,settings};
 }

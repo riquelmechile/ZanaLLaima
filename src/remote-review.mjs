@@ -7,7 +7,8 @@
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {canonicalJson} from './actor-assertion.mjs';
 import {missionPull} from './github-delivery.mjs';
-import {recordActivity,sessionRow,sessionWrote,nowIso} from './remote-state.mjs';
+import {recordActivity,sessionRow,sessionWrote,nowIso,writeAudit} from './remote-state.mjs';
+import {budgetOf} from './budget.mjs';
 import {redactText,envSecrets} from './redact.mjs';
 
 export const LENSES=Object.freeze(['risk','readability','reliability','resilience']);
@@ -15,7 +16,10 @@ export const SEVERITIES=Object.freeze(['BLOCKER','CRITICAL','WARNING','SUGGESTIO
 export const EXECUTIONS=Object.freeze(['PARALLEL_SUBAGENTS','SEQUENTIAL_SAME_CONVERSATION']);
 const LOCATION=/^[^\s:][^:\n]{0,239}:\d{1,7}(?:-\d{1,7})?$/;
 const CODE=/^ZR-[A-Z2-7]{4}-[A-Z2-7]{4}-[A-Z2-7]{4}-[A-Z2-7]{4}$/;
-const MAX_DIFF=150_000,MAX_BODY=60_000;
+const MAX_BODY=60_000;
+export const DIFF_PAGE_BYTES=60_000;
+const TERMINAL=['FINALIZED','STALE_SHA','EXPIRED','ABANDONED'];
+const LIVE="state IN ('OPEN','CLAIMED','FINALIZING')";
 const hash=s=>createHash('sha256').update(s).digest('hex');
 const B32='ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 export function ticketCode(bytes=randomBytes(16)){
@@ -39,11 +43,43 @@ export function validateLens(lens,findings,evidence){
      evidence.some(e=>typeof e!=='string'||!e.trim()||e.length>2000))
     fail('MISSING_EVIDENCE','lens evidence must list 1-20 concrete items');
 }
+// Split a unified diff into pages: per file, then by lines up to
+// DIFF_PAGE_BYTES. Each page has a SHA-256 so a re-fetch can be checked.
+export function diffPages(text,pageBytes=DIFF_PAGE_BYTES){
+  const files=String(text).split(/(?=^diff --git )/m).filter(x=>x.length);
+  if(!files.length)files.push('');
+  const pages=[];
+  for(const chunk of files){
+    const m=/^diff --git a\/(.+?) b\/(.+)$/m.exec(chunk);
+    const path=m?m[2]:'(sin archivo)';
+    const parts=[];let current='';
+    for(const line of chunk.split(/(?<=\n)/)){
+      for(let piece=line;piece.length;){
+        const room=pageBytes-Buffer.byteLength(current);
+        if(Buffer.byteLength(piece)<=room){current+=piece;piece='';}
+        else if(current){parts.push(current);current='';}
+        else{parts.push(piece.slice(0,pageBytes));piece=piece.slice(pageBytes);}
+      }
+    }
+    if(current||!parts.length)parts.push(current);
+    parts.forEach((text,i)=>pages.push({page:pages.length,path,part:i+1,parts:parts.length,text,sha256:hash(text)}));
+  }
+  return pages;
+}
+export function diffManifest(pages){
+  const files=[];
+  for(const p of pages){
+    let f=files.find(x=>x.path===p.path);
+    if(!f){f={path:p.path,pages:[]};files.push(f);}
+    f.pages.push(p.page);
+  }
+  return {totalPages:pages.length,pageBytes:DIFF_PAGE_BYTES,files};
+}
 const blocking=findings=>findings.some(f=>f.severity==='BLOCKER'||f.severity==='CRITICAL');
 
 export function reviewBody({code,ticket,lenses,execution,event}){
   const count=(l,s)=>l.findings.filter(f=>f.severity===s).length;
-  const lines=['## ZanaLLaima 4R','',
+  const lines=['## ZanaLLaima 4R','','<!-- zana-ticket:'+ticket.ticket_id+' -->',
     'Ticket `'+code+'` · PR #'+ticket.pr_number+' · SHA `'+ticket.sha+'`',
     'Ejecución declarada por el anfitrión: '+(execution==='PARALLEL_SUBAGENTS'?
       '4 subagentes en paralelo con contexto fresco':'4 lentes en secuencia en la misma conversación revisora'),
@@ -61,8 +97,9 @@ export function reviewBody({code,ticket,lenses,execution,event}){
   return body.length>MAX_BODY?body.slice(0,MAX_BODY-40)+'\n\n[cuerpo recortado por tamaño]':body;
 }
 
-export function createReview({github,reviewerGithub,config,checks,remoteWrite,remoteRead,missionContext}){
+export function createReview({github,reviewerGithub,config,checks,remoteWrite,remoteRead,transact,missionContext}){
   const locks=new Map();
+  const pageCache=new Map();
   const ticketBy=(db,code)=>{
     if(typeof code!=='string'||!CODE.test(code))fail('TICKET_NOT_FOUND','unknown ticket');
     const row=db.prepare('SELECT * FROM review_tickets WHERE code_hash=?').get(hash(code));
@@ -71,6 +108,16 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
   };
   const lensRows=(db,ticketId)=>db.prepare('SELECT lens_id,token,result FROM review_receipts WHERE review_id=?')
     .all(ticketId).map(r=>({lens:r.lens_id,hash:r.token,...JSON.parse(r.result)}));
+  const hasBlocking=(db,ticketId)=>lensRows(db,ticketId).some(l=>blocking(l.findings));
+  // Lazy expiry: OPEN past its deadline -> EXPIRED; CLAIMED/FINALIZING older
+  // than the claim TTL -> ABANDONED (terminal, never blocks a merge).
+  function expire(db,now=Date.now()){
+    const at=nowIso();
+    db.prepare("UPDATE review_tickets SET state='EXPIRED',updated_at=? WHERE state='OPEN' AND expires_at<=?")
+      .run(at,new Date(now).toISOString());
+    db.prepare("UPDATE review_tickets SET state='ABANDONED',updated_at=? WHERE state IN ('CLAIMED','FINALIZING') AND claimed_at<=?")
+      .run(at,new Date(now-config.claimTtlMinutes*60_000).toISOString());
+  }
   async function exclusive(key,fn){
     const before=locks.get(key)??Promise.resolve();
     let release;
@@ -79,7 +126,32 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
     await before;
     try{return await fn();}finally{release();if(locks.get(key)===mine)locks.delete(key);}
   }
+  async function loadPages(t){
+    const cached=pageCache.get(t.ticket_id);
+    if(cached)return cached;
+    const ctx=await missionContext(t.mission_id,null,{allowInactive:true});
+    const pages=diffPages(await github.compareDiff(t.repo,ctx.base,t.sha));
+    pageCache.set(t.ticket_id,pages);
+    if(pageCache.size>50)pageCache.delete(pageCache.keys().next().value);
+    return pages;
+  }
+  // Record the manifest once; a later fetch must produce the same pages.
+  async function ensureManifest(t){
+    const pages=await loadPages(t);
+    return remoteWrite(db=>{
+      const stored=db.prepare('SELECT page,sha256 FROM review_diff_pages WHERE ticket_id=? ORDER BY page').all(t.ticket_id);
+      if(!stored.length){
+        const put=db.prepare('INSERT INTO review_diff_pages(ticket_id,page,path,sha256,read_at) VALUES(?,?,?,?,NULL)');
+        for(const p of pages)put.run(t.ticket_id,p.page,p.path,p.sha256);
+      }else if(stored.length!==pages.length||stored.some((r,i)=>r.sha256!==pages[i].sha256)){
+        pageCache.delete(t.ticket_id);
+        fail('DIFF_CHANGED','the diff of '+t.sha+' no longer matches the recorded manifest');
+      }
+      return pages;
+    });
+  }
   return {
+    expire:()=>remoteWrite(db=>expire(db)),
     async request(missionId,session){
       const ctx=await missionContext(missionId,session.sessionId,{write:true});
       const pull=await missionPull(github,ctx);
@@ -90,25 +162,46 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
       const code=ticketCode(),at=Date.now();
       const expiresAt=new Date(at+config.ticketTtlMinutes*60_000).toISOString();
       const ticketId=randomUUID();
-      await remoteWrite(db=>{
+      let superseded=[];
+      await transact((mission,txc)=>{
+        const db=txc.db;
+        if(!mission||mission.id!==missionId)fail('MISSION_NOT_ACTIVE','mission '+missionId+' is not the active mission');
+        expire(db);
+        // Same SHA with requested changes (finalized, or blocking lenses on a
+        // live ticket): the code must change before another review.
+        for(const old of db.prepare('SELECT * FROM review_tickets WHERE mission_id=? AND sha=?').all(missionId,sha)){
+          if((old.state==='FINALIZED'&&old.verdict==='REQUEST_CHANGES')||(!TERMINAL.includes(old.state)&&hasBlocking(db,old.ticket_id)))
+            fail('CHANGES_REQUESTED_SAME_SHA','a review requested changes on '+sha+'; push a change before asking for a new ticket');
+        }
+        const cap=budgetOf(mission).maxReviewRounds;
+        if((mission.reviewCount||0)>=cap)fail('REVIEW_ROUNDS_EXHAUSTED','mission used its '+cap+' review rounds');
+        // One live ticket per mission: older ones become STALE_SHA (other SHA) or ABANDONED (same SHA).
+        superseded=db.prepare('SELECT ticket_id,sha FROM review_tickets WHERE mission_id=? AND '+LIVE).all(missionId);
+        for(const old of superseded)
+          db.prepare('UPDATE review_tickets SET state=?,updated_at=? WHERE ticket_id=?')
+            .run(old.sha===sha?'ABANDONED':'STALE_SHA',nowIso(),old.ticket_id);
         recordActivity(db,{sessionId:session.sessionId,missionId,kind:'REVIEW_REQUEST',tool:'zana_review_request'});
-        db.prepare('INSERT INTO review_tickets(ticket_id,code_hash,mission_id,repo,pr_number,sha,author_session,created_at,expires_at,state,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
-          .run(ticketId,hash(code),missionId,ctx.repo,pull.number,sha,session.sessionId,new Date(at).toISOString(),expiresAt,'OPEN',nowIso());
+        db.prepare('INSERT INTO review_tickets(ticket_id,code_hash,mission_id,repo,pr_number,sha,author_session,author_client,created_at,expires_at,state,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)')
+          .run(ticketId,hash(code),missionId,ctx.repo,pull.number,sha,session.sessionId,session.clientId??null,
+            new Date(at).toISOString(),expiresAt,'OPEN',nowIso());
+        mission.reviewCount=(mission.reviewCount||0)+1;
+        mission.revision++;
+        return mission;
       });
       return {ticket:code,missionId,repo:ctx.repo,pullNumber:pull.number,sha,expiresAt,
+        superseded:superseded.map(x=>x.ticket_id),
         message:'Revisa el ticket '+code+' con ZanaLLaima',
         instructions:'Entrega este mensaje exacto al usuario para que lo pegue en una conversación NUEVA. Esta sesión no puede reclamarlo.'};
     },
     async claim(code,session){
       const claimed=await remoteWrite(db=>{
+        expire(db);
         const t=ticketBy(db,code);
-        if(t.state==='OPEN'&&Date.parse(t.expires_at)<=Date.now()){
-          db.prepare("UPDATE review_tickets SET state='EXPIRED',updated_at=? WHERE ticket_id=?").run(nowIso(),t.ticket_id);
-          return {error:['TICKET_EXPIRED','ticket expired at '+t.expires_at]};
-        }
         if(t.state==='EXPIRED')return {error:['TICKET_EXPIRED','ticket expired']};
         if(t.state!=='OPEN')return {error:['TICKET_ALREADY_CLAIMED','ticket already used ('+t.state+')']};
         if(t.author_session===session.sessionId)return {error:['AUTHOR_SESSION','the author session cannot claim its own ticket']};
+        if(config.distinctReviewerClient&&t.author_client&&t.author_client===session.clientId)
+          return {error:['SAME_CLIENT','ZANA_DISTINCT_REVIEWER_CLIENT requires another OAuth connection (another ChatGPT account) than the author']};
         if(sessionWrote(db,session.sessionId,t.mission_id))
           return {error:['SESSION_WROTE','this session wrote in mission '+t.mission_id]};
         const me=sessionRow(db,session.sessionId);
@@ -122,18 +215,35 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
       if(claimed.error)fail(...claimed.error);
       const t=claimed.ticket;
       const ctx=await missionContext(t.mission_id,null,{allowInactive:true});
-      let diff='',truncated=false;
-      try{diff=await github.pullDiff(t.repo,t.pr_number);}catch(error){diff='(diff unavailable: '+error.message+')';}
-      if(diff.length>MAX_DIFF){diff=diff.slice(0,MAX_DIFF);truncated=true;}
+      let manifest=null,manifestError=null;
+      try{manifest=diffManifest(await ensureManifest(t));}
+      catch(error){manifestError=String(error?.message??error).slice(0,300);}
       const verdict=await checks.verdict(t.repo,t.sha);
       return {ticket:code,state:'CLAIMED',missionId:t.mission_id,repo:t.repo,pullNumber:t.pr_number,sha:t.sha,
-        spec:{objective:ctx.objective,units:ctx.units},diff,diffTruncated:truncated,checks:verdict,
+        spec:{objective:ctx.objective,units:ctx.units},diffManifest:manifest,
+        ...(manifestError?{diffManifestError:manifestError+'; zana_review_diff retries'}:{}),checks:verdict,
         lenses:LENSES,skills:['review-discipline',...LENSES.map(l=>'review-'+l)],
-        instructions:'Load zana-4r. One lens per fresh subagent with only spec, diff and checks; submit each lens once, then finalize once.'};
+        instructions:'Load zana-4r. Read EVERY diff page with zana_review_diff (finalize refuses otherwise). One lens per fresh subagent with only spec, diff and checks; this conversation submits each lens once, then finalizes once.'};
+    },
+    async diff({ticket:code,page},session){
+      if(!Number.isSafeInteger(page)||page<0)fail('INVALID_PAGE','page must be an integer >= 0');
+      const t=await remoteWrite(db=>{expire(db);return ticketBy(db,code);});
+      if(t.state!=='CLAIMED')fail('TICKET_NOT_CLAIMED','ticket is '+t.state);
+      if(t.reviewer_session!==session.sessionId)fail('NOT_REVIEWER','only the session that claimed the ticket may read its diff');
+      const pages=await ensureManifest(t);
+      if(page>=pages.length)fail('INVALID_PAGE','page '+page+' does not exist (total '+pages.length+')');
+      const remaining=await remoteWrite(db=>{
+        db.prepare('UPDATE review_diff_pages SET read_at=COALESCE(read_at,?) WHERE ticket_id=? AND page=?').run(nowIso(),t.ticket_id,page);
+        return db.prepare('SELECT page FROM review_diff_pages WHERE ticket_id=? AND read_at IS NULL ORDER BY page').all(t.ticket_id).map(r=>r.page);
+      });
+      const p=pages[page];
+      return {ticket:code,page,path:p.path,part:p.part,parts:p.parts,sha256:p.sha256,text:p.text,
+        unread:remaining,manifest:diffManifest(pages)};
     },
     async lensSubmit({ticket:code,lens,findings,evidence},session){
       validateLens(lens,findings,evidence);
       return remoteWrite(db=>{
+        expire(db);
         const t=ticketBy(db,code);
         if(t.state!=='CLAIMED')fail('TICKET_NOT_CLAIMED','ticket is '+t.state);
         if(t.reviewer_session!==session.sessionId)fail('NOT_REVIEWER','only the session that claimed the ticket may submit lenses');
@@ -152,15 +262,20 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
       if(!EXECUTIONS.includes(execution))fail('INVALID_EXECUTION','execution must be '+EXECUTIONS.join(' or '));
       if(!reviewerGithub.configured)fail('REVIEWER_TOKEN_MISSING','ZANA_REVIEWER_TOKEN is not set on the server');
       return exclusive(code,async()=>{
-        const {t,lenses}=await remoteRead(db=>{
+        const {t,lenses,unread}=await remoteWrite(db=>{
+          expire(db);
           const row=ticketBy(db,code);
-          return {t:row,lenses:lensRows(db,row.ticket_id)};
+          const pages=db.prepare('SELECT page,read_at FROM review_diff_pages WHERE ticket_id=?').all(row.ticket_id);
+          return {t:row,lenses:lensRows(db,row.ticket_id),
+            unread:pages.length?pages.filter(p=>!p.read_at).map(p=>p.page):null};
         });
         if(t.state==='FINALIZED')return {ticket:code,state:'FINALIZED',verdict:t.verdict,githubReviewId:t.github_review_id,published:true};
         if(!['CLAIMED','FINALIZING'].includes(t.state))fail('TICKET_NOT_CLAIMED','ticket is '+t.state);
         if(t.reviewer_session!==session.sessionId)fail('NOT_REVIEWER','only the session that claimed the ticket may finalize');
         const missing=LENSES.filter(l=>!lenses.some(x=>x.lens===l));
         if(missing.length)fail('LENSES_INCOMPLETE','missing lenses: '+missing.join(', '));
+        if(unread===null)fail('DIFF_NOT_FULLY_READ','no diff manifest recorded; read the diff with zana_review_diff');
+        if(unread.length)fail('DIFF_NOT_FULLY_READ','unread diff pages: '+unread.join(', '));
         const pull=await github.pull(t.repo,t.pr_number);
         const head=String(pull?.head?.sha??'');
         if(head!==t.sha&&t.github_review_id===null){
@@ -174,11 +289,19 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
         const event=ordered.some(l=>blocking(l.findings))?'REQUEST_CHANGES':'APPROVE';
         await remoteWrite(db=>db.prepare("UPDATE review_tickets SET state='FINALIZING',execution=?,verdict=?,updated_at=? WHERE ticket_id=?")
           .run(execution,event,nowIso(),t.ticket_id));
-        let reviewId=t.github_review_id,reviewUrl=null;
+        let reviewId=t.github_review_id,reviewUrl=null,adopted=false;
         if(reviewId===null){
-          const review=await reviewerGithub.createReview(t.repo,t.pr_number,{commitId:t.sha,event,
-            body:reviewBody({code,ticket:t,lenses:ordered,execution,event})});
-          reviewId=Number(review?.id);reviewUrl=review?.html_url??null;
+          // A lost response must not publish twice: adopt our own review of this commit with this ticket's marker.
+          const marker='<!-- zana-ticket:'+t.ticket_id+' -->';
+          const existing=(await reviewerGithub.pullReviews(t.repo,t.pr_number)).find(r=>
+            String(r?.user?.login??'').toLowerCase()===config.reviewerLogin.toLowerCase()&&
+            r?.commit_id===t.sha&&String(r?.body??'').includes(marker));
+          if(existing){reviewId=Number(existing.id);reviewUrl=existing.html_url??null;adopted=true;}
+          else{
+            const review=await reviewerGithub.createReview(t.repo,t.pr_number,{commitId:t.sha,event,
+              body:reviewBody({code,ticket:t,lenses:ordered,execution,event})});
+            reviewId=Number(review?.id);reviewUrl=review?.html_url??null;
+          }
           await remoteWrite(db=>db.prepare('UPDATE review_tickets SET github_review_id=?,updated_at=? WHERE ticket_id=?')
             .run(reviewId,nowIso(),t.ticket_id));
         }
@@ -197,16 +320,40 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
           db.prepare('INSERT OR IGNORE INTO review_archive(mission_id,review_id,content,created_at) VALUES(?,?,?,?)')
             .run(t.mission_id,t.ticket_id,JSON.stringify(archived),nowIso());
         });
-        return {ticket:code,state:'FINALIZED',published:true,event,githubReviewId:reviewId,reviewUrl,
+        pageCache.delete(t.ticket_id);
+        return {ticket:code,state:'FINALIZED',published:true,event,githubReviewId:reviewId,reviewUrl,adoptedExistingReview:adopted,
           status:{context:'zana/4r',state:statusState},sha:t.sha,lensHashes:Object.fromEntries(ordered.map(l=>[l.lens,l.hash]))};
       });
     },
-    // Tickets not finalized whose submitted lenses carry BLOCKER or CRITICAL.
+    // Live tickets (after expiry) whose submitted lenses carry BLOCKER or CRITICAL.
     async openBlocking(missionId){
-      return remoteRead(db=>{
-        if(!db)return [];
-        const rows=db.prepare("SELECT ticket_id FROM review_tickets WHERE mission_id=? AND state IN ('OPEN','CLAIMED','FINALIZING')").all(missionId);
-        return rows.filter(r=>lensRows(db,r.ticket_id).some(l=>blocking(l.findings))).map(r=>r.ticket_id);
+      return remoteWrite(db=>{
+        expire(db);
+        const rows=db.prepare('SELECT ticket_id FROM review_tickets WHERE mission_id=? AND '+LIVE).all(missionId);
+        return rows.filter(r=>hasBlocking(db,r.ticket_id)).map(r=>r.ticket_id);
+      });
+    },
+    // Latest ticket of the mission (for zana_correction_start).
+    latest:missionId=>remoteRead(db=>db?.prepare('SELECT * FROM review_tickets WHERE mission_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(missionId)??null),
+    // Operator: list tickets and abandon one by id (audited by the caller).
+    async list(missionId=null){
+      return remoteWrite(db=>{
+        expire(db);
+        const rows=missionId?db.prepare('SELECT * FROM review_tickets WHERE mission_id=? ORDER BY created_at DESC').all(missionId)
+          :db.prepare('SELECT * FROM review_tickets ORDER BY created_at DESC LIMIT 200').all();
+        return rows.map(r=>({ticketId:r.ticket_id,missionId:r.mission_id,pullNumber:r.pr_number,sha:r.sha,state:r.state,
+          verdict:r.verdict,createdAt:r.created_at,claimedAt:r.claimed_at,blocking:hasBlocking(db,r.ticket_id)}));
+      });
+    },
+    async abandon(ticketId,caller){
+      return remoteWrite(db=>{
+        const t=db.prepare('SELECT * FROM review_tickets WHERE ticket_id=?').get(ticketId);
+        if(!t)fail('TICKET_NOT_FOUND','unknown ticket id '+ticketId);
+        if(TERMINAL.includes(t.state))fail('TICKET_TERMINAL','ticket is already '+t.state);
+        db.prepare("UPDATE review_tickets SET state='ABANDONED',updated_at=? WHERE ticket_id=?").run(nowIso(),ticketId);
+        writeAudit(db,{caller,tool:'remote-ticket-abandon',missionId:t.mission_id,outcome:'ABANDONED',
+          args:{ticketId},detail:{previousState:t.state,sha:t.sha},category:'operator'});
+        return {ticketId,previousState:t.state,state:'ABANDONED'};
       });
     },
   };

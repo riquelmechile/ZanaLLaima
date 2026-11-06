@@ -32,7 +32,11 @@ export function remoteConfig(env=process.env){
   if(requiredChecks.some(x=>x.length>120))throw new Error('ZANA_REQUIRED_CHECKS names too long');
   const apiUrl=env.ZANA_GITHUB_API_URL||'https://api.github.com';
   if(!allowedUrl(apiUrl))throw new Error('ZANA_GITHUB_API_URL must be https (or http to a private address)');
-  return Object.freeze({repos,reviewerLogin,checksWorkflow,requiredChecks,mergeEnabled:merge==='true',mergeMethod,
+  const distinct=env.ZANA_DISTINCT_REVIEWER_CLIENT??'false';
+  if(!['true','false'].includes(distinct))throw new Error('ZANA_DISTINCT_REVIEWER_CLIENT must be true or false');
+  return Object.freeze({repos,reviewerLogin,distinctReviewerClient:distinct==='true',
+    claimTtlMinutes:int(env.ZANA_TICKET_CLAIM_TTL_MINUTES,240,10,10080,'ZANA_TICKET_CLAIM_TTL_MINUTES'),
+    toolDeadlineMs:int(env.ZANA_TOOL_DEADLINE_MS,45000,5000,300000,'ZANA_TOOL_DEADLINE_MS'),checksWorkflow,requiredChecks,mergeEnabled:merge==='true',mergeMethod,
     ticketTtlMinutes:int(env.ZANA_TICKET_TTL_MINUTES,120,5,1440,'ZANA_TICKET_TTL_MINUTES'),
     apiUrl,downstreamUrl,toolsets,
     downstreamTimeoutMs:int(env.ZANA_DOWNSTREAM_TIMEOUT_MS,30000,1000,300000,'ZANA_DOWNSTREAM_TIMEOUT_MS'),

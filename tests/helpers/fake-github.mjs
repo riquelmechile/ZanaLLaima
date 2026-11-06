@@ -38,6 +38,8 @@ export async function fakeGitHubApi(){
       const head=url.searchParams.get('head');
       return send(200,state.pulls.filter(x=>x.state==='open'&&(!head||'o:'+x.head.ref===head)));
     }
+    if((m=/^\/compare\/(.+)\.\.\.([0-9a-f]{40})$/.exec(p)))
+      return send(200,state.diffText??('diff --git a/x b/x\n+'+AUTHOR_TOKEN+'\n'),'text/plain');
     if((m=/^\/pulls\/comments\/(\d+)$/.exec(p)))return state.comments[m[1]]?send(200,state.comments[m[1]]):send(404,{message:'nf'});
     if((m=/^\/pulls\/(\d+)$/.exec(p))&&req.method==='GET'){
       const pull=state.pulls.find(x=>x.number===Number(m[1]));
@@ -60,7 +62,8 @@ export async function fakeGitHubApi(){
       const r=JSON.parse(body);
       state.merges.push({number:pull.number,...r,token});
       if(r.sha!==state.branches[pull.head.ref])return send(409,{message:'Head branch was modified. Review and try the merge again.'});
-      pull.state='closed';
+      pull.state='closed';pull.merged=true;pull.merge_commit_sha=sha('9');
+      if(state.loseMergeResponse){state.loseMergeResponse=false;res.destroy();return;}
       return send(200,{merged:true,sha:sha('9'),message:'Pull Request successfully merged'});
     }
     if((m=/^\/commits\/([0-9a-f]{40})\/check-runs$/.exec(p)))

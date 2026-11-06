@@ -108,7 +108,7 @@ test('Streamable HTTP sessions: two conversations get two sessions; the reviewer
     const a=await connect(s.base,token);
     const tools=(await a.client.listTools()).tools.map(t=>t.name).sort();
     assert.deepEqual(tools,[...REMOTE_TOOL_NAMES]);
-    assert.equal(tools.length,25);
+    assert.equal(tools.length,29);
     for(const local of ['zana_apply_write','zana_review_open','zana_review_submit','zana_storage_status','zana_permission_status'])
       assert.equal(tools.includes(local),false,local+' is stdio-only');
     assert.match(a.client.getInstructions(),/zana-odd/);
@@ -221,16 +221,22 @@ test('operator CLI: enrollment window, clients, audit and argument validation',a
   const prev=process.env.ZANA_OAUTH_DB;
   process.env.ZANA_OAUTH_DB=join(f.dir,'cli-oauth.sqlite');
   try{
+    await assert.rejects(runCli('remote-enroll',['10']),/does not exist/);
+    setEnrollment(process.env.ZANA_OAUTH_DB,0);
     assert.equal((await runCli('remote-enroll',['10'])).enrollmentOpen,true);
     assert.equal((await runCli('remote-clients',[])).enrollmentOpen,true);
     assert.equal((await runCli('remote-enroll-close',[])).enrollmentOpen,false);
     await assert.rejects(runCli('remote-enroll',['0']),/between 1 and 60/);
     await assert.rejects(runCli('remote-revoke',[]),/clientId/);
     await assert.rejects(runCli('remote-merge',[]),/missionId/);
+    await assert.rejects(runCli('remote-ticket-abandon',[]),/ticketId/);
+    await assert.rejects(runCli('remote-audit',['--env-file']),/requires a path/);
     assert.deepEqual((await parseCliCommand('remote-audit',['5','m'])).input,{limit:5,missionId:'m'});
     assert.ok(Array.isArray((await runCli('remote-audit',[])).items));
+    assert.deepEqual((await runCli('remote-tickets',[])).tickets,[]);
+    await assert.rejects(runCli('remote-ticket-abandon',['nope']),/TICKET_NOT_FOUND/);
     await assert.rejects(runCli('remote-merge',['missing-mission']),/UNKNOWN_MISSION/);
-    assert.deepEqual(await runCli('remote-revoke',['zc_'+'a'.repeat(24)]),{revoked:0});
+    await assert.rejects(runCli('remote-revoke',['zc_'+'a'.repeat(24)]),/CLIENT_NOT_FOUND/);
   }finally{
     if(prev===undefined)delete process.env.ZANA_OAUTH_DB;else process.env.ZANA_OAUTH_DB=prev;
     await f.cleanup();

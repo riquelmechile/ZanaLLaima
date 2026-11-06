@@ -32,8 +32,15 @@ test('C1: completed code unit + REQUEST_CHANGES -> correction unit -> new ticket
     // Correction: a new PENDING code unit the author can start and write with.
     const corr=await f.call('zana_correction_start',{missionId},author);
     assert.equal(corr.error,undefined,corr.error);
-    const batch=await f.call('zana_start_batch',{},author);
-    const cp=batch.packets.find(p=>p.unitId===corr.unitId);
+    // One inline slot: other ready READ units (notes) are finished first.
+    let cp;
+    for(let i=0;i<3&&!cp;i++){
+      const batch=await f.call('zana_start_batch',{},author);
+      assert.equal(batch.error,undefined,batch.error);
+      cp=batch.packets.find(p=>p.unitId===corr.unitId);
+      for(const other of batch.packets.filter(p=>p.unitId!==corr.unitId))
+        await f.call('zana_complete_unit',{unitId:other.unitId,token:other.token,leaseGeneration:other.leaseGeneration,outcome:outcome('notes')},author);
+    }
     assert.ok(cp,'correction unit started');
     const w=await f.call('zana_ds_github',{operation:'create_or_update_file',missionId,
       arguments:{owner:'o',repo:'r',branch,path:'src/sum.mjs',content:'a+b',message:'fix'}},author);

@@ -212,11 +212,28 @@ test('remote state: session identity binding and bounded audit reads',async()=>{
     assert.deepEqual(rows[0].detail,{truncated:true});
     assert.equal((await readAudit({},file)).length,2);
     assert.throws(()=>readAudit({limit:0},file),/Invalid audit limit/);
-    const {MAX_AUDIT}=await import('../src/remote-state.mjs');
-    const {remoteWrite}=await import('../src/store.mjs');
-    await remoteWrite(db=>db.prepare("UPDATE sqlite_sequence SET seq=seq+? WHERE name='remote_audit'").run(MAX_AUDIT+10),file);
-    await audit({caller:null,tool:'late',outcome:'OK'},file);
-    assert.deepEqual((await readAudit({limit:10},file)).map(r=>r.tool),['late'],'older rows trimmed');
+    // Retention: reads are a bounded window; writes are kept; old rows of
+    // inactive missions, sessions, checks and terminal tickets age out.
+    const {MAX_READ_AUDIT,pruneRemote}=await import('../src/remote-state.mjs');
+    const {remoteWrite,remoteRead}=await import('../src/store.mjs');
+    const old='2020-01-01T00:00:00.000Z';
+    await remoteWrite(db=>{
+      const ins=db.prepare("INSERT INTO remote_audit(at,tool,outcome,category) VALUES(?,?,?,?)");
+      for(let i=0;i<MAX_READ_AUDIT+5;i++)ins.run(new Date().toISOString(),'read-'+i,'OK','read');
+      ins.run(new Date().toISOString(),'a-write','OK','write');
+      ins.run(old,'ancient-write','OK','write');
+      db.prepare("INSERT INTO remote_activity(session_id,mission_id,kind,tool,created_at) VALUES('s','gone-mission','X','t',?)").run(old);
+      db.prepare("INSERT INTO remote_sessions(session_id,host,client_id,created_at,last_seen_at) VALUES('old-session','h','c',?,?)").run(old,old);
+      db.prepare("INSERT INTO remote_checks(check_id,mission_id,sha,workflow,dispatched,session_id,created_at) VALUES('c','m','x','w',0,'s',?)").run(old);
+      db.prepare("INSERT INTO review_tickets(ticket_id,code_hash,mission_id,repo,pr_number,sha,author_session,created_at,expires_at,state,updated_at) VALUES('t','h','m','o/r',1,'x','s',?,?,'FINALIZED',?)").run(old,old,old);
+      pruneRemote(db);
+    },file);
+    const left=await remoteRead(db=>({reads:db.prepare("SELECT COUNT(*) n FROM remote_audit WHERE category='read'").get().n,
+      write:db.prepare("SELECT COUNT(*) n FROM remote_audit WHERE tool='a-write'").get().n,
+      ancient:db.prepare("SELECT COUNT(*) n FROM remote_audit WHERE tool='ancient-write'").get().n,
+      rest:['remote_activity','remote_checks','review_tickets'].map(t=>db.prepare('SELECT COUNT(*) n FROM '+t).get().n),
+      oldSession:db.prepare("SELECT COUNT(*) n FROM remote_sessions WHERE session_id='old-session'").get().n}),file);
+    assert.deepEqual(left,{reads:MAX_READ_AUDIT,write:1,ancient:0,rest:[0,0,0],oldSession:0});
     assert.equal(remoteMission(null,'m'),null);
     assert.equal(sessionRow(null,'s'),null);
   }finally{await rm(dir,{recursive:true,force:true});}

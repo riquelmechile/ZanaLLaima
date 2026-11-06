@@ -36,7 +36,7 @@ Si el autor pidió otro ticket, tu ticket dejó de ser el vigente y **no cuenta 
 
 - **Lo pidió durante tu `finalize`:** su pedido espera el lock de la misión; tu finalize responde `published: true`, pero esa review ya no es la del ticket vigente.
 - **Lo pidió antes de tu `finalize`:** finalize responde `TICKET_NOT_CLAIMED`.
-- **Venció el claim o intervino el operador:** finalize responde `published: false` (no se publicó nada) o `inconsistent: true` (la review alcanzó a publicarse antes de notarlo).
+- **Venció el claim o intervino el operador:** si ya había vencido al llamar, finalize responde `TICKET_NOT_CLAIMED`; si vence mientras finaliza, responde `published: false` (no se publicó nada) o `inconsistent: true` (la review alcanzó a publicarse antes de notarlo).
 
 En los tres casos no reintentes. Dile al usuario que revise el ticket vigente en una conversación nueva.
 

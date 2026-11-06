@@ -156,6 +156,9 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
     catch(error){
       if(/response too large/.test(String(error?.message)))
         fail('DIFF_TOO_LARGE','el diff pasa los 2 MB que entrega GitHub y el tope es '+config.reviewMaxDiffBytes+'; divide el cambio en misiones secuenciales');
+      // GitHub does not render a diff of more than 300 files (or too big): 406 or 422.
+      if([406,422].includes(error?.status)&&(error.codes?.includes('too_large')||/diff exceeded/i.test(error.message)))
+        fail('DIFF_TOO_LARGE','GitHub no entrega el diff (HTTP '+error.status+': más de 300 archivos o demasiado grande); divide el cambio en misiones secuenciales');
       throw error;
     }
     // bytes is the size GitHub sent, before redaction, so redaction cannot shrink it under the cap.
@@ -200,16 +203,19 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
       const reject=(...args)=>{pageCache.delete(measured.key);fail(...args);};
       if(diffBytes>config.reviewMaxDiffBytes)
         reject('DIFF_TOO_LARGE','el diff pesa '+diffBytes+' bytes y el tope es '+config.reviewMaxDiffBytes+'; divide el cambio en misiones secuenciales');
-      const budget=lineBudget(await github.pullFiles(ctx.repo,pull.number),{limit:lineLimit(ctx,config)});
+      const budget=lineBudget(await github.pullFiles(ctx.repo,pull.number),{limit:lineLimit(ctx,config),changedFiles:pull.changed_files});
+      // The file list is read from the PR's current head: it must still be the
+      // measured SHA before any budget answer, which would give another SHA's figures.
+      const after=String((await github.pull(ctx.repo,pull.number))?.head?.sha??'');
+      if(after!==sha)reject('HEAD_MOVED','el head del PR cambió de '+sha+' a '+after+' mientras se medía; vuelve a pedir el ticket');
+      if(budget.changedFiles!==undefined&&budget.files<3000)
+        reject('OVER_LINE_BUDGET','la lista de archivos de GitHub ('+budget.files+') no coincide con changed_files ('+budget.changedFiles+'); la medida está incompleta: vuelve a pedir el ticket o divide el cambio');
       if(budget.truncated)
         reject('OVER_LINE_BUDGET','el PR cambia más de 3000 archivos; no hay extensión posible: divide el cambio en misiones secuenciales');
       if(budget.over&&budget.lines>EXTEND_MAX)
         reject('OVER_LINE_BUDGET','el PR cambia '+budget.lines+' líneas (sin lockfiles) y la extensión máxima es '+EXTEND_MAX+'; divide el cambio en misiones secuenciales');
       if(budget.over)reject('OVER_LINE_BUDGET','el PR cambia '+budget.lines+' líneas (sin lockfiles) y el presupuesto es '+budget.limit+
         '; pregúntale al usuario si autoriza '+budget.lines+' líneas y, solo con su sí, llama zana_budget_extend');
-      // The file list is read from the PR's current head: it must still be the measured SHA.
-      const after=String((await github.pull(ctx.repo,pull.number))?.head?.sha??'');
-      if(after!==sha)reject('HEAD_MOVED','el head del PR cambió de '+sha+' a '+after+' mientras se medía; vuelve a pedir el ticket');
       const code=ticketCode(),ticketId=randomUUID();
       let expiresAt;
       let superseded=[];
@@ -240,9 +246,9 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
           db.prepare('UPDATE review_tickets SET state=?,updated_at=? WHERE ticket_id=?')
             .run(old.sha===sha?'ABANDONED':'STALE_SHA',nowIso(),old.ticket_id);
         recordActivity(db,{sessionId:session.sessionId,clientId:session.clientId,missionId,kind:'REVIEW_REQUEST',tool:'zana_review_request'});
-        db.prepare('INSERT INTO review_tickets(ticket_id,code_hash,mission_id,repo,pr_number,sha,author_session,author_client,created_at,expires_at,state,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)')
+        db.prepare('INSERT INTO review_tickets(ticket_id,code_hash,mission_id,repo,pr_number,sha,author_session,author_client,created_at,expires_at,state,updated_at,line_budget) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)')
           .run(ticketId,hash(code),missionId,ctx.repo,pull.number,sha,session.sessionId,session.clientId??null,
-            new Date(at).toISOString(),expiresAt,'OPEN',nowIso());
+            new Date(at).toISOString(),expiresAt,'OPEN',nowIso(),JSON.stringify(budget));
         mission.reviewCount=(mission.reviewCount||0)+1;
         mission.revision++;
         return mission;
@@ -276,10 +282,13 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
       if(claimed.error)fail(...claimed.error);
       const t=claimed.ticket;
       const ctx=await missionContext(t.mission_id,null,{allowInactive:true});
-      let manifest=null,manifestError=null,diffBytes=null,budget=null;
+      let manifest=null,manifestError=null,diffBytes=null;
       try{const entry=await ensureManifest(t);manifest=diffManifest(entry.pages);diffBytes=entry.bytes;}
       catch(error){manifestError=String(error?.message??error).slice(0,300);}
-      try{budget=lineBudget(await github.pullFiles(t.repo,t.pr_number),{limit:lineLimit(ctx,config)});}catch{budget=null;}
+      // Measured at request time on the ticket SHA (the live head may have moved since).
+      // A corrupt stored value must not burn an already CLAIMED ticket.
+      let budget=null;
+      try{budget=t.line_budget?JSON.parse(t.line_budget):null;}catch{budget={error:'UNREADABLE'};}
       const verdict=await checks.verdict(t.repo,t.sha);
       return {ticket:code,state:'CLAIMED',missionId:t.mission_id,repo:t.repo,pullNumber:t.pr_number,sha:t.sha,
         spec:{objective:ctx.objective,units:ctx.units},diffManifest:manifest,diffBytes,lineBudget:budget,

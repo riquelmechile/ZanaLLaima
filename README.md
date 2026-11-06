@@ -136,7 +136,7 @@ export ZANA_REVIEW_TARGET_REF=refs/heads/main
 node src/mcp.mjs
 ```
 
-En modo stdio el servidor dispone de **24 herramientas MCP**, y `tests/sdk-mcp.test.mjs` comprueba el catálogo contra esa cifra. El modo remoto expone 29 (ver [docs/mcp-v2.md](docs/mcp-v2.md)). La administración del almacenamiento (restore, adopt, cleanup) sigue siendo solo CLI del operador: [docs/sqlite-storage.md](docs/sqlite-storage.md). La guía de los pasos humanos está en [docs/operator-checklist.md](docs/operator-checklist.md).
+En modo stdio el servidor dispone de **24 herramientas MCP**, y `tests/sdk-mcp.test.mjs` comprueba el catálogo contra esa cifra. El modo remoto expone 34 (ver [docs/mcp-v2.md](docs/mcp-v2.md)). La administración del almacenamiento (restore, adopt, cleanup) sigue siendo solo CLI del operador: [docs/sqlite-storage.md](docs/sqlite-storage.md). La guía de los pasos humanos está en [docs/operator-checklist.md](docs/operator-checklist.md).
 
 </details>
 

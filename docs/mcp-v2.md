@@ -4,7 +4,7 @@
 
 Esta implementación reemplaza el transporte MCP `stdio` construido manualmente por el **SDK oficial TypeScript v2**, fijado en `@modelcontextprotocol/server@2.4.0`. Usa `@modelcontextprotocol/client@2.4.0` en las pruebas y `zod@4.6.7` para definir y validar los argumentos. El modo **stdio** es local y sin HTTP. El modo **remoto** (Streamable HTTP + OAuth, ver abajo) sirve a la app de ChatGPT. Ninguno llama a proveedores de inferencia.
 
-El SDK soporta la especificación MCP 2026-07-28 y negociación con clientes compatibles con versiones anteriores. En stdio el catálogo tiene **24 herramientas**, incluyendo `zana_capability_status`; en remoto tiene 29 (tabla abajo). La conexión real con ChatGPT la ejecuta el operador (`docs/host-e2e-remote.md`).
+El SDK soporta la especificación MCP 2026-07-28 y negociación con clientes compatibles con versiones anteriores. En stdio el catálogo tiene **24 herramientas**, incluyendo `zana_capability_status`; en remoto tiene 34 (tabla abajo). La conexión real con ChatGPT la ejecuta el operador (`docs/host-e2e-remote.md`).
 
 Fuentes normativas del SDK:
 - https://ts.sdk.modelcontextprotocol.io/v2/
@@ -78,6 +78,7 @@ No existe todavía una prueba de una cuenta ChatGPT real, ni evidencia de modelo
 | `zana_skill_list`, `zana_skill_load` | no | sí | Skills de `skills/` |
 | `zana_checks_start`, `zana_checks_status` | no | sí | Checks en GitHub Actions por SHA exacto |
 | `zana_review_request`, `zana_review_claim`, `zana_review_diff`, `zana_review_lens_submit`, `zana_review_finalize` | no | sí | Ticket, conversación nueva, diff paginado completo y cuenta revisora |
+| `zana_budget_extend` | no | sí | Escritura de la sesión autora, solo con el sí del usuario: sube el presupuesto de líneas de la misión tras `OVER_LINE_BUDGET` (máximo 5000), auditada como `write` |
 | `zana_correction_start` | no | sí | Agrega una unidad de corrección tras `REQUEST_CHANGES` (el último ticket se revalida dentro de la transacción de la misión) |
 | `zana_session_rebind` | no | sí | Pasa una unidad RUNNING con el lease vigente a la sesión actual (reinicio o sesión nueva) sin consumir intento; vencido, `zana_recover_expired` → `zana_unit_retry` |
 | `zana_mission_archive` | no | sí | Archiva una misión `CLOSED` o `CANCELLED` para iniciar otra |
@@ -85,11 +86,11 @@ No existe todavía una prueba de una cuenta ChatGPT real, ni evidencia de modelo
 | `zana_merge` | no | sí | Solo con todo verde sobre un mismo head; `ZANA_MERGE_ENABLED=false` lo apaga |
 | `zana_ds_github` | no | sí | Router del GitHub MCP oficial, ver `docs/downstream-github.md` |
 
-Total: 24 en stdio y 29 en remoto. La restauración, la adopción de cuarentenas, la ventana de alta OAuth, la revocación de clientes, la auditoría (`remote-audit`), la salud con detalle (`remote-health`), los tickets (`remote-tickets`, `remote-ticket-abandon`) y el merge del operador (`remote-merge`) son solo CLI en el servidor.
+Total: 24 en stdio y 34 en remoto. La restauración, la adopción de cuarentenas, la ventana de alta OAuth, la revocación de clientes, la auditoría (`remote-audit`), la salud con detalle (`remote-health`), los tickets (`remote-tickets`, `remote-ticket-abandon`) y el merge del operador (`remote-merge`) son solo CLI en el servidor.
 
 ### Plazos
 
-Cada tool remota tiene un plazo total (`ZANA_TOOL_DEADLINE_MS`, 45 s por defecto). Si se excede responde `TOOL_DEADLINE`: la operación puede terminar igual, así que hay que leer el estado antes de reintentar. `zana_checks_status` y `zana_delivery_status` reparten ese plazo entre sus lecturas y devuelven `partial` con lo que no alcanzó (lo faltante nunca cuenta como verde); los logs de jobs fallidos tienen su propio presupuesto (10 s). La REST de GitHub tiene un circuit breaker compartido por los tokens autor y revisor: 5 fallos seguidos (red, 5xx o 429) lo abren 30 s.
+Cada tool remota tiene un plazo total (`ZANA_TOOL_DEADLINE_MS`, 45 s por defecto). Si se excede responde `TOOL_DEADLINE`: la operación puede terminar igual, así que hay que leer el estado antes de reintentar. `zana_checks_status` y `zana_delivery_status` reparten ese plazo entre sus lecturas y devuelven `partial` con lo que no alcanzó (lo faltante nunca cuenta como verde; en `zana_delivery_status` también la lista de archivos de `lineBudget`, que es informativa); los logs de jobs fallidos tienen su propio presupuesto (10 s). La REST de GitHub tiene un circuit breaker compartido por los tokens autor y revisor: 5 fallos seguidos (red, 5xx o 429) lo abren 30 s.
 
 ### Auditoría
 

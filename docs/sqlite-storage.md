@@ -5,7 +5,7 @@ ZanaLLaima usa almacenamiento transaccional local basado en el módulo `node:sql
 ## Estructura e invariantes
 
 - Ruta por defecto: `.zana/state.sqlite`; la variable heredada `ZANA_STATE_FILE=.zana/state.json` sigue aceptada y se traduce a la ruta SQLite.
-- `PRAGMA journal_mode=WAL`, `synchronous=FULL`, `busy_timeout=10000`, `foreign_keys=ON`, `user_version=6`.
+- `PRAGMA journal_mode=WAL`, `synchronous=FULL`, `busy_timeout=10000`, `foreign_keys=ON`, `user_version=8`.
 - Una misión activa, unidades normalizadas por fila, revisión activa separada, recibos de trabajo y revisión con unicidad por token, eventos y revisiones históricas.
 - `BEGIN IMMEDIATE` serializa las transiciones entre procesos y obliga a leer el estado después de adquirir el bloqueo. El token de cada ejecución protege de completados duplicados. La generación de intento y el contador de correcciones RDD se conservan en el estado; los reintentos de trabajo siguen las reglas de seguridad de la Fase 0.
 - Los eventos recientes están limitados a 2000 registros y las revisiones archivadas a 200; los lectores acceden mediante paginación por cursor descendente.
@@ -36,7 +36,7 @@ Para recuperar una base dañada o volver a un backup, **detener primero todos lo
 ZANA_RESTORE_OFFLINE=1 node src/cli.mjs storage-restore /ruta/backup.sqlite
 ```
 
-El backup debe ser válido, migrable al esquema actual (v1 a v7) y no contener trabajo `RUNNING`. Una restauración ciega sin base viva exige `--force-data-loss`, revoca todos los grants recuperados y registra un epoch que rechaza acciones firmadas antes de restaurar. Los archivos anteriores se mueven a una ruta de cuarentena recuperable. El proceso utiliza un diario JSON fsync; tras una interrupción, ejecutar abort offline o reintentar restore, que primero concilia el diario. `storage-status` enumera `.restoring.*` y `.quarantine.*` huérfanos y reporta errores de temporales WRITE sin bloquear una reconciliación firmada.
+El backup debe ser válido, migrable al esquema actual (v1 a v8) y no contener trabajo `RUNNING`. Una restauración ciega sin base viva exige `--force-data-loss`, revoca todos los grants recuperados y registra un epoch que rechaza acciones firmadas antes de restaurar. Los archivos anteriores se mueven a una ruta de cuarentena recuperable. El proceso utiliza un diario JSON fsync; tras una interrupción, ejecutar abort offline o reintentar restore, que primero concilia el diario. `storage-status` enumera `.restoring.*` y `.quarantine.*` huérfanos y reporta errores de temporales WRITE sin bloquear una reconciliación firmada.
 
 ## Pruebas y límites
 
@@ -168,10 +168,21 @@ La nueva tabla `write_effect_receipts` conserva, de manera única por intento, e
 
 La migración conservadora v5→v6 añade \`pre_mode INTEGER\` y \`post_mode INTEGER\` a \`write_effect_receipts\`, sin reescribir los recibos anteriores. En filas históricas estos campos permanecen **NULL**, porque no sería correcto inferir los permisos originales a partir del hash del archivo. En cada recibo nuevo, \`pre_mode\` registra los permisos completos del destino anterior (\`st.mode & 0o7777\`) y \`post_mode\` los permisos efectivamente aplicados; para borrados, el modo posterior es \`NULL\`.
 
-El almacenamiento sigue preservando el hash, token, generación y evidencia del efecto; el esquema objetivo de esa migración era \`user_version=6\`; el actual es v7 (abajo). Una base v5 requiere su migración mediante una transacción de escritura autorizada antes de lecturas nuevas. Ver \`tests/schema-v6-migration.test.mjs\` y \`tests/write-effect.test.mjs\`.
+El almacenamiento sigue preservando el hash, token, generación y evidencia del efecto; el esquema objetivo de esa migración era \`user_version=6\`; el actual es v8 (abajo). Una base v5 requiere su migración mediante una transacción de escritura autorizada antes de lecturas nuevas. Ver \`tests/schema-v6-migration.test.mjs\` y \`tests/write-effect.test.mjs\`.
 
 ## SQLite v7: tablas del modo remoto
 
 La migración v6→v7 solo **agrega** tablas (`CREATE TABLE IF NOT EXISTS`), sin tocar las existentes: `remote_sessions` (sesión MCP, host OAuth y `created_at`), `remote_missions` (repo, base, rama `zana/<missionId>` y unidades de código), `remote_activity` (qué sesión mutó qué misión), `remote_checks`, `review_tickets` (solo el SHA-256 del código del ticket) y `remote_audit`. Los lentes remotos se guardan en `review_receipts` (con `review_id` = id del ticket) y las reviews finalizadas en `review_archive`. El recorte de historial conserva los recibos de los tickets.
 
 Restore y adopt tratan estos hechos como monótonos a través de `securityFacts`/`mergeSecurityFacts`, sin cambiar sus pasos: un ticket reclamado, finalizado, `STALE_SHA` o vencido nunca vuelve a `OPEN` por restaurar un backup anterior; sesiones, actividad, checks y auditoría se unen; y un restore ciego o una adopción vencen todos los tickets abiertos (`EXPIRED`). Un lente nuevo en la base viva cuenta como recibo durable (`NEWER_RECEIPT` sin `--force-data-loss`). El ledger OAuth vive en otro archivo (`ZANA_OAUTH_DB`) y no participa del restore. Ver `tests/remote-schema-v7.test.mjs`.
+
+## SQLite v8: memoria por proyecto
+
+La migración v7→v8 agrega dos tablas y una columna, sin reescribir nada:
+
+- `projects`: `project_id` (`zp_` + 16 hex), `github_repo_id` (el id numérico de GitHub, único: sobrevive renombres y transferencias), `repo` (último `owner/repo` visto), `created_at` y `created_mission`.
+- `project_memory`: entradas `summary`, `decision`, `convention`, `issue` y `pending` con `topic` (≤80), `body` (≤1000, redactado), misión, SHA, sesión, `superseded_by` (la entrada que la reemplazó por el mismo proyecto, `kind` y `topic`) y `resolved_at` (solo `pending`). El índice parcial `project_memory_live` sirve a las entradas vivas.
+- `remote_missions.project_id`: el proyecto de la misión. Las misiones anteriores quedan en `NULL` y resuelven su proyecto al cerrar.
+- `project_memory_fts`: índice FTS5 de `topic` y `body` (contenido externo, mantenido por triggers de insert y update). Si `CREATE VIRTUAL TABLE` falla en el Node del servidor, la migración sigue, `metadata.fts` queda en `'0'` y `zana_memory_search` usa `LIKE`.
+
+`pruneRemote` nunca borra estas tablas y nada se poda por tiempo. Viajan en el archivo SQLite: `storage-backup` las copia y un restore instala las del backup (la memoria escrita después del backup no se fusiona, a diferencia de los hechos de seguridad). Un backup v7 se restaura y migra a v8. Ver `tests/memory-schema-v8.test.mjs`, `tests/project-memory.test.mjs` y `tests/memory-tools.test.mjs`; el modelo completo está en [memoria por proyecto](memory.md).

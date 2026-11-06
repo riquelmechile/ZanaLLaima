@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {remoteFixture,AUTHOR_TOKEN} from './helpers/remote-fixture.mjs';
 import {remoteRead,remoteWrite} from '../src/store.mjs';
+import {GitHubApi} from '../src/github-api.mjs';
 import {memoryContext,saveEntry,saveSummary,POINTER_PATH} from '../src/project-memory.mjs';
 
 const spec={objective:'Misión de memoria',units:[{id:'a',effect:'READ',instruction:'Leer el repo'}]};
@@ -171,5 +172,24 @@ test('el contexto se corta a maxBytes con truncated:true, en el orden del diseñ
     });
     assert.ok(long.length<=1000&&long.endsWith('Archivos clave: src/clave.mjs'));
     assert.throws(()=>saveEntry({},{kind:'nope'}),/INVALID_MEMORY_KIND/);
+  }finally{await f.cleanup();}
+});
+
+test('github.fileJson: 404 es null, rechaza rutas, no-archivos, más de 4 KB y JSON inválido',async()=>{
+  const f=await remoteFixture();
+  try{
+    const gh=new GitHubApi({baseUrl:f.env.ZANA_GITHUB_API_URL,token:AUTHOR_TOKEN});
+    assert.equal(await gh.fileJson('o/r','a/b.json','main'),null);
+    f.api.state.files['a/b.json']='{"ok":1}';
+    assert.deepEqual(await gh.fileJson('o/r','a/b.json','main'),{ok:1});
+    for(const bad of ['../x','a//b','',7])await assert.rejects(gh.fileJson('o/r',bad,'main'),/Invalid path or ref/);
+    await assert.rejects(gh.fileJson('o/r','x.json','a..b'),/Invalid path or ref/);
+    f.api.state.files['d']={type:'dir'};
+    await assert.rejects(gh.fileJson('o/r','d','main'),/INVALID_JSON_FILE: d is not a base64 file/);
+    f.api.state.files['big.json']='"'+'x'.repeat(5000)+'"';
+    await assert.rejects(gh.fileJson('o/r','big.json','main'),/at most 4 KB/);
+    f.api.state.failNext={status:403,message:'forbidden'};
+    await assert.rejects(gh.fileJson('o/r','a/b.json','main'),/HTTP 403/);
+    assert.ok(f.api.state.requests.some(r=>r.path==='/repos/o/r/contents/a/b.json'&&r.search==='?ref=main'));
   }finally{await f.cleanup();}
 });

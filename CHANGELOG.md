@@ -4,6 +4,8 @@
 
 - **Límites de tamaño (PR4):** `zana_review_request` mide el diff `base...sha` antes del ticket (`DIFF_TOO_LARGE` sobre `ZANA_REVIEW_MAX_DIFF_BYTES`, 1800000 por defecto, sin excepción) y las líneas del PR sin lockfiles ni `.zanallaima.json` (`OVER_LINE_BUDGET` sobre `ZANA_PR_LINE_BUDGET`, 400 por defecto). Tool nueva `zana_budget_extend` (escritura, auditada como `write`, solo la sesión autora con la misión activa) y columna `line_budget_extension` en `remote_missions`. El ticket, el claim y `zana_delivery_status` traen `lineBudget`. La caché de páginas del diff pasa a la clave `repo:base:sha`. 30 tools en remoto.
 
+- **Memoria por proyecto (M1 y M2):** SQLite v8 con `projects` (id numérico del repo de GitHub), `project_memory` (con supersesión por proyecto, `kind` y `topic`), índice FTS5 con fallback a `LIKE` (`metadata.fts`) y `remote_missions.project_id`; `pruneRemote` no las toca. `zana_mission_init` lee el puntero `.zanallaima.json` de la base (`github.fileJson`) y responde `memory` con `projectId`, el estado del puntero (`OK`, `POINTER_MISSING`, `POINTER_STALE`, `POINTER_FOREIGN`) y el contexto de 4 KB; si GitHub falla la misión igual se crea con `memory.error`. `zana_mission_close` remoto exige `summary` (`SUMMARY_REQUIRED`) y lo guarda redactado en la transacción del cierre; el `close` del CLI no cambia. Tools nuevas `zana_memory_context` y `zana_memory_search` (lectura) y `zana_memory_save` y `zana_memory_resolve` (escritura de la sesión autora, `REVIEWER_READ_ONLY` para la revisora). `docs/memory.md` explica el puntero. 34 tools en remoto.
+
 ## [0.6.0] - No publicado
 
 MCP remoto para la app de ChatGPT. Candidato sin merge, tag ni deploy; el deploy y el E2E real los hace el operador.

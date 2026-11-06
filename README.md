@@ -20,7 +20,7 @@ GPT programa, prueba y revisa en GitHub sin terminal: un MCP remoto pone las reg
 ## ¿Qué es?
 
 - **Un MCP remoto** que se conecta a la app de ChatGPT como conector, con OAuth y registro cerrado. Corre en el servidor del operador (zana-main), detrás de un túnel de Cloudflare.
-- **Un harness completo para un solo GPT.** Organiza la misión en unidades con presupuesto. GPT escribe en GitHub **solo** en la rama de su misión, los tests corren en GitHub Actions y la revisión 4R la hace el mismo GPT en **otra conversación**.
+- **Un harness completo para un solo GPT.** Organiza la misión en unidades con presupuesto. GPT escribe código **solo** en la rama de su misión (además puede editar y comentar su PR y disparar los checks), los tests corren en GitHub Actions y la revisión 4R la hace el mismo GPT en **otra conversación**.
 - **Un portón de entrega honesto.** La review la publica la cuenta revisora (`sebastianriquelme95-max`) sobre el SHA exacto, y `zana_merge` solo mergea con todo en verde sobre ese mismo SHA.
 
 ## Arquitectura
@@ -34,7 +34,7 @@ GPT programa, prueba y revisa en GitHub sin terminal: un MCP remoto pone las reg
 ## Cómo se trabaja
 
 <p align="center">
-  <img src="assets/diagrams/flujo.es.svg" alt="Flujo: la conversación autora crea la misión, hace commits en la rama, espera checks verdes, completa la unidad y pide un ticket; una conversación revisora nueva reclama el ticket, lee el diff completo, corre los cuatro lentes y finaliza; GitHub recibe la review firmada y zana_merge mergea con el SHA exacto." width="100%">
+  <img src="assets/diagrams/flujo.es.svg" alt="Flujo: la conversación autora crea la misión, hace commits en la rama y abre el PR, espera checks verdes, completa la unidad y pide un ticket; una conversación revisora nueva reclama el ticket, lee el diff completo, corre los cuatro lentes y finaliza; GitHub recibe la review firmada y zana_merge mergea con el SHA exacto." width="100%">
 </p>
 
 1. **Conversación autora.** GPT carga la skill `zana-odd` y crea la misión (`github: {repo, base}`).
@@ -56,7 +56,7 @@ GPT programa, prueba y revisa en GitHub sin terminal: un MCP remoto pone las reg
 | Garantiza | No prueba |
 | --- | --- |
 | Que la sesión revisora no es la autora, no escribió y revisó **ese** SHA con el diff completo y CI verde | El modelo usado ni que los subagentes hayan tenido contexto realmente fresco (eso lo informa el host) |
-| Que GPT no puede escribir en `main`, en `.github/workflows` ni mergear por el downstream | Que la revisora sea otra cuenta de ChatGPT, salvo con `ZANA_DISTINCT_REVIEWER_CLIENT=true` |
+| Que GPT no puede escribir en `main`, en `.github/workflows` ni mergear por el downstream | Que la revisora sea otra cuenta de ChatGPT. Con `ZANA_DISTINCT_REVIEWER_CLIENT=true` solo se prueba que es otro cliente OAuth; que sea otra cuenta depende de las altas que haga el operador |
 | Que un SHA con cambios pedidos no se vuelve a aprobar sin cambiar el código | Que un reinicio del servidor no abra una sesión nueva en la conversación autora (ver [docs/solo-rdd.md](docs/solo-rdd.md)) |
 
 ## Estado del proyecto
@@ -80,6 +80,8 @@ GPT programa, prueba y revisa en GitHub sin terminal: un MCP remoto pone las reg
 | Workflow de checks para repos administrados | [docs/checks-workflow.md](docs/checks-workflow.md) |
 | Revisión, tickets y qué prueba la separación de sesiones | [docs/solo-rdd.md](docs/solo-rdd.md) |
 | E2E real con la app de ChatGPT (ZL-018) | [docs/host-e2e-remote.md](docs/host-e2e-remote.md) |
+| Seguridad funcional, estados y recuperación | [docs/safety-lifecycle.md](docs/safety-lifecycle.md) |
+| Auditoría de CI, seguridad del repo y release | [docs/release-security.md](docs/release-security.md) |
 | Roadmap y registro de cambios | [ROADMAP.md](ROADMAP.md) · [CHANGELOG.md](CHANGELOG.md) |
 
 <details>

@@ -70,9 +70,10 @@ write('brand/zanallaima.svg',mascot)
 def button(code,label,active,fname):
     w=150;h=40
     fill=OR if active else '#FFFFFF'; stroke=OR2 if active else '#CBD2D9'; tc='#FFFFFF' if active else INK; cc=OR2 if not active else '#FFFFFF'
+    desc={('ES',True):'Idioma actual: Español',('ES',False):'Ver este README en español',('EN',True):'Current language: English',('EN',False):'View this README in English'}[(code,active)]
     s=f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}" role="img" aria-labelledby="b-{fname}-t b-{fname}-d">
 <title id="b-{fname}-t">{esc(label)}</title>
-<desc id="b-{fname}-d">{'Idioma actual' if code=='ES' and active else ('Ver en español' if code=='ES' else ('Current language' if active else 'View in English'))}: {esc(label)}</desc>
+<desc id="b-{fname}-d">{desc}</desc>
 <rect x="1" y="1" width="{w-2}" height="{h-2}" rx="19" fill="{fill}" stroke="{stroke}" stroke-width="2"/>
 <rect x="10" y="9" width="34" height="22" rx="11" fill="{'#FFFFFF' if active else ORT}" opacity="{'.25' if active else '1'}"/>
 <text x="27" y="25" text-anchor="middle" font-family="{FONT}" font-size="13" font-weight="800" fill="{cc}">{code}</text>
@@ -89,14 +90,15 @@ def text(x,y,s,size=15,weight=400,fill=INK,anchor='start'):
 def box(x,y,w,h,fill,stroke,rx=14):
     return f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="{rx}" fill="{fill}" stroke="{stroke}" stroke-width="2"/>'
 def arrow(d,color=INK,dash=False,mid='a'):
-    return f'<path d="{d}" fill="none" stroke="{color}" stroke-width="2.5" {"stroke-dasharray=\"7 6\"" if dash else ""} marker-end="url(#{mid})"/>'
+    da='stroke-dasharray="7 6"' if dash else ''
+    return f'<path d="{d}" fill="none" stroke="{color}" stroke-width="2.5" {da} marker-end="url(#{mid})"/>'
 def marker(mid,color):
     return f'<marker id="{mid}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="{color}"/></marker>'
 
 # ---------- Arquitectura ----------
 ARCH={
 'es':dict(title='Arquitectura de ZanaLLaima',desc='La app de ChatGPT se conecta por MCP con OAuth a ZanaLLaima en zana-main. ZanaLLaima usa el MCP oficial de GitHub para escribir solo en la rama de la misión, GitHub Actions corre los tests y la cuenta revisora firma la review; el merge exige el SHA exacto.',
-  app='App de ChatGPT',app_items=['Conversación autora','Conversación revisora','(nueva, solo lectura)','Subagentes: 4 lentes'],
+  app='App de ChatGPT',app_items=['Conversación autora','Conversación revisora','(nueva, solo lectura)','Los 4 lentes R1–R4'],
   link1='MCP + OAuth',link2=['HTTPS','túnel Cloudflare'],
   zl='ZanaLLaima',zl_sub='MCP remoto en zana-main',zl_items=['Misiones, unidades y presupuesto','Skills: zana-odd y zana-4r','Tickets de revisión por SHA','Política: solo rama zana/<misión>','zana_merge con SHA exacto'],
   ghmcp='GitHub MCP oficial',ghmcp_sub=['Lee el repo y escribe','solo en la rama de la misión'],
@@ -105,7 +107,7 @@ ARCH={
   l_allow='allowlist',l_review='review · merge',l_push='push',l_checks=['resultado','de checks'],
   foot='Los tokens viven solo en el servidor. La verdad es el SHA en GitHub y sus checks.'),
 'en':dict(title='ZanaLLaima architecture',desc='The ChatGPT app connects over MCP with OAuth to ZanaLLaima on zana-main. ZanaLLaima uses the official GitHub MCP to write only to the mission branch, GitHub Actions runs the tests and the reviewer account signs the review; merging requires the exact SHA.',
-  app='ChatGPT app',app_items=['Author conversation','Reviewer conversation','(new, read-only)','Subagents: 4 lenses'],
+  app='ChatGPT app',app_items=['Author conversation','Reviewer conversation','(new, read-only)','The 4 lenses R1–R4'],
   link1='MCP + OAuth',link2=['HTTPS','Cloudflare tunnel'],
   zl='ZanaLLaima',zl_sub='Remote MCP on zana-main',zl_items=['Missions, units and budget','Skills: zana-odd and zana-4r','Review tickets bound to a SHA','Policy: only branch zana/<mission>','zana_merge with the exact SHA'],
   ghmcp='Official GitHub MCP',ghmcp_sub=['Reads the repo, writes','only to the mission branch'],
@@ -154,15 +156,15 @@ for lang,t in ARCH.items():
 
 # ---------- Flujo ----------
 FLOW={
-'es':dict(title='Flujo de trabajo de ZanaLLaima',desc='Tres carriles: la conversación autora crea la misión, escribe en la rama, espera checks verdes, completa la unidad y pide un ticket; una conversación revisora nueva reclama el ticket, lee el diff completo, corre los cuatro lentes y finaliza; GitHub recibe la review firmada por la cuenta revisora, y zana_merge mergea con el SHA exacto. Si se piden cambios, zana_correction_start vuelve al carril autor.',
+'es':dict(title='Flujo de trabajo de ZanaLLaima',desc='Tres carriles: la conversación autora crea la misión, escribe en la rama y abre el PR, espera checks verdes, completa la unidad y pide un ticket; una conversación revisora nueva reclama el ticket, lee el diff completo, corre los cuatro lentes y finaliza; GitHub recibe la review firmada por la cuenta revisora, y zana_merge mergea con el SHA exacto. Si se piden cambios, zana_correction_start vuelve al carril autor.',
   lanes=['Conversación','autora','Conversación','revisora (nueva)','GitHub'],
-  s=[('1 Misión','zana_mission_init'),('2 Commits','en zana/<misión>'),('3 Checks verdes','en GitHub Actions'),('4 Completa','la unidad'),('5 Pide ticket','ZR-…'),
+  s=[('1 Misión','zana_mission_init'),('2 Commits + PR','en zana/<misión>'),('3 Checks verdes','en GitHub Actions'),('4 Completa','la unidad'),('5 Pide ticket','ZR-…'),
      ('6 Reclama','el ticket'),('7 Lee el diff','completo'),('8 Cuatro lentes','R1 · R2 · R3 · R4'),('9 Finaliza','mismo SHA'),
      ('10 Review firmada','cuenta revisora'),('11 Merge','SHA exacto'),('12 Cierra','y archiva')],
   loop1='Si piden cambios:',loop2='zana_correction_start',paste='el usuario pega el ticket'),
-'en':dict(title='ZanaLLaima workflow',desc='Three lanes: the author conversation creates the mission, writes to the branch, waits for green checks, completes the unit and requests a ticket; a new reviewer conversation claims the ticket, reads the full diff, runs the four lenses and finalizes; GitHub receives the review signed by the reviewer account, and zana_merge merges with the exact SHA. If changes are requested, zana_correction_start goes back to the author lane.',
+'en':dict(title='ZanaLLaima workflow',desc='Three lanes: the author conversation creates the mission, writes to the branch and opens the PR, waits for green checks, completes the unit and requests a ticket; a new reviewer conversation claims the ticket, reads the full diff, runs the four lenses and finalizes; GitHub receives the review signed by the reviewer account, and zana_merge merges with the exact SHA. If changes are requested, zana_correction_start goes back to the author lane.',
   lanes=['Author','conversation','Reviewer','conversation (new)','GitHub'],
-  s=[('1 Mission','zana_mission_init'),('2 Commits','on zana/<mission>'),('3 Green checks','in GitHub Actions'),('4 Complete','the unit'),('5 Request','ticket ZR-…'),
+  s=[('1 Mission','zana_mission_init'),('2 Commits + PR','on zana/<mission>'),('3 Green checks','in GitHub Actions'),('4 Complete','the unit'),('5 Request','ticket ZR-…'),
      ('6 Claim','the ticket'),('7 Read the','full diff'),('8 Four lenses','R1 · R2 · R3 · R4'),('9 Finalize','same SHA'),
      ('10 Signed review','reviewer account'),('11 Merge','exact SHA'),('12 Close','and archive')],
   loop1='Changes requested:',loop2='zana_correction_start',paste='the user pastes the ticket'),

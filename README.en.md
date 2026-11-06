@@ -20,7 +20,7 @@ GPT codes, tests and reviews on GitHub with no terminal: a remote MCP sets the r
 ## What is it?
 
 - **A remote MCP** that plugs into the ChatGPT app as a connector, with OAuth and closed registration. It runs on the operator's server (zana-main), behind a Cloudflare tunnel.
-- **A complete harness for a single GPT.** It organizes the mission into units with a budget. GPT writes to GitHub **only** on its mission branch, the tests run in GitHub Actions, and the 4R review is done by the same GPT in **another conversation**.
+- **A complete harness for a single GPT.** It organizes the mission into units with a budget. GPT writes code **only** on its mission branch (it can also edit and comment on its PR and trigger the checks), the tests run in GitHub Actions, and the 4R review is done by the same GPT in **another conversation**.
 - **An honest delivery gate.** The review is published by the reviewer account (`sebastianriquelme95-max`) on the exact SHA, and `zana_merge` merges only when everything is green on that same SHA.
 
 ## Architecture
@@ -34,7 +34,7 @@ GPT codes, tests and reviews on GitHub with no terminal: a remote MCP sets the r
 ## How it works
 
 <p align="center">
-  <img src="assets/diagrams/flujo.en.svg" alt="Workflow: the author conversation creates the mission, commits to the branch, waits for green checks, completes the unit and requests a ticket; a new reviewer conversation claims the ticket, reads the full diff, runs the four lenses and finalizes; GitHub receives the signed review and zana_merge merges with the exact SHA." width="100%">
+  <img src="assets/diagrams/flujo.en.svg" alt="Workflow: the author conversation creates the mission, commits to the branch and opens the PR, waits for green checks, completes the unit and requests a ticket; a new reviewer conversation claims the ticket, reads the full diff, runs the four lenses and finalizes; GitHub receives the signed review and zana_merge merges with the exact SHA." width="100%">
 </p>
 
 1. **Author conversation.** GPT loads the `zana-odd` skill and creates the mission (`github: {repo, base}`).
@@ -56,7 +56,7 @@ GPT codes, tests and reviews on GitHub with no terminal: a remote MCP sets the r
 | Guarantees | Does not prove |
 | --- | --- |
 | The reviewer session is not the author, wrote nothing, and reviewed **that** SHA with the full diff and green CI | Which model was used, or that subagents really had a fresh context (the host reports that) |
-| GPT cannot write to `main` or `.github/workflows`, or merge through the downstream | That the reviewer is a different ChatGPT account, unless `ZANA_DISTINCT_REVIEWER_CLIENT=true` |
+| GPT cannot write to `main` or `.github/workflows`, or merge through the downstream | That the reviewer is a different ChatGPT account. With `ZANA_DISTINCT_REVIEWER_CLIENT=true` it only proves a different OAuth client; a different account depends on which clients the operator registers |
 | A SHA with requested changes cannot be approved again without changing the code | That a server restart won't open a new session in the author conversation (see [docs/solo-rdd.md](docs/solo-rdd.md)) |
 
 ## Project status
@@ -82,6 +82,8 @@ The detailed documents are in Spanish.
 | Checks workflow for managed repos | [docs/checks-workflow.md](docs/checks-workflow.md) |
 | Review, tickets and what session separation proves | [docs/solo-rdd.md](docs/solo-rdd.md) |
 | Real E2E with the ChatGPT app (ZL-018) | [docs/host-e2e-remote.md](docs/host-e2e-remote.md) |
+| Functional safety, states and recovery | [docs/safety-lifecycle.md](docs/safety-lifecycle.md) |
+| CI audit, repository security and release | [docs/release-security.md](docs/release-security.md) |
 | Roadmap and changelog | [ROADMAP.md](ROADMAP.md) · [CHANGELOG.md](CHANGELOG.md) |
 
 <details>

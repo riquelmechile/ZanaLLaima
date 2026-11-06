@@ -97,9 +97,25 @@ export function reviewBody({code,ticket,lenses,execution,event}){
   return body.length>MAX_BODY?body.slice(0,MAX_BODY-40)+'\n\n[cuerpo recortado por tamaño]':body;
 }
 
+// Per-key FIFO lock inside one process. The map holds the tail of each key's
+// chain; the last holder of a key deletes it, so idle keys never accumulate.
+export function makeExclusive(){
+  const locks=new Map();
+  async function exclusive(key,fn){
+    const before=locks.get(key)??Promise.resolve();
+    let release;
+    const mine=new Promise(r=>{release=r;});
+    const chained=before.then(()=>mine);
+    locks.set(key,chained);
+    await before;
+    try{return await fn();}
+    finally{release();if(locks.get(key)===chained)locks.delete(key);}
+  }
+  return {exclusive,pending:()=>locks.size};
+}
 export const latestIn=(db,missionId)=>db?.prepare('SELECT * FROM review_tickets WHERE mission_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(missionId)??null;
 export function createReview({github,reviewerGithub,config,checks,remoteWrite,remoteRead,transact,missionContext}){
-  const locks=new Map();
+  const {exclusive}=makeExclusive();
   const pageCache=new Map();
   const ticketBy=(db,code)=>{
     if(typeof code!=='string'||!CODE.test(code))fail('TICKET_NOT_FOUND','unknown ticket');
@@ -131,14 +147,6 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
   };
   const superseded=(code,t,state)=>({ticket:code,state,published:false,ticketSha:t.sha,
     note:'This ticket was superseded or abandoned while finalizing; nothing was published. Ask the author for the current ticket.'});
-  async function exclusive(key,fn){
-    const before=locks.get(key)??Promise.resolve();
-    let release;
-    const mine=new Promise(r=>{release=r;});
-    locks.set(key,before.then(()=>mine));
-    await before;
-    try{return await fn();}finally{release();if(locks.get(key)===mine)locks.delete(key);}
-  }
   async function loadPages(t){
     const cached=pageCache.get(t.ticket_id);
     if(cached)return cached;

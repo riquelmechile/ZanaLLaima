@@ -7,7 +7,8 @@ import {join} from 'node:path';
 import {ActorSigner,verifyActorAssertion,canonicalJson,argsDigest} from '../src/actor-assertion.mjs';
 import {DownstreamGateway,parseDownstreamConfig,allowedUrl,classify,routerFor} from '../src/downstream.mjs';
 import {GitHubApi,validRepo,validRefName} from '../src/github-api.mjs';
-import {independentReview,missionPull,deliveryStatus,mergeMission,fourRStatus} from '../src/github-delivery.mjs';
+import {independentReview,missionPull,deliveryStatus,mergeMission,fourRStatus,ticketView} from '../src/github-delivery.mjs';
+import {makeExclusive} from '../src/remote-review.mjs';
 import {remoteConfig,repoAllowed} from '../src/remote-config.mjs';
 import {registerSession,readAudit,audit,remoteMission,sessionRow} from '../src/remote-state.mjs';
 import {listSkills,loadSkill,parseFrontmatter} from '../src/skills.mjs';
@@ -272,4 +273,34 @@ test('redaction removes known secrets in all encodings and GitHub token shapes',
   assert.equal(clean('x\n  y',[]),'x y');
   assert.equal(clean(new Error('e '+secret),[secret]),'e [redacted]');
   assert.deepEqual(secretForms([null,'short']),[]);
+});
+
+test('ticketView distingue tickets con el mismo state (issue #3, punto 4)',()=>{
+  const a={ticket_id:'t-a',state:'FINALIZED',verdict:'APPROVE',sha:'a'.repeat(40),github_review_id:7};
+  const b={...a,ticket_id:'t-b'};
+  assert.notEqual(ticketView(a),ticketView(b));
+  assert.equal(ticketView(a),ticketView({...a}));
+  assert.notEqual(ticketView(a),ticketView({...a,github_review_id:null}));
+  assert.equal(ticketView(null),'none');
+  assert.equal(ticketView(undefined),'none');
+});
+
+test('makeExclusive serializa por clave y no retiene entradas (issue #3, punto 6)',async()=>{
+  const {exclusive,pending}=makeExclusive();
+  const order=[];
+  let releaseFirst;
+  const gate=new Promise(r=>{releaseFirst=r;});
+  const first=exclusive('m',async()=>{order.push('first:start');await gate;order.push('first:end');return 1;});
+  const second=exclusive('m',async()=>{order.push('second');return 2;});
+  const other=exclusive('x',async()=>{order.push('other');return 3;});
+  assert.equal(await other,3);
+  assert.deepEqual(order,['first:start','other']);
+  assert.equal(pending(),1);
+  releaseFirst();
+  assert.deepEqual(await Promise.all([first,second]),[1,2]);
+  assert.deepEqual(order,['first:start','other','first:end','second']);
+  assert.equal(pending(),0);
+  await assert.rejects(exclusive('m',async()=>{throw new Error('boom');}),/boom/);
+  assert.equal(await exclusive('m',async()=>'after'),'after');
+  assert.equal(pending(),0);
 });

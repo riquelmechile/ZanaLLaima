@@ -109,10 +109,9 @@ export class GitHubApi{
   async pullDiff(repo,number){
     return this.request('GET',repoPath(repo)+'/pulls/'+positive(number),{accept:'application/vnd.github.diff',raw:true});
   }
-  // The diff of exactly base...commit (three dots, like a pull request), so a
-  // ticket's pages never change while its SHA does not.
-  async compareDiff(repo,base,commit){return (await this.compareDiffMeasured(repo,base,commit)).text;}
-  // The redacted diff plus its real size: limits are checked on what GitHub sent.
+  // The redacted diff of exactly base...commit (three dots, like a pull request),
+  // so a ticket's pages never change while its SHA does not, plus its real size:
+  // limits are checked on what GitHub sent.
   async compareDiffMeasured(repo,base,commit){
     if(!validRefName(base))throw new GitHubApiError(400,'Invalid base');
     return this.request('GET',repoPath(repo)+'/compare/'+refPath(base)+'...'+sha(commit),

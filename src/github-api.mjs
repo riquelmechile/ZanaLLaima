@@ -79,6 +79,8 @@ export class GitHubApi{
       try{message=JSON.parse(text).message??'';}catch{message='';}
       throw new GitHubApiError(res.status,'GitHub HTTP '+res.status+(message?': '+clean(message,this.secrets()):''));
     }
+    // 'measured' also returns the size of what GitHub sent, before redaction.
+    if(raw==='measured')return {text:redactText(text,this.secrets()),bytes:Buffer.byteLength(text,'utf8')};
     if(raw)return redactText(text,this.secrets());
     if(!text)return null;
     try{return JSON.parse(text);}catch{throw new GitHubApiError(502,'GitHub answered without JSON');}
@@ -95,10 +97,12 @@ export class GitHubApi{
   }
   // The diff of exactly base...commit (three dots, like a pull request), so a
   // ticket's pages never change while its SHA does not.
-  async compareDiff(repo,base,commit){
+  async compareDiff(repo,base,commit){return (await this.compareDiffMeasured(repo,base,commit)).text;}
+  // The redacted diff plus its real size: limits are checked on what GitHub sent.
+  async compareDiffMeasured(repo,base,commit){
     if(!validRefName(base))throw new GitHubApiError(400,'Invalid base');
     return this.request('GET',repoPath(repo)+'/compare/'+refPath(base)+'...'+sha(commit),
-      {accept:'application/vnd.github.diff',raw:true});
+      {accept:'application/vnd.github.diff',raw:'measured'});
   }
   async openPullsFor(repo,branch){
     const owner=repo.split('/')[0];

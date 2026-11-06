@@ -151,14 +151,15 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
   // Cache by repo:base:sha, so request() (which measures the diff before the
   // ticket exists) warms what claim() and diff() read.
   async function fetchPages(repo,base,sha){
-    let diff;
-    try{diff=await github.compareDiff(repo,base,sha);}
+    let diff,rawBytes;
+    try{({text:diff,bytes:rawBytes}=await github.compareDiffMeasured(repo,base,sha));}
     catch(error){
       if(/response too large/.test(String(error?.message)))
         fail('DIFF_TOO_LARGE','el diff pasa los 2 MB que entrega GitHub y el tope es '+config.reviewMaxDiffBytes+'; divide el cambio en misiones secuenciales');
       throw error;
     }
-    const entry={key:repo+':'+base+':'+sha,pages:diffPages(diff),bytes:Buffer.byteLength(diff,'utf8')};
+    // bytes is the size GitHub sent, before redaction, so redaction cannot shrink it under the cap.
+    const entry={key:repo+':'+base+':'+sha,pages:diffPages(diff),bytes:rawBytes};
     pageCache.set(entry.key,entry);
     if(pageCache.size>50)pageCache.delete(pageCache.keys().next().value);
     return entry;

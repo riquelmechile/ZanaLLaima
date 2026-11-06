@@ -51,6 +51,9 @@ test('size limits: budget, extension, reviewer refusal, diff cap and delivery st
     // The diff cap has no exception, even with an extension.
     f.api.state.diffText='diff --git a/x b/x\n'+'+'.repeat(1_900_000);
     assert.match((await f.call('zana_review_request',{missionId},author)).error,/^DIFF_TOO_LARGE: el diff pesa 19000\d\d bytes y el tope es 1800000/);
+    // Redaction cannot shrink a diff under the cap: the size is what GitHub sent.
+    f.api.state.diffText='diff --git a/x b/x\n'+('+ghp_'+'A'.repeat(36)+'\n').repeat(46_000);
+    assert.match((await f.call('zana_review_request',{missionId},author)).error,/^DIFF_TOO_LARGE: el diff pesa 1932019 bytes/);
     f.api.state.diffText='+'.repeat(2_100_000);
     assert.match((await f.call('zana_review_request',{missionId},author)).error,/^DIFF_TOO_LARGE: el diff pasa los 2 MB/);
     // 31 pages of files: the list is truncated at 30 and treated as over.

@@ -7,8 +7,14 @@ const file=(filename,additions,deletions=0)=>({filename,additions,deletions,stat
 
 test('line budget: lockfiles and .zanallaima.json do not count; truncated is over',()=>{
   assert.equal(excluded('a/b/package-lock.json'),true);
-  assert.equal(excluded('deps/x.lock'),true);
+  assert.equal(excluded('sub/package-lock.json'),true);
+  assert.equal(excluded('deps/Cargo.lock'),true);
+  // Only the listed lockfiles: any other .lock file is code and counts.
+  assert.equal(excluded('deps/x.lock'),false);
+  assert.equal(excluded('src/app.lock'),false);
+  // The memory pointer is excluded only at the root.
   assert.equal(excluded('.zanallaima.json'),true);
+  assert.equal(excluded('lib/.zanallaima.json'),false);
   assert.equal(excluded('src/lock.mjs'),false);
   assert.deepEqual(lineBudget([file('go.sum',900),file('src/a.mjs',30,20)],{limit:50}),
     {limit:50,lines:50,lockfileLines:900,files:2,over:false});

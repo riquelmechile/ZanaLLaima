@@ -1,14 +1,14 @@
 // Presupuesto de líneas de un PR: adiciones + eliminaciones sin lockfiles ni
-// .zanallaima.json. Se compara por nombre base de la ruta.
+// .zanallaima.json. Los lockfiles se comparan por nombre base; el puntero de
+// memoria solo en la raíz.
 export const LOCKFILES=Object.freeze(['package-lock.json','npm-shrinkwrap.json','pnpm-lock.yaml','yarn.lock','bun.lock',
   'bun.lockb','Cargo.lock','poetry.lock','uv.lock','Pipfile.lock','composer.lock','Gemfile.lock','go.sum','flake.lock',
   'packages.lock.json','pubspec.lock','mix.lock']);
 // Largest budget zana_budget_extend may set.
 export const EXTEND_MAX=5000;
-export const EXCLUDED=Object.freeze([...LOCKFILES,'.zanallaima.json']);
 export const excluded=path=>{
-  const base=String(path).split('/').pop();
-  return EXCLUDED.includes(base)||base.endsWith('.lock');
+  const p=String(path);
+  return p==='.zanallaima.json'||LOCKFILES.includes(p.split('/').pop());
 };
 // files: [{filename,additions,deletions}]; truncated: GitHub devolvió el máximo
 // de páginas y puede haber más archivos (se trata como sobre el presupuesto).

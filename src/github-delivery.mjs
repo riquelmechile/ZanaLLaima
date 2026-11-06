@@ -60,7 +60,7 @@ export function ticketAuthority(ticket,head,review){
     (ticket.github_review_id!=null&&Number(ticket.github_review_id)!==review.reviewId?' (its review is not the latest decisive one)':'')})};
 }
 
-export async function deliveryStatus({github,config,ctx,openBlockingTickets=[],currentTicket=null,deadline=createDeadline(config.toolDeadlineMs)}){
+export async function deliveryStatus({github,config,ctx,openBlockingTickets=[],currentTicket=null,deadline=createDeadline(config.toolDeadlineMs),lineBudgetOf=null}){
   if(!config.reviewerLogin)return {missionId:ctx.missionId,state:'NOT_CONFIGURED',ready:false,
     blockers:['ZANA_REVIEWER_LOGIN is not set on the server'],readOnly:true};
   const pull=await missionPull(github,ctx);
@@ -75,6 +75,8 @@ export async function deliveryStatus({github,config,ctx,openBlockingTickets=[],c
     {fallback:'UNKNOWN'});
   const review=await deadline.step(()=>independentReview(github,ctx.repo,pull.number,head,pull,config.reviewerLogin),'review',
     {fallback:{login:config.reviewerLogin.toLowerCase(),state:'UNAVAILABLE',unavailableReason:'DEADLINE'}});
+  // Informative only (never a blocker), but inside the same deadline.
+  const lineBudget=lineBudgetOf&&await deadline.step(()=>lineBudgetOf(pull),'lineBudget',{fallback:{unavailable:'DEADLINE'}});
   const mergeable=pull.mergeable===true&&pull.draft!==true&&pull.state==='open';
   const blockers=[];
   if(review.state!=='APPROVED_EXACT_SHA')blockers.push('Review of '+review.login+': '+review.state);
@@ -87,6 +89,7 @@ export async function deliveryStatus({github,config,ctx,openBlockingTickets=[],c
   return {missionId:ctx.missionId,repo:ctx.repo,pullNumber:pull.number,pullUrl:pull.html_url??null,headSha:head,
     review,currentTicket:authority.ticket??null,ci:{state:ci.state,runs:ci.runs,missing:ci.missing},fourR,mergeable,
     mergeableState:pull.mergeable_state??null,openBlockingTickets,ready:blockers.length===0,blockers,
+    ...(lineBudget?{lineBudget}:{}),
     ...(deadline.partial.length?{partial:deadline.partial}:{}),readOnly:true};
 }
 

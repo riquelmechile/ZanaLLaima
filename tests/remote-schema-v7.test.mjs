@@ -30,8 +30,8 @@ test('v6 database migrates to v7 adding remote tables without touching mission s
       db.exec('PRAGMA user_version=6');
     }finally{db.close();}
     await assert.rejects(readState(f.file),/Unsupported database schema/);
-    assert.equal((await ensureSchema(f.file)).schemaVersion,7);
-    assert.equal((await storageStatus(f.file)).schemaVersion,7);
+    assert.equal((await ensureSchema(f.file)).schemaVersion,8);
+    assert.equal((await storageStatus(f.file)).schemaVersion,8);
     assert.equal((await readState(f.file)).id,initial.id);
     const tables=await remoteRead(db=>db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(x=>x.name),f.file);
     for(const t of REMOTE)assert.ok(tables.includes(t),t);

@@ -25,7 +25,7 @@ test('SQLite WAL keeps normalized units and durable receipts across reopen',asyn
     const info=await storageStatus(f.file);
     assert.equal(info.backend,'SQLITE_WAL');
     assert.equal(info.journalMode,'wal');
-    assert.equal(info.schemaVersion,7);
+    assert.equal(info.schemaVersion,8);
     assert.equal(info.integrity,'ok');
     const unit=await transact(s=>{
       const packet=startBatch(s).batch.packets[0];
@@ -280,7 +280,7 @@ test('verified review correction count survives process reopen',async()=>{
     const restarted=await readState(f.file);
     assert.equal(restarted.reviewCount,2);
     assert.equal(restarted.review.round,2);
-    assert.equal((await storageStatus(f.file)).schemaVersion,7);
+    assert.equal((await storageStatus(f.file)).schemaVersion,8);
   }finally{await f.cleanup();}
 });
 
@@ -298,7 +298,7 @@ test('WARNING W8 restore migrates pre-v6 SQLite snapshot via a temporary databas
       const outcome=await restoreBackup(backupFile,f.file,{offline:true});
       assert.equal(outcome.restored,true);
     }finally{delete process.env.ZANA_RESTORE_OFFLINE;}
-    assert.equal((await storageStatus(f.file)).schemaVersion,7);
+    assert.equal((await storageStatus(f.file)).schemaVersion,8);
     assert.equal((await readState(f.file)).id,original.id);
   }finally{await f.cleanup();}
 });

@@ -27,6 +27,8 @@ import {nowIso,recordActivity,remoteMission,sessionReviews,sessionWrote,sessionI
 import {budgetOf,remainingStarts} from './budget.mjs';
 import {within,DeadlineError} from './deadline.mjs';
 import {clean,redactDeep,envSecrets} from './redact.mjs';
+import {closeMission} from './lifecycle.mjs';
+import {readPointer,resolveProject,memoryContext,missionProject,setMissionProject,saveSummary} from './project-memory.mjs';
 
 const packageVersion=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8')).version;
 export const REMOTE_INSTRUCTIONS=[
@@ -39,12 +41,16 @@ export const REMOTE_INSTRUCTIONS=[
 
 const REUSED=['zana_profile','zana_capability_status','zana_mission_status','zana_next_batch','zana_start_batch',
   'zana_complete_unit','zana_unit_heartbeat','zana_recover_expired','zana_unit_retry','zana_mission_cancel',
-  'zana_mission_close','zana_mission_history'];
+  'zana_mission_history'];
 const uuid=()=>z.string().min(8).max(128);
 const missionId=()=>z.string().min(8).max(128);
 const ticket=()=>z.string().min(1).max(64);
+const note=()=>z.array(z.object({topic:z.string().min(3).max(80),body:z.string().min(3).max(1000)}).strict()).max(20);
+// The mandatory close summary (§6.5); the stdio close keeps its frozen schema.
+const CLOSE_SCHEMA=z.object({summary:z.object({done:z.string().min(20).max(1000),decisions:note(),conventions:note(),
+  pending:note(),keyFiles:z.array(z.string().min(1).max(260)).max(30)}).strict()}).strict();
 const NEW_TOOLS={
-  zana_mission_init:['Create one remote mission bound to a GitHub repository and base; code units declare code:true',false,
+  zana_mission_init:['Create one remote mission bound to a GitHub repository and base; code units declare code:true. Returns memory: the project context to read before planning and the .zanallaima.json pointer to write first when its status is not OK',false,
     z.object({spec:z.record(z.string(),z.unknown()),github:z.object({repo:z.string().min(3).max(201),base:z.string().min(1).max(200)}).strict()}).strict()],
   zana_session_status:['Show this MCP session (id, host, creation time) and its role in the active mission',true,z.object({}).strict()],
   zana_skill_list:['List the skills this server serves',true,z.object({}).strict()],
@@ -70,6 +76,8 @@ const NEW_TOOLS={
     z.object({missionId:missionId()}).strict()],
   zana_session_rebind:['After a server restart or a new MCP session: move a RUNNING unit with a live lease to this session without consuming an attempt (expired: zana_recover_expired, zana_unit_retry, zana_start_batch)',false,
     z.object({missionId:missionId(),unitId:z.string().min(1).max(64),token:uuid(),leaseGeneration:z.number().int().positive()}).strict()],
+  zana_mission_close:['Close the mission after every unit completed, with the mandatory summary (done, decisions, conventions, pending, keyFiles) saved to the project memory',false,
+    CLOSE_SCHEMA],
   zana_mission_archive:['Archive the active remote mission once it is CLOSED or CANCELLED, so a new one can start',false,z.object({}).strict()],
   zana_review_finalize:['Reviewer session: re-read the PR head and publish the review and zana/4r with the reviewer account',false,
     z.object({ticket:ticket(),execution:z.enum(EXECUTIONS)}).strict()],
@@ -171,15 +179,24 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         throw new Error('Remote missions use READ units; mark the units that change code with code:true (writes go through the GitHub downstream)');
       const codeUnits=units.filter(u=>u?.code===true).map(u=>u.id);
       const cleanSpec={...spec,units:units.map(u=>{if(!u||typeof u!=='object')return u;const {code,...rest}=u;return rest;})};
+      // Memory never blocks the mission: a GitHub failure is reported in memory.error.
+      let found=null,memory;
+      try{found=await readPointer(github,target.repo,target.base);}
+      catch(error){memory={error:clean(error,secrets())};}
       const mission=await transact((existing,ctx)=>{
         if(existing)throw new Error('Mission exists; finish or archive it before starting another');
         const m=createMission(cleanSpec);
         ctx.db.prepare('INSERT INTO remote_missions(mission_id,repo,base,branch,code_units,created_session,created_at) VALUES(?,?,?,?,?,?,?)')
           .run(m.id,target.repo,target.base,missionBranch(m.id),JSON.stringify(codeUnits),session.sessionId,m.createdAt);
+        if(found){
+          const {projectId,pointer}=resolveProject(ctx.db,{...found,missionId:m.id});
+          setMissionProject(ctx.db,m.id,projectId);
+          memory={projectId,pointer,context:memoryContext(ctx.db,projectId,{maxBytes:4096})};
+        }
         recordActivity(ctx.db,{sessionId:session.sessionId,clientId:session.clientId,missionId:m.id,kind:'MISSION_WRITE',tool:'zana_mission_init'});
         return m;
       });
-      return {...publicStatus(mission),github:{repo:target.repo,base:target.base,branch:missionBranch(mission.id)},codeUnits};
+      return {...publicStatus(mission),github:{repo:target.repo,base:target.base,branch:missionBranch(mission.id)},codeUnits,memory};
     },
     async zana_start_batch({hostReport={},leaseSeconds},session){
       let batch;
@@ -221,7 +238,33 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     zana_recover_expired:(args,session)=>checked(session,'zana_recover_expired',()=>operations.recoverExpired()),
     zana_unit_retry:(args,session)=>checked(session,'zana_unit_retry',()=>operations.retry(args)),
     zana_mission_cancel:(args,session)=>checked(session,'zana_mission_cancel',()=>operations.cancel()),
-    zana_mission_close:(args,session)=>checked(session,'zana_mission_close',()=>operations.close()),
+    // Summary first (dispatch does not validate schemas), then the project:
+    // a mission created without one (0.6.0 or a GitHub failure) resolves it now.
+    async zana_mission_close(args,session){
+      const parsed=CLOSE_SCHEMA.safeParse(args);
+      if(!parsed.success)throw new Error('SUMMARY_REQUIRED: zana_mission_close needs summary {done, decisions, conventions, pending, keyFiles}: '+
+        parsed.error.issues.map(i=>i.path.join('.')+' '+i.message).join('; ').slice(0,200));
+      const {summary}=parsed.data;
+      const pre=await rr((db,mission)=>{const rm=allow(db,mission,session);return {id:mission.id,rm,projectId:missionProject(db,mission.id)};});
+      let found=null;
+      if(!pre.projectId){
+        try{found=await readPointer(github,pre.rm.repo,pre.rm.base);}
+        catch(error){throw new Error('MEMORY_UNAVAILABLE: the project of this mission cannot be resolved ('+clean(error,secrets())+'); retry zana_mission_close');}
+      }
+      let status,memory;
+      await transact((existing,txc)=>{
+        guard(txc.db,existing,session,'zana_mission_close');
+        if(existing.id!==pre.id)throw new Error('MISSION_NOT_ACTIVE: mission '+pre.id+' is not the active mission');
+        status=closeMission(existing);
+        let projectId=missionProject(txc.db,existing.id),pointer;
+        if(!projectId){({projectId,pointer}=resolveProject(txc.db,{...found,missionId:existing.id}));setMissionProject(txc.db,existing.id,projectId);}
+        const sha=txc.db.prepare('SELECT sha FROM review_tickets WHERE mission_id=? ORDER BY created_at DESC LIMIT 1').get(existing.id)?.sha??null;
+        memory={...saveSummary(txc.db,{projectId,missionId:existing.id,summary,sha,sessionId:session.sessionId,secrets:secrets()}),
+          ...(pointer?{pointer}:{})};
+        return existing;
+      });
+      return {...status,memory};
+    },
     async zana_mission_archive(args,session){
       await rr((db,mission)=>{
         allow(db,mission,session);

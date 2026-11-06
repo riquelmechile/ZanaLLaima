@@ -19,6 +19,8 @@ Eres la conversación **autora**. Escribes en GitHub solo con `zana_ds_github`, 
 ```
 
    Las unidades son `READ`; `code: true` marca las que cambian código. Encadena las de código con `dependsOn` para no escribir la misma rama en paralelo. La rama es siempre `zana/<missionId>`.
+3. **Memoria del proyecto.** Lee `memory.context` de la respuesta antes de planificar: convenciones, decisiones, pendientes, issues y los últimos resúmenes del repo. Respétalos o dile al usuario por qué no.
+4. Si `memory.pointer.status` no es `OK`, el **primer archivo** de la rama de la misión es `.zanallaima.json` (`create_or_update_file` en la raíz) con el `memory.pointer.content` exacto, en JSON. No cuenta en el presupuesto de líneas. Si viene `memory.error`, GitHub no respondió: sigue sin memoria y avísalo en una línea.
 
 ## 2. La unidad de código y su lease
 
@@ -68,4 +70,12 @@ Eres la conversación **autora**. Escribes en GitHub solo con `zana_ds_github`, 
 1. `zana_delivery_status(missionId)` muestra el ticket vigente (`currentTicket`), la review sobre el SHA exacto, CI, `zana/4r` y si el PR es mergeable.
 2. Si pidió cambios: `zana_correction_start(missionId)` agrega una unidad de corrección `PENDING`; `zana_start_batch`, corrige en la rama, checks hasta verde, `zana_complete_unit` y un **ticket nuevo**. Sobre el mismo SHA se rechaza con `CHANGES_REQUESTED_SAME_SHA`, aunque el ticket anterior haya vencido.
 3. Con la review aprobada: `zana_merge(missionId)` solo si el usuario lo pide. Nunca `merge_pull_request` por el downstream.
-4. Después del merge: `zana_mission_close` y `zana_mission_archive`, para poder iniciar otra misión.
+4. Después del merge: `zana_mission_close` con el **resumen obligatorio** y luego `zana_mission_archive`, para poder iniciar otra misión. Ejemplo:
+
+```json
+{"summary":{"done":"Agregada sum(a,b) con su test; PR #7 mergeado","keyFiles":["src/sum.mjs","tests/sum.test.mjs"],
+  "decisions":[{"topic":"errores","body":"sum lanza TypeError con argumentos no numéricos"}],
+  "conventions":[{"topic":"tests","body":"Un tests/<módulo>.test.mjs por módulo"}],"pending":[{"topic":"docs","body":"Falta sum en el README"}]}}
+```
+
+   `done` dice qué quedó hecho (20 a 1000 caracteres). En `decisions`, `conventions` y `pending` va lo que el próximo desarrollador necesita saber (hasta 20 por campo, `topic` corto y estable: el mismo `topic` reemplaza la entrada anterior). Listas vacías si no hay nada. Sin resumen responde `SUMMARY_REQUIRED`; con `MEMORY_UNAVAILABLE` reintenta. No pongas tokens ni datos del usuario: igual se redactan.

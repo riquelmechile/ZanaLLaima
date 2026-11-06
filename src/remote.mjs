@@ -154,12 +154,19 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
   }
 
   // The project of the active mission; one without it (created in 0.6.0 or
-  // with GitHub down) reads the pointer here, before the transaction.
+  // with GitHub down) reads the pointer here, before the transaction. Una
+  // misión que no está ACTIVE no gasta llamadas a GitHub.
+  const unavailable=error=>new Error('MEMORY_UNAVAILABLE: the project of this mission cannot be resolved ('+
+    clean(error,secrets())+'); nothing was saved or closed, the same call can be retried');
   async function projectFor(session){
-    const pre=await rr((db,mission)=>{const rm=allow(db,mission,session);return {id:mission.id,rm,projectId:missionProject(db,mission.id)};});
+    const pre=await rr((db,mission)=>{
+      const rm=allow(db,mission,session);
+      if((mission.status||'ACTIVE')!=='ACTIVE')throw new Error('MISSION_NOT_ACTIVE: mission '+mission.id+' is '+mission.status);
+      return {id:mission.id,rm,projectId:missionProject(db,mission.id)};
+    });
     if(!pre.projectId){
       try{pre.found=await readPointer(github,pre.rm.repo,pre.rm.base);}
-      catch(error){throw new Error('MEMORY_UNAVAILABLE: the project of this mission cannot be resolved ('+clean(error,secrets())+'); retry');}
+      catch(error){throw unavailable(error);}
     }
     return pre;
   }
@@ -167,9 +174,11 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     if(mission.id!==pre.id||(mission.status||'ACTIVE')!=='ACTIVE')throw new Error('MISSION_NOT_ACTIVE: mission '+pre.id+' is not the active mission');
     const id=missionProject(db,mission.id);
     if(id)return {projectId:id};
-    const resolved=resolveProject(db,{...pre.found,missionId:mission.id});
-    setMissionProject(db,mission.id,resolved.projectId);
-    return resolved;
+    try{
+      const resolved=resolveProject(db,{...pre.found,missionId:mission.id});
+      setMissionProject(db,mission.id,resolved.projectId);
+      return resolved;
+    }catch(error){throw unavailable(error);}
   }
 
   const githubPolicy=createGitHubPolicy({config,deps:{github,
@@ -218,10 +227,16 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         const m=createMission(cleanSpec);
         ctx.db.prepare('INSERT INTO remote_missions(mission_id,repo,base,branch,code_units,created_session,created_at) VALUES(?,?,?,?,?,?,?)')
           .run(m.id,target.repo,target.base,missionBranch(m.id),JSON.stringify(codeUnits),session.sessionId,m.createdAt);
-        if(found){
+        // Un fallo de la memoria deshace solo su savepoint: la misión se crea igual.
+        if(found)try{
+          ctx.db.exec('SAVEPOINT memory');
           const {projectId,pointer}=resolveProject(ctx.db,{...found,missionId:m.id});
           setMissionProject(ctx.db,m.id,projectId);
           memory={projectId,pointer,context:memoryContext(ctx.db,projectId,{maxBytes:4096})};
+          ctx.db.exec('RELEASE memory');
+        }catch(error){
+          ctx.db.exec('ROLLBACK TO memory');ctx.db.exec('RELEASE memory');
+          memory={error:'MEMORY_UNAVAILABLE: '+clean(error,secrets())};
         }
         recordActivity(ctx.db,{sessionId:session.sessionId,clientId:session.clientId,missionId:m.id,kind:'MISSION_WRITE',tool:'zana_mission_init'});
         return m;

@@ -11,6 +11,10 @@ export const POINTER_PATH='.zanallaima.json';
 export const MEMORY_KINDS=Object.freeze(['summary','decision','convention','issue','pending']);
 const PROJECT_ID=/^zp_[0-9a-f]{16}$/;
 const NOTE='Antes de trabajar en este repositorio, pide zana_memory_context con este projectId a ZanaLLaima.';
+// Un objeto JSON plano con projectId string y githubRepoId (si viene) entero positivo seguro.
+const validPointer=p=>p!==null&&typeof p==='object'&&!Array.isArray(p)&&p.zanallaima===1&&
+  typeof p.projectId==='string'&&PROJECT_ID.test(p.projectId)&&
+  (p.githubRepoId===undefined||Number.isSafeInteger(p.githubRepoId)&&p.githubRepoId>0);
 // githubRepoId ties the pointer to its repo: a copy in another repo is never adopted.
 export const pointerContent=(projectId,githubRepoId)=>({zanallaima:1,projectId,githubRepoId,note:NOTE});
 
@@ -22,8 +26,8 @@ export async function readPointer(github,repo,base){
   let pointer=null,invalid=null;
   try{
     pointer=await github.fileJson(repo,POINTER_PATH,base);
-    if(pointer!==null&&(pointer?.zanallaima!==1||!PROJECT_ID.test(String(pointer.projectId)))){
-      pointer=null;invalid=POINTER_PATH+' is not a ZanaLLaima pointer (zanallaima:1, projectId zp_ + 16 hex)';
+    if(pointer!==null&&!validPointer(pointer)){
+      pointer=null;invalid=POINTER_PATH+' is not a ZanaLLaima pointer (zanallaima:1, projectId zp_ + 16 hex, githubRepoId positive integer)';
     }
   }catch(error){
     if(!/INVALID_JSON_FILE/.test(String(error?.message)))throw error;

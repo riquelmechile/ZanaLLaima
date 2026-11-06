@@ -85,3 +85,68 @@ test('W2: done, keyFiles, topic y body se redactan antes de cortar',async()=>{
   }finally{await f.cleanup();}
 });
 
+test('W3: un puntero mal formado no tumba init ni close',async()=>{
+  const f=await remoteFixture();
+  try{
+    const s=await f.session(),id='zp_'+'a'.repeat(16);
+    const bad=[{zanallaima:1,projectId:[id],githubRepoId:4242},{zanallaima:1,projectId:123},{zanallaima:1,projectId:{}},
+      {zanallaima:1,projectId:null},[{zanallaima:1,projectId:id}],5,{zanallaima:1,projectId:id,githubRepoId:-1},
+      {zanallaima:1,projectId:id,githubRepoId:'4242'},{zanallaima:1,projectId:id,githubRepoId:1.5}];
+    for(const pointer of bad){
+      f.api.state.files[POINTER_PATH]=JSON.stringify(pointer);
+      const memory=await initOnly(f,s);
+      assert.equal(memory.pointer.status,'POINTER_MISSING',JSON.stringify(pointer));
+      assert.match(memory.pointer.invalid,/not a ZanaLLaima pointer/);
+    }
+    assert.equal((await q('SELECT project_id FROM projects WHERE project_id=?',id)).length,0);
+    // Close de una misión sin proyecto con projectId array: lo resuelve sin error de sqlite.
+    f.api.state.failNext={status:500,message:'down'};
+    await initRun(f,s);
+    f.api.state.files[POINTER_PATH]=JSON.stringify(bad[0]);
+    const closed=await f.call('zana_mission_close',{summary},s);
+    assert.deepEqual([closed.status,closed.memory.pointer.status],['CLOSED','POINTER_MISSING']);
+  }finally{await f.cleanup();}
+});
+
+test('W3: una excepción de memoria crea la misión con memory.error y el close responde MEMORY_UNAVAILABLE',async()=>{
+  const f=await remoteFixture();
+  try{
+    const s=await f.session();
+    await remoteWrite(db=>db.exec("CREATE TRIGGER boom BEFORE INSERT ON projects BEGIN SELECT RAISE(ABORT,'boom'); END"));
+    const init=await initRun(f,s);
+    assert.ok(init.id);
+    assert.match(init.memory.error,/^MEMORY_UNAVAILABLE: .*boom/);
+    assert.deepEqual(await q('SELECT project_id FROM remote_missions'),[{project_id:null}]);
+    const failed=await f.call('zana_mission_close',{summary},s);
+    assert.match(failed.error,/^MEMORY_UNAVAILABLE: .*boom.*can be retried/);
+    assert.equal((await f.call('zana_mission_status',{},s)).state,'ACTIVE');
+    await remoteWrite(db=>db.exec('DROP TRIGGER boom'));
+    assert.equal((await f.call('zana_mission_close',{summary},s)).status,'CLOSED');
+  }finally{await f.cleanup();}
+});
+
+test('W4: si saveSummary falla, el close no cierra la misión ni deja memoria',async()=>{
+  const f=await remoteFixture();
+  try{
+    const s=await f.session();
+    const init=await initRun(f,s);
+    assert.ok(init.memory.projectId);
+    await remoteWrite(db=>db.exec("CREATE TRIGGER nomem BEFORE INSERT ON project_memory BEGIN SELECT RAISE(ABORT,'disk full'); END"));
+    assert.match((await f.call('zana_mission_close',{summary},s)).error,/disk full/);
+    assert.equal((await f.call('zana_mission_status',{},s)).state,'ACTIVE');
+    assert.deepEqual(await q('SELECT COUNT(*) n FROM project_memory'),[{n:0}]);
+  }finally{await f.cleanup();}
+});
+
+test('S4: close de una misión que no está ACTIVE no llama a GitHub',async()=>{
+  const f=await remoteFixture();
+  try{
+    const s=await f.session();
+    f.api.state.failNext={status:500,message:'down'};
+    await f.call('zana_mission_init',{spec,github:target},s);
+    await f.call('zana_mission_cancel',{},s);
+    const before=f.api.state.requests.length;
+    assert.match((await f.call('zana_mission_close',{summary},s)).error,/^MISSION_NOT_ACTIVE: .* is CANCELLED/);
+    assert.equal(f.api.state.requests.length,before);
+  }finally{await f.cleanup();}
+});

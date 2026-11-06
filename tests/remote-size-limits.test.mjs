@@ -22,6 +22,10 @@ test('line budget: lockfiles and .zanallaima.json do not count; truncated is ove
   assert.deepEqual(lineBudget([file('go.sum',900),file('src/a.mjs',30,20)],{limit:50}),
     {limit:50,lines:50,lockfileLines:900,files:2,over:false});
   assert.equal(lineBudget(Object.assign([],{truncated:true}),{limit:50}).over,true);
+  // A list shorter than the PR's changed_files is incomplete: truncated and over.
+  assert.deepEqual(lineBudget([file('a',1)],{limit:50,changedFiles:2}),
+    {limit:50,lines:1,lockfileLines:0,files:1,over:true,truncated:true,changedFiles:2});
+  assert.equal(lineBudget([file('a',1)],{limit:50,changedFiles:1}).over,false);
 });
 
 test('size limits: budget, extension, reviewer refusal, diff cap and delivery status',async()=>{
@@ -152,6 +156,18 @@ test('size limits: GitHub refusing a diff over 300 files (406/422) is DIFF_TOO_L
     assert.match(await request(),/^GitHub HTTP 422: No common ancestor/);
     f.api.state.compareError={status:406,body:{message:'Not Acceptable'}};
     assert.match(await request(),/^GitHub HTTP 406: Not Acceptable/);
+    assert.equal(await tickets(),0);
+  }finally{await f.cleanup();}
+});
+
+test('size limits: a file list that does not match changed_files is incomplete and over',async()=>{
+  const f=await remoteFixture();
+  try{
+    const {author,missionId}=await f.authorReady();
+    f.api.state.pulls[0].changed_files=2;
+    assert.match((await f.call('zana_review_request',{missionId},author)).error,
+      /^OVER_LINE_BUDGET: GitHub listó 1 de los 2 archivos del PR; la medida está incompleta/);
+    assert.equal((await f.call('zana_delivery_status',{missionId},author)).lineBudget.truncated,true);
     assert.equal(await tickets(),0);
   }finally{await f.cleanup();}
 });

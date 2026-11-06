@@ -309,10 +309,22 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
           throw new Error('NOT_AUTHOR: only the session that created the mission, a session that held one of its units, or the operator may merge');
       }
       let result;
+      // Serialized with ticket requests and publications of this mission; the
+      // DB re-read before the merge call also covers other processes.
+      const view=t=>t?JSON.stringify([t.ticket_id,t.state,t.verdict??null,t.sha,t.github_review_id??null]):'none';
       try{
-        result=await mergeMission({github,config,ctx,openBlockingTickets:await review.openBlocking(id),currentTicket:await review.latest(id),
-          onAttempt:headSha=>audit({caller:session,tool:'zana_merge.attempt',missionId:id,outcome:'ATTEMPT',
-            args:{missionId:id},detail:{headSha,method:config.mergeMethod},category:'merge'})});
+        result=await review.withMissionLock(id,async()=>{
+          const evaluated=await review.latest(id);
+          return mergeMission({github,config,ctx,openBlockingTickets:await review.openBlocking(id),currentTicket:evaluated,
+            revalidate:async()=>{
+              const now=await review.latest(id);
+              // Any live (possibly blocking) ticket would be newer than the evaluated one.
+              return view(now)!==view(evaluated)
+                ?'Current review ticket changed during the merge checks ('+(now?now.ticket_id+' '+now.state:'none')+'); evaluate again':null;
+            },
+            onAttempt:headSha=>audit({caller:session,tool:'zana_merge.attempt',missionId:id,outcome:'ATTEMPT',
+              args:{missionId:id},detail:{headSha,method:config.mergeMethod},category:'merge'})});
+        });
       }catch(error){
         await audit({caller:session,tool:'zana_merge.result',missionId:id,outcome:'ERROR',args:{missionId:id},
           detail:{error:clean(error,secrets())},category:'merge'});

@@ -1,7 +1,7 @@
 // Etapa B, ronda de corrección 4: test negativo del P1 (merge con una foto vieja del ticket).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {remoteFixture,readDiff,sha} from './helpers/remote-fixture.mjs';
+import {remoteFixture,readDiff,sha,sleep} from './helpers/remote-fixture.mjs';
 import {remoteWrite} from '../src/store.mjs';
 
 const clean=lens=>({lens,findings:[],evidence:['read every page']});
@@ -56,5 +56,36 @@ test('P1: the operator remote-merge path re-reads the current ticket too',async(
     restore();
     assert.equal(f.api.state.merges.length,0);
     assert.equal(r.state,'NOT_READY');
+  }finally{await f.cleanup();}
+});
+
+test('P1: a ticket request waits for a merge of the same mission in progress (per-mission lock)',async()=>{
+  const f=await remoteFixture();
+  try{
+    const {author,missionId}=await approved(f);
+    const gh=f.runtime.github,realRuns=gh.checkRuns.bind(gh),realMerge=gh.merge.bind(gh);
+    let pending=null,settled=false,settledAtMerge=null;
+    gh.checkRuns=async(...a)=>{
+      if(!pending){
+        pending=f.call('zana_review_request',{missionId},author).then(x=>{settled=true;return x;});
+        await Promise.race([pending,sleep(300)]);
+      }
+      return realRuns(...a);
+    };
+    gh.merge=async(...a)=>{settledAtMerge=settled;return realMerge(...a);};
+    const r=await f.call('zana_merge',{missionId},author);
+    gh.checkRuns=realRuns;gh.merge=realMerge;
+    await pending;
+    assert.equal(settledAtMerge,false,'the request must not run between the merge checks and the merge call');
+    assert.equal(r.state,'MERGED');
+  }finally{await f.cleanup();}
+});
+
+test('W4: the UNIT_STILL_RUNNING hint names the expired-lease path',async()=>{
+  const f=await remoteFixture();
+  try{
+    const {author,missionId}=await f.authorReady({complete:false});
+    assert.match((await f.call('zana_review_request',{missionId},author)).error??'',
+      /UNIT_STILL_RUNNING: .*zana_complete_unit.*lease expired: zana_recover_expired → zana_unit_retry → zana_start_batch/);
   }finally{await f.cleanup();}
 });

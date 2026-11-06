@@ -183,7 +183,7 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
         // W3 order: the code unit is completed (green checks on the head) before the ticket.
         const codeUnits=remoteMission(db,missionId).codeUnits;
         const running=mission.units.filter(u=>codeUnits.includes(u.id)&&u.status==='RUNNING').map(u=>u.id);
-        if(running.length)fail('UNIT_STILL_RUNNING','complete '+running.join(', ')+' with zana_complete_unit (green checks on the head) before asking for a ticket');
+        if(running.length)fail('UNIT_STILL_RUNNING','complete '+running.join(', ')+' with zana_complete_unit (green checks on the head) before asking for a ticket; if its lease expired: zana_recover_expired → zana_unit_retry → zana_start_batch');
         expire(db);
         // Timestamps once the mission lock is held: tickets are ordered by creation.
         const at=Date.now();
@@ -382,6 +382,8 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
     // Latest ticket of the mission (for zana_correction_start). latestIn()
     // reads it inside the caller's transaction.
     latest:missionId=>remoteRead(db=>latestIn(db,missionId)),
+    // zana_merge runs under the same per-mission lock as request/finalize.
+    withMissionLock:(missionId,fn)=>exclusive(missionLock(missionId),fn),
     latestIn,
     // Operator: list tickets and abandon one by id (audited by the caller).
     async list(missionId=null){

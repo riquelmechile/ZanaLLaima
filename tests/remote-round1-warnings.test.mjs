@@ -14,6 +14,7 @@ import {transact} from '../src/store.mjs';
 const clean=lens=>({lens,findings:[],evidence:['read every page']});
 const ds=(f,operation,args,s,missionId)=>f.call('zana_ds_github',{operation,arguments:args,...(missionId?{missionId}:{})},s);
 const errText=r=>r.error??r.raw?.content?.[0]?.text??r.content?.[0]?.text??'';
+const isErr=r=>Boolean(r.error||r.isError||r.raw?.isError);
 async function finishReview(f,ticket,s,risk=clean('risk')){
   assert.equal((await f.call('zana_review_claim',{ticket},s)).state,'CLAIMED');
   await readDiff(f.call,ticket,s);
@@ -113,11 +114,12 @@ test('R3: check-run and zana/4r edge cases, draft PR, expired lease',async()=>{
   assert.equal(fourRStatus([{context:'zana/4r',state:'failure',creator:{login:'rev'}},{context:'zana/4r',state:'success',creator:{login:'rev'}}],'rev'),'failure','newest first wins');
   const f=await remoteFixture();
   try{
-    const {author,missionId,branch,packet}=await f.authorReady();
+    const {author,missionId,branch,packet}=await f.authorReady({complete:false});
     f.api.state.pulls[0].draft=true;
     const d=await f.call('zana_delivery_status',{missionId},author);
     assert.ok(d.blockers.some(b=>/not mergeable \(draft\)/.test(b)));
-    // A lease that expired cannot write.
+    // With the lease live the write goes through; once it expired it cannot write.
+    assert.equal(isErr(await ds(f,'create_or_update_file',{owner:'o',repo:'r',branch,path:'a',content:'x',message:'m'},author,missionId)),false);
     await transact(m=>{m.units.find(u=>u.id==='code').run.expiresAt=new Date(Date.now()-1000).toISOString();m.revision++;return m;});
     assert.match(errText(await ds(f,'create_or_update_file',{owner:'o',repo:'r',branch,path:'a',content:'x',message:'m'},author,missionId)),/NO_RUNNING_UNIT/);
     void packet;
@@ -127,7 +129,7 @@ test('R3: check-run and zana/4r edge cases, draft PR, expired lease',async()=>{
 test('W8: refused or failed operations record no activity; merge needs the creator or a unit holder',async()=>{
   const f=await remoteFixture();
   try{
-    const {author,missionId,branch}=await f.authorReady();
+    const {author,missionId,branch}=await f.authorReady({complete:false});
     const other=await f.session();
     // A refused downstream write and a failed heartbeat do not make `other` a writer.
     await ds(f,'create_or_update_file',{owner:'o',repo:'r',branch,path:'a',content:'x',message:'m'},other,missionId);

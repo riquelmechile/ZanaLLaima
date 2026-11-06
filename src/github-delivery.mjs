@@ -92,10 +92,15 @@ export async function deliveryStatus({github,config,ctx,openBlockingTickets=[],c
 // sha = that head (equivalent to --match-head-commit): if the head moved,
 // GitHub refuses and ZanaLLaima answers STALE_SHA without retrying. If the
 // answer is lost, the pull request is read again: merged means MERGED.
-export async function mergeMission({github,config,ctx,openBlockingTickets,currentTicket=null,onAttempt=async()=>{}}){
+// revalidate() runs after every GitHub read and right before the merge call:
+// it re-reads the mission's current ticket in the DB and returns a blocker
+// when it is no longer the one evaluated (another request may have run).
+export async function mergeMission({github,config,ctx,openBlockingTickets,currentTicket=null,revalidate=async()=>null,onAttempt=async()=>{}}){
   if(!config.mergeEnabled)return {merged:false,state:'MERGE_DISABLED',reason:'ZANA_MERGE_ENABLED=false'};
   const status=await deliveryStatus({github,config,ctx,openBlockingTickets,currentTicket});
   if(!status.ready)return {merged:false,state:'NOT_READY',blockers:status.blockers,headSha:status.headSha??null};
+  const changed=await revalidate();
+  if(changed)return {merged:false,state:'NOT_READY',blockers:[changed],headSha:status.headSha??null};
   await onAttempt(status.headSha);
   const recovered=async()=>{
     let pull=null;

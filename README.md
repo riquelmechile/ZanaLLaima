@@ -1,34 +1,63 @@
-# ZanaLLaima
+<p align="center">
+  <img src="assets/brand/zanallaima.svg" alt="ZanaLLaima, una zanahoria nerd con lentes" width="190">
+</p>
 
-Harness de misiones para **la app de ChatGPT**, servido como **MCP remoto** en zana-main. No llama a APIs de modelos, no tiene shell ni CLI para GPT y no depende de otros coordinadores. Versión 0.6.0, sin publicar.
+<h1 align="center">ZanaLLaima</h1>
 
-```
-App ChatGPT (GPT + subagentes)
-   │ MCP Streamable HTTP + OAuth (registro cerrado)
-   ▼
-ZanaLLaima (zana-main, loopback + túnel Cloudflare)
-   ├─ misiones / unidades / presupuestos / leases
-   ├─ skills por MCP (zana-odd, zana-4r, review-*)
-   ├─ tickets de revisión + 4 lentes por SHA
-   ├─ review publicada con la cuenta revisora
-   └─ downstream ──▶ GitHub MCP oficial ──▶ GitHub Actions corre los tests
-```
+<p align="center"><b>Harness de desarrollo para la app de ChatGPT.</b><br>
+GPT programa, prueba y revisa en GitHub sin terminal: un MCP remoto pone las reglas y GitHub tiene la última palabra.</p>
 
-**Cómo se trabaja:**
+<p align="center">
+  <a href="README.md"><img src="assets/brand/lang-es-active.svg" alt="Español (actual)" height="36"></a>
+  &nbsp;
+  <a href="README.en.md"><img src="assets/brand/lang-en.svg" alt="English" height="36"></a>
+</p>
 
-1. **Conversación autora.** GPT carga `zana-odd`, crea una misión con `github: {repo, base}`, reserva unidades y escribe en GitHub **solo** por `zana_ds_github`, **solo** en `zana/<missionId>` y solo mientras su sesión tiene una unidad `RUNNING`. Los tests corren en Actions (`zana_checks_start`/`zana_checks_status`). Con la unidad de código `RUNNING` (heartbeat con `leaseSeconds` = `maxLeaseSeconds`) escribe, abre el PR y corre los checks; con checks verdes sobre el head **completa la unidad** (`zana_complete_unit`) y recién entonces pide el ticket (`zana_review_request`, que con una unidad de código `RUNNING` responde `UNIT_STILL_RUNNING`). Así no hay que mantener el lease vivo mientras el usuario revisa en otra conversación. Si la review pide cambios, `zana_correction_start` agrega una unidad de corrección y se repite el ciclo con un ticket nuevo. Después del merge, `zana_mission_close` y `zana_mission_archive`.
-2. **Conversación revisora (nueva).** El usuario pega "Revisa el ticket ZR-... con ZanaLLaima". Esa sesión reclama el ticket (no puede ser la autora, no pudo haber escrito y debe ser posterior al ticket), queda en solo lectura, lee todas las páginas del diff (`zana_review_diff`), corre los 4 lentes con `zana-4r` y finaliza. ZanaLLaima relee el head del PR: si cambió, `STALE_SHA`; si no, publica la review **firmada por `sebastianriquelme95-max`** sobre ese SHA y el status `zana/4r`.
-3. **Entrega.** `zana_delivery_status` muestra aprobación exacta, CI, `zana/4r` y mergeable. `zana_merge` solo mergea con todo verde sobre el mismo head (`sha` = head verificado). La protección de `main` es la segunda llave. Un SHA sobre el que una review pidió cambios (veredicto o lente BLOCKER/CRITICAL, en cualquier estado del ticket) no admite otro ticket hasta cambiar el código; esperar el TTL no lo libera, solo `remote-ticket-abandon` del operador.
+---
 
-**La verdad es el SHA en GitHub y sus checks.** Los tokens (autor y revisora) viven solo en el servidor; nunca en el repo, en logs ni en resultados de tools. Qué prueba y qué no la separación de sesiones: [docs/solo-rdd.md](docs/solo-rdd.md).
+> **Hola, soy ZanaLLaima.** Soy una zanahoria nerd con lentes, y la verdad es que no confío en nada que no haya pasado por mis cuatro lentes: riesgo, legibilidad, confiabilidad y resiliencia. No llamo a ningún modelo ni tengo shell. Solo dejo que GPT trabaje donde corresponde, que los tests decidan y que la revisión firme sobre el SHA exacto. Si algo cambia a última hora, no mergeo. 🥕🤓
 
-| Tema | Documento |
+## ¿Qué es?
+
+- **Un MCP remoto** que se conecta a la app de ChatGPT como conector, con OAuth y registro cerrado. Corre en el servidor del operador (zana-main), detrás de un túnel de Cloudflare.
+- **Un harness completo para un solo GPT.** Organiza la misión en unidades con presupuesto. GPT escribe código **solo** en la rama de su misión (además puede editar y comentar su PR y disparar los checks), los tests corren en GitHub Actions y la revisión 4R la hace el mismo GPT en **otra conversación**.
+- **Un portón de entrega honesto.** La review la publica la cuenta revisora (`sebastianriquelme95-max`) sobre el SHA exacto, y `zana_merge` solo mergea con todo en verde sobre ese mismo SHA.
+
+## Arquitectura
+
+<p align="center">
+  <img src="assets/diagrams/arquitectura.es.svg" alt="Arquitectura: la app de ChatGPT se conecta por MCP y OAuth a ZanaLLaima en zana-main; ZanaLLaima usa el MCP oficial de GitHub para escribir solo en la rama de la misión, GitHub Actions corre los tests y la cuenta revisora firma la review." width="100%">
+</p>
+
+**La verdad es el SHA en GitHub y sus checks.** Los tokens del autor y de la revisora viven solo en el servidor: nunca en el repo, en logs ni en resultados de tools.
+
+## Cómo se trabaja
+
+<p align="center">
+  <img src="assets/diagrams/flujo.es.svg" alt="Flujo: la conversación autora crea la misión, hace commits en la rama y abre el PR, espera checks verdes, completa la unidad y pide un ticket; una conversación revisora nueva reclama el ticket, lee el diff completo, corre los cuatro lentes y finaliza; GitHub recibe la review firmada y zana_merge mergea con el SHA exacto." width="100%">
+</p>
+
+1. **Conversación autora.** GPT carga la skill `zana-odd` y crea la misión (`github: {repo, base}`).
+   - Con la unidad de código `RUNNING`, escribe **solo** por `zana_ds_github` y **solo** en `zana/<missionId>`.
+   - Abre el PR y corre los checks hasta que queden verdes.
+   - **Completa la unidad** y recién entonces pide el ticket con `zana_review_request`. Mientras haya una unidad de código `RUNNING`, responde `UNIT_STILL_RUNNING`.
+2. **Conversación revisora (nueva).** Tú pegas "Revisa el ticket ZR-… con ZanaLLaima".
+   - Esa sesión reclama el ticket. No puede ser la autora, no puede haber escrito y tiene que ser posterior al ticket.
+   - Queda en solo lectura y lee todas las páginas del diff.
+   - Corre los 4 lentes con `zana-4r` y finaliza.
+3. **Entrega.** ZanaLLaima vuelve a leer el head del PR.
+   - Si cambió, responde `STALE_SHA`.
+   - Si no, publica la review firmada por la cuenta revisora y el status `zana/4r`.
+   - `zana_merge` mergea con `sha` igual al head verificado.
+   - Si la review pidió cambios, `zana_correction_start` abre una unidad de corrección y el ciclo se repite con un ticket nuevo.
+
+## Qué garantiza y qué no
+
+| Garantiza | No prueba |
 | --- | --- |
-| Deploy en zana-main (lo hace el operador) | [docs/deploy-remote.md](docs/deploy-remote.md) |
-| Tools por modo y transporte | [docs/mcp-v2.md](docs/mcp-v2.md) |
-| GitHub MCP, política y lista real de tools | [docs/downstream-github.md](docs/downstream-github.md) |
-| Workflow de checks para repos administrados | [docs/checks-workflow.md](docs/checks-workflow.md) |
-| E2E real con la app de ChatGPT (ZL-018) | [docs/host-e2e-remote.md](docs/host-e2e-remote.md) |
+| Que la sesión revisora no es la autora, no escribió y revisó **ese** SHA con el diff completo y CI verde | El modelo usado ni que los subagentes hayan tenido contexto realmente fresco (eso lo informa el host) |
+| Que GPT no puede escribir en `main`, en `.github/workflows` ni mergear por el downstream | Que la revisora sea otra cuenta de ChatGPT. Con `ZANA_DISTINCT_REVIEWER_CLIENT=true` solo se prueba que es otro cliente OAuth; que sea otra cuenta depende de las altas que haga el operador |
+| Que un SHA con cambios pedidos no se vuelve a aprobar sin cambiar el código | Que un reinicio del servidor no abra una sesión nueva en la conversación autora (ver [docs/solo-rdd.md](docs/solo-rdd.md)) |
 
 ## Estado del proyecto
 
@@ -37,110 +66,68 @@ ZanaLLaima (zana-main, loopback + túnel Cloudflare)
 | Modo remoto: HTTP con sesiones, OAuth con registro cerrado, `/health` | Implementado y probado con el cliente oficial contra servidores falsos locales |
 | Downstream GitHub MCP y política allowlist (v2.1.0) | Implementado y probado con un MCP falso; sin contacto real con `api.githubcopilot.com` |
 | Checks, tickets, lentes, review con cuenta revisora, delivery y merge | Implementado y probado contra una API de GitHub falsa |
-| E2E real con la app de ChatGPT y separación de sesiones | **PASO DEL OPERADOR**, sin observar |
+| Deploy en zana-main y E2E real con la app de ChatGPT | **Paso del operador**, todavía sin observar |
 | SQLite WAL, leases, reintentos y recuperación | Implementado y probado |
 | Modo stdio local, `zana_apply_write`, RDD local con `git-evidence`, grants Ed25519 | Implementado; **congelado** por el cambio de rumbo |
 
-**Este PR no autoriza merge ni despliegue.** Los tests locales no prueban capacidades que solo puede mostrar el anfitrión real.
+## Documentación
 
-## Requisitos y estructura
+| Tema | Documento |
+| --- | --- |
+| Deploy en zana-main (lo hace el operador) | [docs/deploy-remote.md](docs/deploy-remote.md) |
+| Tools por modo y transporte | [docs/mcp-v2.md](docs/mcp-v2.md) |
+| GitHub MCP, política y lista real de tools | [docs/downstream-github.md](docs/downstream-github.md) |
+| Workflow de checks para repos administrados | [docs/checks-workflow.md](docs/checks-workflow.md) |
+| Revisión, tickets y qué prueba la separación de sesiones | [docs/solo-rdd.md](docs/solo-rdd.md) |
+| E2E real con la app de ChatGPT (ZL-018) | [docs/host-e2e-remote.md](docs/host-e2e-remote.md) |
+| Seguridad funcional, estados y recuperación | [docs/safety-lifecycle.md](docs/safety-lifecycle.md) |
+| Auditoría de CI, seguridad del repo y release | [docs/release-security.md](docs/release-security.md) |
+| Roadmap y registro de cambios | [ROADMAP.md](ROADMAP.md) · [CHANGELOG.md](CHANGELOG.md) |
 
-Node.js ≥22.16, Linux para efectos de escritura anclados a descriptores, Git, y dependencias fijadas en \`package-lock.json\`.
+<details>
+<summary><b>Para desarrolladores: requisitos, módulos y comandos</b></summary>
 
-\`\`\`sh
+### Requisitos
+
+Node.js ≥22.16, Linux para los efectos de escritura anclados a descriptores, Git, y las dependencias fijadas en `package-lock.json`.
+
+```sh
 npm ci --ignore-scripts --no-audit --no-fund
 npm run check
 npm test
 npm run release:preflight
-\`\`\`
+```
 
-Los módulos principales:
+El CI corre en Node 22.16.0, 22.23.4 y 24, con estrés multiproceso, cobertura (≥80 % de ramas por módulo) y auditoría de dependencias.
 
-- \`src/core.mjs\` y \`src/lifecycle.mjs\`: DAG de unidades, claims, heartbeat, vencimiento y recuperación.
-- \`src/store.mjs\`: SQLite WAL, estado, intentos, historial y recibos.
-- \`src/budget.mjs\`: límites de tiempo, intentos, concurrencia y resultados.
-- \`src/write-effect.mjs\` y \`src/write-operations.mjs\`: efectos de archivo y permisos de WRITE al momento de ejecutarlos.
-- \`src/review.mjs\`, \`src/git-evidence.mjs\` y \`src/delivery.mjs\`: RDD y gate manual de entrega.
-- `src/mcp.mjs`: servidor MCP oficial en modo stdio (local, sin HTTP).
-- `src/http.mjs`, `src/oauth.mjs`, `src/remote.mjs`: modo remoto (Streamable HTTP con sesiones, OAuth con registro cerrado, las 29 tools remotas).
-- `src/downstream.mjs`, `src/github-policy.mjs`, `src/github-api.mjs`: gateway del GitHub MCP, política allowlist y cliente REST con breaker.
-- `src/checks.mjs`, `src/remote-review.mjs`, `src/github-delivery.mjs`, `src/skills.mjs`: checks en Actions, tickets y diff paginado, entrega y merge, skills.
-- `src/remote-state.mjs`, `src/remote-config.mjs`, `src/deadline.mjs`, `src/redact.mjs`, `src/actor-assertion.mjs`: sesiones, auditoría y retención, configuración, plazos por tool, redacción de secretos y aserción de actor.
-- \`scripts/ci-attest.mjs\`: emisor de sobre CI firmado, solo con llave privada provista por Zana.
+### Módulos
 
-## Modo local stdio (congelado)
+- **Remoto:**
+  - `src/http.mjs`, `src/oauth.mjs`, `src/remote.mjs`: Streamable HTTP con sesiones, OAuth con registro cerrado y las 29 tools remotas.
+  - `src/downstream.mjs`, `src/github-policy.mjs`, `src/github-api.mjs`: gateway del GitHub MCP, allowlist y cliente REST con breaker.
+  - `src/checks.mjs`, `src/remote-review.mjs`, `src/github-delivery.mjs`, `src/skills.mjs`: checks en Actions, tickets y diff paginado, entrega y merge, y skills.
+  - `src/remote-state.mjs`, `src/remote-config.mjs`, `src/deadline.mjs`, `src/redact.mjs`, `src/actor-assertion.mjs`: sesiones, auditoría y retención, configuración, plazos por tool, redacción de secretos y aserción de actor.
+- **Núcleo:**
+  - `src/core.mjs`, `src/lifecycle.mjs`: DAG de unidades, claims, heartbeat, vencimiento y recuperación.
+  - `src/store.mjs`, `src/budget.mjs`: SQLite WAL, estado, intentos, historial y recibos, y presupuestos.
+- **Modo local (congelado):**
+  - `src/mcp.mjs`: servidor MCP oficial en modo stdio.
+  - `src/write-effect.mjs`, `src/write-operations.mjs`, `src/review.mjs`, `src/git-evidence.mjs`, `src/delivery.mjs`: efectos de escritura, RDD local y gate manual.
 
-\`\`\`sh
+### Modo local stdio (congelado)
+
+```sh
 export ZANA_STATE_FILE=/ruta/segura/zana/state.json
 export ZANA_WORKSPACE_ROOT=/ruta/absoluta/al/workspace
 export ZANA_REVIEW_REPO=/ruta/absoluta/al/repo
 export ZANA_REVIEW_TARGET_REF=refs/heads/main
 node src/mcp.mjs
-\`\`\`
+```
 
-En modo stdio el servidor dispone de **24 herramientas MCP**. El catálogo se comprueba automáticamente contra esta cifra en \`tests/sdk-mcp.test.mjs\`. Las herramientas stdio no administran claves privadas, no importan firmas del operador, no restauran respaldos ni hacen merge. El modo remoto expone 29 (ver [docs/mcp-v2.md](docs/mcp-v2.md)), entre ellas `zana_merge` con sus condiciones.
+En modo stdio el servidor dispone de **24 herramientas MCP**, y `tests/sdk-mcp.test.mjs` comprueba el catálogo contra esa cifra. El modo remoto expone 29 (ver [docs/mcp-v2.md](docs/mcp-v2.md)). La administración del almacenamiento (restore, adopt, cleanup) sigue siendo solo CLI del operador: [docs/sqlite-storage.md](docs/sqlite-storage.md). La guía de los pasos humanos está en [docs/operator-checklist.md](docs/operator-checklist.md).
 
-Las acciones administrativas siguen en el CLI local:
+</details>
 
-\`\`\`sh
-node src/cli.mjs profile
-node src/cli.mjs storage-status
-node src/cli.mjs status
-node src/cli.mjs storage-history 25
-node src/cli.mjs operator-import /ruta/al/grant-firmado.json
-\`\`\`
+---
 
-## Ciclo de misión y permiso WRITE
-
-Una misión define \`objective\`, \`authorization\`, \`budget\` y unidades \`READ\`/\`WRITE\`. Los permisos declarados en el JSON **no** sustituyen el grant Ed25519 separado del operador.
-
-El controlador reserva unidades con \`zana_next_batch\` y \`zana_start_batch\`, devuelve un \`token\` y \`leaseGeneration\`, y admite \`zana_complete_unit\` solo con evidencia factual. Las lecturas independientes pueden rellenar cupos mientras siguen ejecutándose otras; los escritores son exclusivos. La planificación de subagentes no demuestra que realmente se lanzaran.
-
-Para modificar un archivo, una unidad WRITE debe pasar **obligatoriamente** por \`zana_apply_write\`: \`unitId\`, \`token\`, \`leaseGeneration\`, \`path\` relativo y \`content\` UTF-8 o \`deleteFile:true\`; opcionalmente \`expectedPreSha256\`. Revalida el grant, lease y ruta, persiste intención antes del efecto, aplica un cambio atómico anclado a descriptores Linux y registra SHA anterior/posterior.
-
-Si el proceso muere después del efecto y antes del recibo, la unidad queda \`OUTCOME_UNKNOWN\`. **Nunca repetir el efecto automáticamente.** La reconciliación necesita evidencia y firma del operador.
-
-**Límite crítico:** el MCP no puede deshabilitar herramientas externas del host. La producción requiere separar permisos del SO: usuario del host sin escritura sobre el workspace, proceso MCP ejecutado por usuario independiente autorizado o contenedor con el volumen del host en solo lectura. Ver [seguridad y ciclo de vida](docs/safety-lifecycle.md).
-
-## Revisión RDD sobre Git
-
-Con todas las unidades de la misión terminadas y el árbol de trabajo limpio, el RDD congela commit, árbol, rama y base. Ejecuta cuatro lentes: riesgo, fiabilidad, resiliencia y claridad.
-
-\`\`\`sh
-node src/cli.mjs review-open "$(git rev-parse HEAD)"
-node src/cli.mjs review-next
-node src/cli.mjs review-start
-node src/cli.mjs review-status
-node src/cli.mjs review-check
-\`\`\`
-
-Cada resultado lleva token y evidencia real. Si cambia el SHA o la base, se invalida el ciclo. Sin contextos nativos realmente observados, se usa revisión secuencial etiquetada \`SELF_CHECK_COMPLETE_UNVERIFIED\`. Ningún resultado concede aprobación de PR. Ver [contrato RDD](docs/solo-rdd.md).
-
-## Atenciones de CI y entrega
-
-El CI verifica el HEAD exacto, ejecuta pruebas en Node 22.16.0 / 22.23.4 / 24, estrés multiproceso, cobertura y auditoría de dependencias. La firma de `CI_RESULT` se ejecuta exclusivamente en `.github/workflows/ci-attestation.yml`, disparado por `workflow_run` desde el código confiable de `main`, cuando Zana configura el environment protegido y su secreto CI. Mientras no exista la configuración, no hay atestación auténtica y \`trustedCIAttribution\` permanece sin conectar.
-
-El gate \`delivery-check\` requiere dos firmantes Ed25519 distintos: CI y operador. Incluso con ambos devuelve como máximo \`READY_FOR_MANUAL_RELEASE\`, nunca \`mergeAuthorized:true\`.
-
-\`\`\`sh
-npm run check
-npm run release:preflight
-npm test
-npm run test:stress
-npm run test:coverage
-npm run benchmark:phase4
-npm audit --omit=dev --audit-level=high
-\`\`\`
-
-Ver [auditoría de seguridad](docs/release-security.md) y [registro de cambios](CHANGELOG.md).
-
-## Conexión y E2E con anfitrión
-
-- [Guía de Codex CLI y MCP stdio](docs/host-codex.md)
-- [Procedimiento y evidencia E2E que ejecuta Zana](docs/host-e2e.md)
-- [Plantilla de observaciones](examples/host-e2e-report.json)
-- [Estado y criterios pendientes](ROADMAP.md)
-
-**ChatGPT no ejecuta el proceso stdio local.** Para la app de ChatGPT se usa el modo remoto de arriba; el modo stdio queda para pruebas y uso local, sin cambios.
-
-La guía breve para los pasos humanos de la versión 0.6.0 es [docs/operator-checklist.md](docs/operator-checklist.md). La configuración de firma CI se realiza desde la máquina de Zana con `bash scripts/setup-ci-signing.sh`.
+<p align="center"><sub>ZanaLLaima no hace llamadas a proveedores de modelos: el host conectado pone el modelo y ZanaLLaima pone las reglas. 🥕</sub></p>

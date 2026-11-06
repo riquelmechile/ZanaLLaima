@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 150 40" width="150" height="40" role="img" aria-labelledby="b-lang-en-active-t b-lang-en-active-d">
+<title id="b-lang-en-active-t">English</title>
+<desc id="b-lang-en-active-d">Current language: English</desc>
+<rect x="1" y="1" width="148" height="38" rx="19" fill="#F28C28" stroke="#D9661A" stroke-width="2"/>
+<rect x="10" y="9" width="34" height="22" rx="11" fill="#FFFFFF" opacity=".25"/>
+<text x="27" y="25" text-anchor="middle" font-family="system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="13" font-weight="800" fill="#FFFFFF">EN</text>
+<text x="56" y="26" font-family="system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="16" font-weight="700" fill="#FFFFFF">English</text>
+</svg>

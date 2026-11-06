@@ -1,7 +1,7 @@
 // Signed actor assertions: ZanaLLaima tells a downstream MCP server who is
 // really calling (host, session, mission, tool and an argument digest), bound
 // to one call and a short lifetime, signed with Ed25519 (JWS alg EdDSA).
-// Copied and adapted from riquelmechile/panter-ai@1a99048
+// Copied and adapted from panter-ai@1a99048
 // src/core/actor-assertion.ts (types stripped, issuer and roles renamed).
 // What it proves: which authenticated host/session ZanaLLaima admitted. It
 // does not prove the model the host runs.

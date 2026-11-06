@@ -7,7 +7,7 @@
 // connection is bound to a host label the operator chooses; its tokens
 // identify that host.
 //
-// Copied and adapted from riquelmechile/panter-ai@1a99048
+// Copied and adapted from panter-ai@1a99048
 // src/core/embedded-oauth.ts (PKCE S256, one-time codes, rotating refresh
 // tokens with replay-family revocation, RFC 9207 iss, rate limits, CSRF
 // cookie, fixed operator-safe error messages; src/core/oauth.ts is not needed

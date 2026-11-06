@@ -19,14 +19,14 @@ GPT programa, prueba y revisa en GitHub sin terminal: un MCP remoto pone las reg
 
 ## ¿Qué es?
 
-- **Un MCP remoto** que se conecta a la app de ChatGPT como conector, con OAuth y registro cerrado. Corre en el servidor del operador (zana-main), detrás de un túnel de Cloudflare.
+- **Un MCP remoto** que se conecta a la app de ChatGPT como conector, con OAuth y registro cerrado. Corre en tu propio servidor, detrás de un túnel HTTPS (por ejemplo Cloudflare Tunnel).
 - **Un harness completo para un solo GPT.** Organiza la misión en unidades con presupuesto. GPT escribe código **solo** en la rama de su misión (además puede editar y comentar su PR y disparar los checks), los tests corren en GitHub Actions y la revisión 4R la hace el mismo GPT en **otra conversación**.
-- **Un portón de entrega honesto.** La review la publica la cuenta revisora (`sebastianriquelme95-max`) sobre el SHA exacto, y `zana_merge` solo mergea con todo en verde sobre ese mismo SHA.
+- **Un portón de entrega honesto.** La review la publica una cuenta revisora de GitHub (distinta de la autora) sobre el SHA exacto, y `zana_merge` solo mergea con todo en verde sobre ese mismo SHA.
 
 ## Arquitectura
 
 <p align="center">
-  <img src="assets/diagrams/arquitectura.es.svg" alt="Arquitectura: la app de ChatGPT se conecta por MCP y OAuth a ZanaLLaima en zana-main; ZanaLLaima usa el MCP oficial de GitHub para escribir solo en la rama de la misión, GitHub Actions corre los tests y la cuenta revisora firma la review." width="100%">
+  <img src="assets/diagrams/arquitectura.es.svg" alt="Arquitectura: la app de ChatGPT se conecta por MCP y OAuth a ZanaLLaima en tu servidor; ZanaLLaima usa el MCP oficial de GitHub para escribir solo en la rama de la misión, GitHub Actions corre los tests y la cuenta revisora firma la review." width="100%">
 </p>
 
 **La verdad es el SHA en GitHub y sus checks.** Los tokens del autor y de la revisora viven solo en el servidor: nunca en el repo, en logs ni en resultados de tools.
@@ -59,6 +59,18 @@ GPT programa, prueba y revisa en GitHub sin terminal: un MCP remoto pone las reg
 | Que GPT no puede escribir en `main`, en `.github/workflows` ni mergear por el downstream | Que la revisora sea otra cuenta de ChatGPT. Con `ZANA_DISTINCT_REVIEWER_CLIENT=true` solo se prueba que es otro cliente OAuth; que sea otra cuenta depende de las altas que haga el operador |
 | Que un SHA con cambios pedidos no se vuelve a aprobar sin cambiar el código | Que un reinicio del servidor no abra una sesión nueva en la conversación autora (ver [docs/solo-rdd.md](docs/solo-rdd.md)) |
 
+## Cómo levantarlo
+
+La guía completa, desde cero, está en **[docs/deploy-remote.md](docs/deploy-remote.md)**. En resumen:
+
+1. **Dos cuentas de GitHub.** La autora, con un token fine-grained limitado a tus repos, y una revisora, que solo publica reviews. Los permisos exactos están en la guía.
+2. **Cada repo administrado** lleva el workflow de checks ([docs/checks-workflow.md](docs/checks-workflow.md)) y la rama default protegida.
+3. **Un servidor Linux** con Node.js ≥22.16: clonas, `npm ci`, completas `zanallaima.env` (fuera del repo, `chmod 600`) y lo dejas como servicio `systemd --user`.
+4. **Un túnel HTTPS** (Cloudflare Tunnel u otro proxy) que publica `https://<tu-dominio>/mcp`.
+5. **En ChatGPT**, con el modo desarrollador activo, creas el conector con esa URL y OAuth, mientras la ventana de alta está abierta (`node src/cli.mjs remote-enroll 15`).
+
+Tus valores reales (dominio, cuentas, tokens y clave del operador) viven **solo** en el archivo de entorno del servidor. El repo no trae ninguno por defecto: sin `ZANA_PUBLIC_HOST` ni `ZANA_REVIEWER_LOGIN`, el servidor no arranca.
+
 ## Estado del proyecto
 
 | Componente | Estado |
@@ -66,7 +78,7 @@ GPT programa, prueba y revisa en GitHub sin terminal: un MCP remoto pone las reg
 | Modo remoto: HTTP con sesiones, OAuth con registro cerrado, `/health` | Implementado y probado con el cliente oficial contra servidores falsos locales |
 | Downstream GitHub MCP y política allowlist (v2.1.0) | Implementado y probado con un MCP falso; sin contacto real con `api.githubcopilot.com` |
 | Checks, tickets, lentes, review con cuenta revisora, delivery y merge | Implementado y probado contra una API de GitHub falsa |
-| Deploy en zana-main y E2E real con la app de ChatGPT | **Paso del operador**, todavía sin observar |
+| Deploy real y E2E con la app de ChatGPT | **Paso del operador**, todavía sin observar |
 | SQLite WAL, leases, reintentos y recuperación | Implementado y probado |
 | Modo stdio local, `zana_apply_write`, RDD local con `git-evidence`, grants Ed25519 | Implementado; **congelado** por el cambio de rumbo |
 
@@ -74,7 +86,7 @@ GPT programa, prueba y revisa en GitHub sin terminal: un MCP remoto pone las reg
 
 | Tema | Documento |
 | --- | --- |
-| Deploy en zana-main (lo hace el operador) | [docs/deploy-remote.md](docs/deploy-remote.md) |
+| **Instalación paso a paso** (cuentas, tokens, servidor, túnel, conector) | [docs/deploy-remote.md](docs/deploy-remote.md) |
 | Tools por modo y transporte | [docs/mcp-v2.md](docs/mcp-v2.md) |
 | GitHub MCP, política y lista real de tools | [docs/downstream-github.md](docs/downstream-github.md) |
 | Workflow de checks para repos administrados | [docs/checks-workflow.md](docs/checks-workflow.md) |

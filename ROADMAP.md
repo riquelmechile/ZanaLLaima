@@ -1,6 +1,6 @@
 ## Candidato 0.6.0 (sin publicar): MCP remoto para la app de ChatGPT
 
-**Cambio de rumbo.** ZanaLLaima deja de ser solo un MCP stdio que vigila un worktree y pasa a ser un **MCP remoto** en zana-main, conectado como conector de la app de ChatGPT. La verdad es el SHA en GitHub y los checks de Actions; GPT escribe por el downstream de GitHub solo en `zana/<missionId>`; la revisión la hace el mismo GPT en una conversación nueva y la publica la cuenta revisora.
+**Cambio de rumbo.** ZanaLLaima deja de ser solo un MCP stdio que vigila un worktree y pasa a ser un **MCP remoto** en el servidor del operador, conectado como conector de la app de ChatGPT. La verdad es el SHA en GitHub y los checks de Actions; GPT escribe por el downstream de GitHub solo en `zana/<missionId>`; la revisión la hace el mismo GPT en una conversación nueva y la publica la cuenta revisora.
 
 - [x] **ZL-020 (pasa a esta fase).** Streamable HTTP con sesiones, OAuth embebido con registro cerrado por ventana de alta, `/health`, `deploy/` y `docs/deploy-remote.md`.
 - [x] Downstream del GitHub MCP oficial (gateway copiado de Panter-ai) y política allowlist propia sobre la lista real de tools v2.1.0 (`docs/downstream-github.md`).
@@ -43,7 +43,7 @@ El código queda y sigue probado en stdio, pero **no se toca más**:
 
 - **CRITICAL R7:** verificar los bytes de los objetos Git hasta HEAD, actualizar instrucciones operativas de firma a `workflow_run` main-only, impedir restauración insegura tras SIGKILL y hacer best-effort la limpieza de temporales de efecto. Tests negativos por hallazgo antes de cada fix.
 - **WARNING R7:** `hash-object --no-filters --stdin-paths` en lote, ignores comprometidos, bits POSIX del dueño, normalización Git explícita, rutas NFKC/casefold, errores de restore tipados, sidecars, generación atómica de llave Ed25519, vista de reconciliación solo CLI y `prevent_self_review`.
-- **Revisión pendiente:** CI, preflight, cobertura, stress, benchmark y audit sobre SHA exacto; Codex completado y nueva 4R de `sebastianriquelme95-max`. No aprobar, mergear, etiquetar ni desplegar.
+- **Revisión pendiente:** CI, preflight, cobertura, stress, benchmark y audit sobre SHA exacto; Codex completado y nueva 4R de la cuenta revisora. No aprobar, mergear, etiquetar ni desplegar.
 
 ## Candidato versión histórica (ver CHANGELOG): límites Git y restauración monotónica (sin release)
 
@@ -52,7 +52,7 @@ El código queda y sigue probado en stdio, pero **no se toca más**:
 - **Tercera y última revisión Codex autorizada:** bloquear los reemplazos locales de objetos de Git con `--no-replace-objects` y `GIT_NO_REPLACE_OBJECTS=1` en todo el recorrido; comprobar con `lstat` que la propia entrada gitlink sea un directorio real. Pruebas negativas con objetos reemplazados root/submódulo y symlink de gitlink (`280821c`, `7ee211f`). Si persisten hallazgos al tercer veredicto, bloquear y escalar, sin simular conformidad.
 - **P2 de Codex tras primera revisión:** comprobar mediante `lstat` cada componente intermedio de rutas rastreadas. Un directorio sustituido por symlink, incluso a un destino interno y con rutas excluidas del recuento de no rastreados, deja `clean:false`. Prueba con uno y dos niveles, fix `d14711e`.
 - **Evidencia:** tests negativos Git locales y cuatro negativos SQLite rojos en GitHub CI antes de aplicar el fix; después exigir cobertura sin bajar umbrales, suite, estrés, benchmark y auditoría en el SHA final.
-- **Gates:** nueva revisión Codex con recibo completado y nueva 4R independiente de `sebastianriquelme95-max`. Sin aprobación, firma CI real, merge ni despliegue.
+- **Gates:** nueva revisión Codex con recibo completado y nueva 4R independiente de la cuenta revisora. Sin aprobación, firma CI real, merge ni despliegue.
 
 ## Seguimiento versión histórica (ver CHANGELOG) (candidato, sin release)
 
@@ -65,7 +65,7 @@ El código queda y sigue probado en stdio, pero **no se toca más**:
 - **CRITICAL C2:** Git fail-closed con `fsmonitor`/hooks/filters deshabilitados o rechazados, también en submódulos.
 - **WARNING:** frontera única de rutas, evidencia de reconciliación, FD y rollback seguros, temporales WRITE con intención durable y restore con consentimiento explícito ante posible pérdida de datos.
 - **W6:** conservar `BEGIN IMMEDIATE` durante efecto para impedir revocación concurrente; timeout cooperativo de 5 s antes del `rename`. El kernel puede bloquear `fsync` más tiempo; sigue pendiente una solución con I/O aislado si se exige un deadline duro.
-- **Gate:** CI y Codex sobre SHA final, y nueva revisión independiente de `sebastianriquelme95-max`; `releaseAuthorized:false` hasta atestación firmada, aislamiento del host y aprobación humana. Sin merge ni deploy.
+- **Gate:** CI y Codex sobre SHA final, y nueva revisión independiente de la cuenta revisora; `releaseAuthorized:false` hasta atestación firmada, aislamiento del host y aprobación humana. Sin merge ni deploy.
 
 ## Principios que no deben perderse
 
@@ -154,7 +154,7 @@ El código queda y sigue probado en stdio, pero **no se toca más**:
 
 **Ejecución de Fase 5:** `package-lock.json` reproducible, `npm ci`, acciones de GitHub fijadas por SHA, permisos `contents: read`, Git checkout del HEAD exacto, matriz Node 22.16.0/22.23.4/24, cobertura del código fuente con umbral, pruebas de estrés/seguridad y auditoría de dependencias. `pull_request` ejecuta el CI una sola vez por actualización y `push` solo en `main`. El preflight estático nunca autoriza merge/deploy. Ver `docs/release-security.md`.
 
-**ZL-026 resuelto y verificado:** el token de la integración de archivos no administra reglas, pero una sesión GitHub CLI autorizada de `riquelmechile` con `permissions.admin=true` aplicó protección a `main`. Se comprobó por GET administrativo que están activos tres checks obligatorios, revisión independiente, invalidación de aprobaciones obsoletas, aprobación posterior al último push, resolución de conversaciones, reglas para administradores y prohibición de force-push/eliminación. Una segunda lectura de GitHub confirmó `main.protected=true`. Se utilizó **branch protection**, no un ruleset; el listado de rulesets puede seguir vacío sin invalidar la protección.
+**ZL-026 resuelto y verificado:** el token de la integración de archivos no administra reglas, pero una sesión GitHub CLI autorizada del dueño del repo con `permissions.admin=true` aplicó protección a `main`. Se comprobó por GET administrativo que están activos tres checks obligatorios, revisión independiente, invalidación de aprobaciones obsoletas, aprobación posterior al último push, resolución de conversaciones, reglas para administradores y prohibición de force-push/eliminación. Una segunda lectura de GitHub confirmó `main.protected=true`. Se utilizó **branch protection**, no un ruleset; el listado de rulesets puede seguir vacío sin invalidar la protección.
 
 **Bloqueo de release ZL-029:** frontera WRITE del MCP implementada; faltan aislamiento del host por SO (ZL-004 operacional), prueba real de Codex (ZL-018), rendimiento nativo, atestación CI firmada por emisor real y revisión de GitHub independiente. Esto impide producción.
 
@@ -212,7 +212,7 @@ Auditoría inicial: commit `a36120b4d0a03f61445dbfcff32e382390e95e14`. Se public
 
 **Versión candidata:** `versión histórica (ver CHANGELOG)` sin tag, release ni deploy. Los umbrales de cobertura global 92/85/90 y por módulo (mínimo 80 % de ramas) siguen activos. Los hilos del revisor no se resuelven artificialmente: cada respuesta apunta al SHA corrector y queda sujeta a otra pasada.
 
-**Gates que no se cierran con estos cuatro fixes:** CI firmado con secretos humanos y llaves públicas verificables; aislamiento real del anfitrión por permisos del SO; ZL-018 (E2E Codex ejecutado y registrado por Zana); revisión independiente y aprobación de GitHub distinta del autor. `releaseAuthorized:false` sigue siendo obligatorio.
+**Gates que no se cierran con estos cuatro fixes:** CI firmado con secretos humanos y llaves públicas verificables; aislamiento real del anfitrión por permisos del SO; ZL-018 (E2E Codex ejecutado y registrado por el operador); revisión independiente y aprobación de GitHub distinta del autor. `releaseAuthorized:false` sigue siendo obligatorio.
 
 ### Seguimiento de revisión Codex sobre versión histórica (ver CHANGELOG) (2026-11-04)
 

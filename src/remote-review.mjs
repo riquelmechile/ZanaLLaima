@@ -335,7 +335,7 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
           // A lost response must not publish twice: adopt our own review of this commit with this ticket's marker.
           const marker='<!-- zana-ticket:'+t.ticket_id+' -->';
           const existing=(await reviewerGithub.pullReviews(t.repo,t.pr_number)).find(r=>
-            String(r?.user?.login??'').toLowerCase()===config.reviewerLogin.toLowerCase()&&
+            String(r?.user?.login??'').toLowerCase()===String(config.reviewerLogin??'').toLowerCase()&&config.reviewerLogin&&
             r?.commit_id===t.sha&&String(r?.body??'').includes(marker));
           if(existing){reviewId=Number(existing.id);reviewUrl=existing.html_url??null;adopted=true;}
           else{

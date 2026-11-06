@@ -3,7 +3,7 @@ name: review-discipline
 description: Disciplina común de la revisión 4R — un candidato, un plan de evidencia, lentes requeridos, una corrección acotada como máximo y aprobación solo con el set completo sin BLOCKER ni CRITICAL.
 ---
 
-<!-- Procedencia: adaptado de gentle-shell review-ledger-contract y agentes review-* (MIT, Mario Zechner, commit 3210886c79360a9f47ac3ca0cd2c1edf43b2432e), vía riquelmechile/panter-ai@1a99048 vendor/gentle-shell. -->
+<!-- Procedencia: adaptado de gentle-shell review-ledger-contract y agentes review-* (MIT, Mario Zechner, commit 3210886c79360a9f47ac3ca0cd2c1edf43b2432e), vía panter-ai@1a99048 vendor/gentle-shell. -->
 
 # review-discipline
 

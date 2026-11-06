@@ -173,8 +173,12 @@ test('delivery helpers: missing PR, unreadable evidence, dismissed review, merge
 });
 
 test('remote config fails closed',()=>{
-  const c=remoteConfig({ZANA_GITHUB_REPOS:'o/r, O/x'});
-  assert.equal(c.reviewerLogin,'sebastianriquelme95-max');
+  // The reviewer login has no built-in default: it lives only in the server env.
+  assert.equal(remoteConfig({ZANA_GITHUB_REPOS:'o/r'}).reviewerLogin,null);
+  assert.equal(remoteConfig({ZANA_REVIEWER_LOGIN:'  '}).reviewerLogin,null);
+  const L={ZANA_REVIEWER_LOGIN:'reviewer-bot'};
+  const c=remoteConfig({...L,ZANA_GITHUB_REPOS:'o/r, O/x'});
+  assert.equal(c.reviewerLogin,'reviewer-bot');
   assert.equal(c.mergeEnabled,true);
   assert.equal(c.ticketTtlMinutes,120);
   assert.equal(repoAllowed(c,'o/X'),true);
@@ -184,8 +188,8 @@ test('remote config fails closed',()=>{
     [{ZANA_MERGE_METHOD:'octopus'},/squash/],[{ZANA_DOWNSTREAM_GITHUB_URL:'http://evil.example/'},/DOWNSTREAM/],
     [{ZANA_DOWNSTREAM_GITHUB_TOOLSETS:'repos;issues'},/TOOLSETS/],[{ZANA_REQUIRED_CHECKS:'x'.repeat(121)},/too long/],
     [{ZANA_GITHUB_API_URL:'ftp://x'},/API_URL/],[{ZANA_TICKET_TTL_MINUTES:'2'},/TTL/]])
-    assert.throws(()=>remoteConfig(env),re,JSON.stringify(env));
-  assert.equal(remoteConfig({ZANA_TICKET_TTL_MINUTES:'30'}).ticketTtlMinutes,30);
+    assert.throws(()=>remoteConfig({...L,...env}),re,JSON.stringify(env));
+  assert.equal(remoteConfig({...L,ZANA_TICKET_TTL_MINUTES:'30'}).ticketTtlMinutes,30);
 });
 
 test('remote state: session identity binding and bounded audit reads',async()=>{

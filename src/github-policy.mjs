@@ -4,7 +4,7 @@
 // zana/<missionId> of the mission repository; everything else (merge, author
 // reviews, default branch, .github/workflows, deleting branches or repos,
 // settings, unclassified tools) is denied with a readable reason.
-// Branch/path rules adapted from riquelmechile/panter-ai@1a99048
+// Branch/path rules adapted from panter-ai@1a99048
 // src/core/github-workforce.ts (own branch only, never default or CI files).
 import {readFileSync} from 'node:fs';
 import {validRefName} from './github-api.mjs';

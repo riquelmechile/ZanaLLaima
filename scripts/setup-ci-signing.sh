@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Configuración local: ejecutar solo por Zana. No mostrar llaves privadas.
+# Configuración local: la ejecuta solo el operador. No mostrar llaves privadas.
 set -euo pipefail
 IFS=$'\n\t'
 REPO='riquelmechile/ZanaLLaima'
 ENVIRONMENT='ci-attestation'
-REVIEWER='sebastianriquelme95-max'
+# Login de la cuenta revisora: se entrega por entorno, nunca queda en el repo.
+REVIEWER="${ZANA_CI_REVIEWER:-}"
 ROOT="$(cd -- "$(dirname -- "$0")/.." && pwd -P)"
 KEY_DIR="$HOME/.config/zana-llaima"
 PRIVATE_KEY="$KEY_DIR/ci-attest-private.pem"
@@ -34,6 +35,8 @@ if [[ "${1:-}" == '--dry-run' && "$#" -eq 1 ]]; then
   exit 0
 fi
 if [[ "$#" -ne 0 ]]; then fail 'Único argumento permitido: --dry-run'; fi
+[[ "$REVIEWER" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,38})$ ]] ||
+  fail 'Define ZANA_CI_REVIEWER con el login de GitHub de la cuenta revisora.'
 for program in openssl gh mktemp sha256sum chmod stat cut cmp grep mv mkdir; do
   command -v "$program" >/dev/null 2>&1 || fail "Falta comando requerido: $program"
 done

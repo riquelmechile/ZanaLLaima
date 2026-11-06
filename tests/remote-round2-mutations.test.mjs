@@ -6,7 +6,7 @@ import {mkdtemp,writeFile,mkdir,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {request as httpRequest} from 'node:http';
 import {createServer} from 'node:net';
-import {remoteFixture,readDiff,sha} from './helpers/remote-fixture.mjs';
+import {remoteFixture,readDiff,sha,REVIEWER_LOGIN} from './helpers/remote-fixture.mjs';
 import {remoteWrite,remoteRead,transact} from '../src/store.mjs';
 import {createRemoteRuntime} from '../src/remote.mjs';
 import {deliveryStatus} from '../src/github-delivery.mjs';
@@ -195,6 +195,9 @@ test('M6: deliveryStatus with no time left is never green',async()=>{
   assert.deepEqual(r.partial,['ci','zana/4r','review']);
   const currentTicket={ticket_id:'t',state:'FINALIZED',verdict:'APPROVE',sha:'h',github_review_id:1};
   assert.equal((await deliveryStatus({github:gh,config:{reviewerLogin:'rev',requiredChecks:[]},ctx,currentTicket})).ready,true);
+  // Without ZANA_REVIEWER_LOGIN delivery is never ready, and GitHub is not even read.
+  const unset=await deliveryStatus({github:{},config:{reviewerLogin:null,requiredChecks:[]},ctx,currentTicket});
+  assert.deepEqual({state:unset.state,ready:unset.ready},{state:'NOT_CONFIGURED',ready:false});
 });
 
 const raw=(base,path,headers={})=>new Promise((ok,fail)=>{
@@ -297,8 +300,8 @@ test('M12: only our own review of this commit with this ticket marker is adopted
     const t=await f.call('zana_review_request',{missionId},author);
     const ticketId=(await q('SELECT ticket_id FROM review_tickets'))[0].ticket_id;
     f.api.state.reviews[7]=[
-      {id:1,user:{login:'sebastianriquelme95-max'},commit_id:sha('a'),body:'<!-- zana-ticket:other -->',state:'APPROVED'},
-      {id:2,user:{login:'sebastianriquelme95-max'},commit_id:sha('0'),body:'<!-- zana-ticket:'+ticketId+' -->',state:'APPROVED'},
+      {id:1,user:{login:REVIEWER_LOGIN},commit_id:sha('a'),body:'<!-- zana-ticket:other -->',state:'APPROVED'},
+      {id:2,user:{login:REVIEWER_LOGIN},commit_id:sha('0'),body:'<!-- zana-ticket:'+ticketId+' -->',state:'APPROVED'},
       {id:3,user:{login:'someone-else'},commit_id:sha('a'),body:'<!-- zana-ticket:'+ticketId+' -->',state:'APPROVED'},
     ];
     const r=await review(f,t.ticket,await f.session());

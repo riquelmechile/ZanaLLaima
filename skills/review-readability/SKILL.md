@@ -3,7 +3,7 @@ name: review-readability
 description: Lente R2 Readability — intención oculta, duplicación, código muerto, nombres engañosos y complejidad, sin estilo por gusto.
 ---
 
-<!-- Procedencia: adaptado de gentle-shell assets/agents/review-readability.md (MIT, Mario Zechner, commit 3210886c79360a9f47ac3ca0cd2c1edf43b2432e), vía riquelmechile/panter-ai@1a99048. -->
+<!-- Procedencia: adaptado de gentle-shell assets/agents/review-readability.md (MIT, Mario Zechner, commit 3210886c79360a9f47ac3ca0cd2c1edf43b2432e), vía panter-ai@1a99048. -->
 
 # R2 Readability (solo lectura)
 

@@ -1,5 +1,5 @@
 // Read-only delivery verification and the guarded merge.
-// independentReview() is copied from riquelmechile/panter-ai@1a99048
+// independentReview() is copied from panter-ai@1a99048
 // src/core/github-delivery.ts (GitHubDeliveryGate.independentReview): latest
 // state-changing review by the configured identity, evaluated as GitHub does
 // (COMMENTED reviews never change approval state), with APPROVED_EXACT_SHA,
@@ -61,6 +61,8 @@ export function ticketAuthority(ticket,head,review){
 }
 
 export async function deliveryStatus({github,config,ctx,openBlockingTickets=[],currentTicket=null,deadline=createDeadline(config.toolDeadlineMs)}){
+  if(!config.reviewerLogin)return {missionId:ctx.missionId,state:'NOT_CONFIGURED',ready:false,
+    blockers:['ZANA_REVIEWER_LOGIN is not set on the server'],readOnly:true};
   const pull=await missionPull(github,ctx);
   if(!pull)return {missionId:ctx.missionId,state:'NO_PULL_REQUEST',ready:false,
     blockers:['No single open pull request from '+ctx.branch+' to '+ctx.base],readOnly:true};

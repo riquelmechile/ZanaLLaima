@@ -199,6 +199,13 @@ test('W16: /health is degraded with 503 when a token is missing or the DB cannot
     assert.equal(h.status,'degraded');
     assert.equal(h.reviewerToken,'missing');
     assert.ok(h.problems.some(p=>/ZANA_REVIEWER_TOKEN/.test(p)));
+    assert.ok(!h.problems.some(p=>/ZANA_REVIEWER_LOGIN/.test(p)));
+    const noLogin=await remoteFixture({envExtra:{ZANA_REVIEWER_LOGIN:''}});
+    try{
+      const hl=await noLogin.runtime.health();
+      assert.equal(hl.status,'degraded');
+      assert.ok(hl.problems.includes('ZANA_REVIEWER_LOGIN missing'));
+    }finally{await noLogin.cleanup();}
     const prev=process.env.ZANA_STATE_FILE;
     process.env.ZANA_STATE_FILE='/nonexistent-dir-zana/state.json';
     try{assert.ok((await f.runtime.health()).problems.some(p=>/database/.test(p)));}

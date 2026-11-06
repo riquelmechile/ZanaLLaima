@@ -3,7 +3,7 @@ name: review-risk
 description: Lente R1 Risk — secretos, autorización, flujos input→sink, inyección, exposición de datos y escalamiento de privilegios.
 ---
 
-<!-- Procedencia: adaptado de gentle-shell assets/agents/review-risk.md (MIT, Mario Zechner, commit 3210886c79360a9f47ac3ca0cd2c1edf43b2432e), vía riquelmechile/panter-ai@1a99048. -->
+<!-- Procedencia: adaptado de gentle-shell assets/agents/review-risk.md (MIT, Mario Zechner, commit 3210886c79360a9f47ac3ca0cd2c1edf43b2432e), vía panter-ai@1a99048. -->
 
 # R1 Risk (solo lectura)
 

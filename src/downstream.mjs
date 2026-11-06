@@ -6,7 +6,7 @@
 // and a circuit breaker, audits it with a keyed hash of the arguments and
 // attaches a signed actor assertion.
 //
-// Copied and adapted from riquelmechile/panter-ai@1a99048
+// Copied and adapted from panter-ai@1a99048
 // src/core/downstream.ts and docs/DOWNSTREAM_MCP.md. Kept: contract, classes,
 // writes policy, refresh before stale calls (fail closed), timeout, circuit
 // breaker, bounded responses without redirects, redaction, audit and actor

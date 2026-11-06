@@ -3,7 +3,7 @@ name: review-reliability
 description: Lente R3 Reliability — regresiones, contratos, tests débiles o redundantes, fallos sin cubrir, no determinismo y escapes de CI.
 ---
 
-<!-- Procedencia: adaptado de gentle-shell assets/agents/review-reliability.md (MIT, Mario Zechner, commit 3210886c79360a9f47ac3ca0cd2c1edf43b2432e), vía riquelmechile/panter-ai@1a99048. -->
+<!-- Procedencia: adaptado de gentle-shell assets/agents/review-reliability.md (MIT, Mario Zechner, commit 3210886c79360a9f47ac3ca0cd2c1edf43b2432e), vía panter-ai@1a99048. -->
 
 # R3 Reliability (solo lectura)
 

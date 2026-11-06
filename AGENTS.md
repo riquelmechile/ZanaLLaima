@@ -47,12 +47,12 @@ Con todas las unidades terminadas y el árbol Git limpio, congelar HEAD, árbol,
 
 Una revisión de cuatro perspectivas en una sola sesión es **SELF_CHECK_COMPLETE_UNVERIFIED** y no es revisión independiente. Ni un reporte de contextos nativos ni un PASS propio autoriza merge, release o deploy.
 
-El gate \`delivery-check\` requiere dos llaves Ed25519 **distintas** para la atestación CI y la aprobación del operador, SHA y base exactos, revisión efectiva y CI real. El firmante de \`ci-attestation.yml\` mediante \`workflow_run\` permanece desactivado mientras Zana no configure su environment, secreto y llave pública. El preflight devuelve \`releaseAuthorized:false\`; no cambiar ese valor para conseguir un PASS.
+El gate \`delivery-check\` requiere dos llaves Ed25519 **distintas** para la atestación CI y la aprobación del operador, SHA y base exactos, revisión efectiva y CI real. El firmante de \`ci-attestation.yml\` mediante \`workflow_run\` permanece desactivado mientras el operador no configure su environment, secreto y llave pública. El preflight devuelve \`releaseAuthorized:false\`; no cambiar ese valor para conseguir un PASS.
 
 La rama \`main\` tiene checks y revisión externa obligatorios. No hacer merge, tag, release ni deploy por iniciativa del agente. Documentar el SHA exacto, checks, bloqueos y pasos humanos pendientes.
 
 ## Integración y límites
 
-Seguir \`docs/host-codex.md\` para configurar MCP stdio y \`docs/host-e2e.md\` para el E2E real. **PASO HUMANO:** Zana ejecuta y commitea el reporte; no afirmar capacidades observadas desde tests locales. El transporte HTTP OAuth para la app de ChatGPT es el modo remoto de la versión 0.6.0 (`docs/deploy-remote.md`, `docs/host-e2e-remote.md`).
+Seguir \`docs/host-codex.md\` para configurar MCP stdio y \`docs/host-e2e.md\` para el E2E real. **PASO HUMANO:** el operador ejecuta y commitea el reporte; no afirmar capacidades observadas desde tests locales. El transporte HTTP OAuth para la app de ChatGPT es el modo remoto de la versión 0.6.0 (`docs/deploy-remote.md`, `docs/host-e2e-remote.md`).
 
 Mantener secretos, datos y artefactos dentro del repositorio/workspace autorizado. No introducir dependencias de otros sistemas de coordinación; el código reutilizado de otros proyectos lleva su procedencia en un comentario. Ante incertidumbre de permisos o estado, bloquear y reportar en vez de simular cumplimiento.

@@ -7,7 +7,7 @@
 // that opened it and its creation time is stored in SQLite (review separation
 // uses both). Requests carrying a 2026 per-request envelope are answered with
 // a protocol error, so negotiating clients fall back to the sessionful
-// handshake. Wiring adapted from riquelmechile/panter-ai@1a99048 src/server.ts
+// handshake. Wiring adapted from panter-ai@1a99048 src/server.ts
 // (/health, Host/Origin allowlists, 401 challenge, no-store).
 import {createServer} from 'node:http';
 import {randomUUID} from 'node:crypto';
@@ -59,12 +59,13 @@ export function httpSettings(env=process.env){
   // 0 picks a free port (tests); production uses a fixed port behind the tunnel.
   const port=Number(env.ZANA_HTTP_PORT??8787);
   if(!Number.isInteger(port)||port<0||port>65535)throw new Error('ZANA_HTTP_PORT must be 0-65535');
-  const publicHost=env.ZANA_PUBLIC_HOST||'zanallaima.quintoestado.com';
-  const publicUrl=env.ZANA_PUBLIC_MCP_URL||'https://'+publicHost+'/mcp';
+  // No default: the public hostname is the operator's own, set only on the server.
+  const publicHost=String(env.ZANA_PUBLIC_HOST??'').trim();
+  const publicUrl=env.ZANA_PUBLIC_MCP_URL||(publicHost?'https://'+publicHost+'/mcp':null);
   const origins=String(env.ZANA_ALLOWED_ORIGINS??'https://chatgpt.com').split(',').map(x=>x.trim()).filter(Boolean);
   const redirectUris=String(env.ZANA_OAUTH_REDIRECT_URIS??'https://chatgpt.com/connector_platform_oauth_redirect')
     .split(',').map(x=>x.trim()).filter(Boolean);
-  const allowedHosts=[...new Set([hostname(publicHost),'127.0.0.1','localhost'])];
+  const allowedHosts=[...new Set([...(publicHost?[hostname(publicHost)]:[]),'127.0.0.1','localhost'])];
   const oauthDb=resolve(env.ZANA_OAUTH_DB||join(dirname(statePath()),'oauth.sqlite'));
   return {port,bind:'127.0.0.1',publicUrl,origins,redirectUris,allowedHosts,oauthDb,
     password:env.ZANA_OAUTH_CONSENT_PASSWORD??''};
@@ -166,6 +167,8 @@ export function createHttpServer({runtime,oauth,settings,log=console}){
 
 export async function startRemote(env=process.env){
   const settings=httpSettings(env);
+  if(!settings.publicUrl)throw new Error('ZANA_PUBLIC_HOST (or ZANA_PUBLIC_MCP_URL) must be set to the public hostname of the tunnel');
+  if(!String(env.ZANA_REVIEWER_LOGIN??'').trim())throw new Error('ZANA_REVIEWER_LOGIN must be set to the GitHub login of the reviewer account');
   for(const name of ['ZANA_STATE_FILE','ZANA_OAUTH_DB'])
     if(!(env[name]??process.env[name])||!isAbsolute(env[name]??process.env[name]))
       throw new Error(name+' must be set to an absolute path (systemd does not expand ~)');

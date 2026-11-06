@@ -1,7 +1,7 @@
 import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {fakeGitHubApi,fakeGitHubMcp,AUTHOR_TOKEN,REVIEWER_TOKEN,sha} from './fake-github.mjs';
+import {fakeGitHubApi,fakeGitHubMcp,AUTHOR_TOKEN,REVIEWER_TOKEN,REVIEWER_LOGIN,AUTHOR_LOGIN,sha} from './fake-github.mjs';
 import {createRemoteRuntime} from '../../src/remote.mjs';
 import {registerSession} from '../../src/remote-state.mjs';
 import {ensureSchema} from '../../src/store.mjs';
@@ -14,7 +14,7 @@ export async function readDiff(call,ticket,s){
   if(first.error)throw new Error(first.error);
   for(let p=1;p<first.manifest.totalPages;p++){const r=await call('zana_review_diff',{ticket,page:p},s);if(r.error)throw new Error(r.error);}
 }
-export {AUTHOR_TOKEN,REVIEWER_TOKEN,sha};
+export {AUTHOR_TOKEN,REVIEWER_TOKEN,REVIEWER_LOGIN,AUTHOR_LOGIN,sha};
 
 export async function remoteFixture({envExtra={},mcp={}}={}){
   const dir=await mkdtemp(join(tmpdir(),'zana-remote-'));
@@ -24,7 +24,7 @@ export async function remoteFixture({envExtra={},mcp={}}={}){
   const api=await fakeGitHubApi();
   const ds=await fakeGitHubMcp(mcp);
   const env={ZANA_GITHUB_REPOS:'o/r',ZANA_GITHUB_API_URL:api.url,ZANA_DOWNSTREAM_GITHUB_URL:ds.url,
-    ZANA_DOWNSTREAM_GITHUB_TOKEN:AUTHOR_TOKEN,ZANA_REVIEWER_TOKEN:REVIEWER_TOKEN,...envExtra};
+    ZANA_DOWNSTREAM_GITHUB_TOKEN:AUTHOR_TOKEN,ZANA_REVIEWER_TOKEN:REVIEWER_TOKEN,ZANA_REVIEWER_LOGIN:REVIEWER_LOGIN,...envExtra};
   const runtime=createRemoteRuntime({env});
   let n=0;
   const session=async(host='zana-chatgpt',clientId='zc_test')=>{

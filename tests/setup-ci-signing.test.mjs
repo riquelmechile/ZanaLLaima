@@ -40,7 +40,11 @@ test('unexpected CLI flags and absent operator public key fail closed before any
     const bad=spawnSync('bash',[script,'--dangerous'],{encoding:'utf8',env:s.env});
     assert.notEqual(bad.status,0);
     assert.match(bad.stderr,/Único argumento permitido/);
-    const missingPublic=spawnSync('bash',[script],{encoding:'utf8',env:s.env});
+    // The reviewer login comes only from the environment, never from the repo.
+    const noReviewer=spawnSync('bash',[script],{encoding:'utf8',env:{...s.env,ZANA_CI_REVIEWER:''}});
+    assert.notEqual(noReviewer.status,0);
+    assert.match(noReviewer.stderr,/Define ZANA_CI_REVIEWER/);
+    const missingPublic=spawnSync('bash',[script],{encoding:'utf8',env:{...s.env,ZANA_CI_REVIEWER:'reviewer-bot'}});
     assert.notEqual(missingPublic.status,0);
     assert.match(missingPublic.stderr,/Falta llave pública válida/);
     assert.equal(await missing(s.calls),true);

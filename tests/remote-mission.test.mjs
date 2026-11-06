@@ -69,6 +69,14 @@ test('startRemote listens on 127.0.0.1 (port 0 = free port), refuses relative pa
   try{
     assert.throws(()=>httpSettings({ZANA_HTTP_PORT:'-1'}),/ZANA_HTTP_PORT/);
     await assert.rejects(startRemote({...base,ZANA_OAUTH_DB:'rel/o.sqlite'}),/absolute/);
+    // No built-in public hostname: the operator must set it on the server.
+    const {ZANA_PUBLIC_HOST:_h,...noHost}=base;
+    assert.equal(httpSettings(noHost).publicUrl,null);
+    assert.deepEqual(httpSettings(noHost).allowedHosts,['127.0.0.1','localhost']);
+    await assert.rejects(startRemote(noHost),/ZANA_PUBLIC_HOST/);
+    // Same for the reviewer login: no default, the server refuses to start.
+    const {ZANA_REVIEWER_LOGIN:_l,...noLogin}=base;
+    await assert.rejects(startRemote(noLogin),/ZANA_REVIEWER_LOGIN/);
     started=await startRemote(base);
     assert.equal(started.settings.bind,'127.0.0.1');
     assert.ok(started.settings.port>0);

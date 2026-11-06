@@ -111,6 +111,7 @@ En el modo remoto la revisión la hace el **mismo GPT en una conversación nueva
 **No prueba:**
 - qué modelo usó el anfitrión ni su esfuerzo;
 - que los subagentes existieran ni que tuvieran de verdad contexto fresco: la declaración `execution` es palabra del anfitrión;
+- que un hallazgo `PREEXISTING` de verdad estuviera igual en la base: el servidor solo exige que `proof` cite un `archivo:línea`; su contenido es palabra de la revisora;
 - con el flag apagado, que dos sesiones distintas correspondan a dos conversaciones distintas. Ambas usan la misma cuenta OAuth, así que ZanaLLaima solo distingue el `Mcp-Session-Id` (un id efímero: es una limitación aceptada del diseño). Si ChatGPT reutiliza una sesión entre conversaciones, o abre una sesión nueva dentro de la conversación autora (por ejemplo tras un reinicio del servidor, porque las sesiones viven en memoria), la regla no lo detecta: una sesión nueva de la conversación autora, sin escrituras y posterior al ticket, podría reclamarlo.
 
 La separación de sesiones depende de que ChatGPT abra una sesión MCP nueva por conversación. **Eso se verifica en el E2E real** (`docs/host-e2e-remote.md`, paso de `zana_session_status` en ambas conversaciones) y el resultado observado se escribe en `examples/host-e2e-remote.json`. Hasta entonces queda **sin observar**.

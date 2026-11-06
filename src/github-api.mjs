@@ -116,6 +116,19 @@ export class GitHubApi{
     }
     throw new GitHubApiError(502,'Pull request has more than 300 commits; authorship cannot be verified');
   }
+  // Hasta 30 páginas (3000 archivos, el máximo de GitHub); con la última llena
+  // la lista queda truncated y el presupuesto de líneas la trata como over.
+  async pullFiles(repo,number){
+    const out=[];
+    for(let page=1;page<=30;page++){
+      const data=await this.request('GET',repoPath(repo)+'/pulls/'+positive(number)+'/files?per_page=100&page='+page);
+      if(!Array.isArray(data))throw new GitHubApiError(502,'Unreadable file list');
+      out.push(...data.map(f=>({filename:String(f?.filename??''),additions:Number(f?.additions)||0,
+        deletions:Number(f?.deletions)||0,status:String(f?.status??'')})));
+      if(data.length<100)return out;
+    }
+    return Object.assign(out,{truncated:true});
+  }
   async pullReviews(repo,number){
     const out=[];
     for(let page=1;page<=10;page++){

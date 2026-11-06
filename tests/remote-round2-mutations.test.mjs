@@ -277,9 +277,11 @@ test('M10: diff guards — DIFF_CHANGED, TICKET_NOT_CLAIMED, missing manifest is
     const t=await f.call('zana_review_request',{missionId},author);
     const s=await f.session();
     assert.match((await f.call('zana_review_diff',{ticket:t.ticket,page:0},s)).error,/TICKET_NOT_CLAIMED/);
-    // Claim while the diff cannot be read: no manifest recorded.
+    // Claim while the diff cannot be read (request warmed the cache: a restart empties it): no manifest recorded.
+    const fresh=createRemoteRuntime({env:f.env});
     f.api.state.failNext={status:500,message:'boom'};
-    const c=await f.call('zana_review_claim',{ticket:t.ticket},s);
+    const c=(await fresh.dispatch('zana_review_claim',{ticket:t.ticket},s)).structuredContent;
+    await fresh.close();
     assert.match(c.diffManifestError,/HTTP 500/);
     for(const l of ['risk','readability','reliability','resilience'])await f.call('zana_review_lens_submit',{ticket:t.ticket,...clean(l)},s);
     assert.match((await f.call('zana_review_finalize',{ticket:t.ticket,execution:'PARALLEL_SUBAGENTS'},s)).error,/DIFF_NOT_FULLY_READ: no diff manifest/);

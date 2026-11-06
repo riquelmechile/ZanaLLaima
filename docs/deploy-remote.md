@@ -120,6 +120,8 @@ Edítalo con un editor en el servidor, nunca en el repo ni en un chat. **Rutas a
 | `ZANA_MERGE_ENABLED`, `ZANA_MERGE_METHOD` | no | `true` y `squash` por defecto. |
 | `ZANA_DISTINCT_REVIEWER_CLIENT` | no | `true` exige otro cliente OAuth para revisar (ver abajo). `false` por defecto. |
 | `ZANA_TICKET_TTL_MINUTES`, `ZANA_TICKET_CLAIM_TTL_MINUTES`, `ZANA_TOOL_DEADLINE_MS` | no | Plazos; los valores por defecto están en el ejemplo. |
+| `ZANA_REVIEW_MAX_DIFF_BYTES` | no | Tope del diff `base...sha` antes del ticket (`DIFF_TOO_LARGE`, sin excepción). 1800000 por defecto, rango 100000-1900000. |
+| `ZANA_PR_LINE_BUDGET` | no | Presupuesto de líneas (adiciones + eliminaciones, sin lockfiles ni `.zanallaima.json`; `OVER_LINE_BUDGET`). 400 por defecto, rango 50-5000; solo `zana_budget_extend` lo sube por misión. |
 
 **Independencia verificable (opcional).** Con `ZANA_DISTINCT_REVIEWER_CLIENT=true`, la conversación revisora tiene que usar **otro cliente OAuth registrado** que el que pidió el ticket y que todos los que actuaron en la misión. ZanaLLaima ve clientes OAuth, no cuentas: que sea otra cuenta de ChatGPT depende de que solo des de alta cuentas distintas. Con `false`, la revisión la hace el mismo GPT en una conversación nueva.
 

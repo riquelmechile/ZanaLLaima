@@ -18,7 +18,7 @@ async function bodyOf(req){const parts=[];for await(const c of req)parts.push(c)
 
 export async function fakeGitHubApi(){
   const state={repo:'o/r',defaultBranch:'main',branches:{main:sha('0')},pulls:[],checkRuns:{},statuses:{},
-    reviews:{},commits:{},workflowRuns:{},runJobs:{},dispatches:[],merges:[],logs:{},comments:{},requests:[],
+    reviews:{},commits:{},pullFiles:{},workflowRuns:{},runJobs:{},dispatches:[],merges:[],logs:{},comments:{},requests:[],
     failNext:null};
   const server=createServer(async(req,res)=>{
     const url=new URL(req.url,'http://x');
@@ -49,6 +49,11 @@ export async function fakeGitHubApi(){
       const current={...pull,head:{...pull.head,sha:state.branches[pull.head.ref]??pull.head.sha}};
       if(String(req.headers.accept).includes('diff'))return send(200,state.diffText??('diff --git a/x b/x\n+'+AUTHOR_TOKEN+'\n'),'text/plain');
       return send(200,current);
+    }
+    if((m=/^\/pulls\/(\d+)\/files$/.exec(p))){
+      const files=state.pullFiles[m[1]]??[{filename:'x',additions:10,deletions:0,status:'modified'}];
+      const per=Number(url.searchParams.get('per_page')),page=Number(url.searchParams.get('page'));
+      return send(200,files.slice((page-1)*per,page*per));
     }
     if((m=/^\/pulls\/(\d+)\/commits$/.exec(p)))return send(200,state.commits[m[1]]??[]);
     if((m=/^\/pulls\/(\d+)\/reviews$/.exec(p))){

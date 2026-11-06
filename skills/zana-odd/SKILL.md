@@ -58,8 +58,9 @@ Eres la conversación **autora**. Escribes en GitHub solo con `zana_ds_github`, 
 
 1. `create_pull_request` con `head: zana/<missionId>` exacto y `base` = base de la misión. Solo puedes editar título y cuerpo.
 2. Con checks verdes sobre el head del PR, **completa la unidad**: `zana_complete_unit` con evidencia real (SHA, checkId, checks). Exige check verde sobre el head actual de la rama. Así no hay que mantener el lease vivo mientras el usuario revisa en otra conversación.
-3. `zana_review_request(missionId)`: con una unidad de código todavía RUNNING responde `UNIT_STILL_RUNNING` (completa primero). Cada ticket consume una ronda (`maxReviewRounds`); un ticket nuevo reemplaza al anterior y pasa a ser la autoridad del merge.
-4. Entrega al usuario **el texto exacto** del campo `message` para que lo pegue en una **conversación nueva**. No reclames tu propio ticket.
+3. Antes de `zana_review_request`: si responde `DIFF_TOO_LARGE`, no hay excepción: divide el trabajo en misiones secuenciales (hay una sola misión activa). Si responde `OVER_LINE_BUDGET`, **pregunta al usuario con el número exacto** ("el PR tiene N líneas, ¿autorizas pasar de 400?"). Solo con su sí llamas `zana_budget_extend(missionId, lines, reason)`. Nunca la llames sin preguntar. Si dice no, divide. Los lockfiles no cuentan.
+4. `zana_review_request(missionId)`: con una unidad de código todavía RUNNING responde `UNIT_STILL_RUNNING` (completa primero). Cada ticket consume una ronda (`maxReviewRounds`); un ticket nuevo reemplaza al anterior y pasa a ser la autoridad del merge.
+5. Entrega al usuario **el texto exacto** del campo `message` para que lo pegue en una **conversación nueva**. No reclames tu propio ticket.
 
 ## 6. Review, corrección y entrega
 

@@ -182,13 +182,17 @@ test('remote config fails closed',()=>{
   assert.equal(c.reviewerLogin,'reviewer-bot');
   assert.equal(c.mergeEnabled,true);
   assert.equal(c.ticketTtlMinutes,120);
+  assert.equal(c.reviewMaxDiffBytes,1_800_000);
+  assert.equal(c.prLineBudget,400);
   assert.equal(repoAllowed(c,'o/X'),true);
   assert.equal(repoAllowed(c,'p/q'),false);
   for(const [env,re] of [[{ZANA_GITHUB_REPOS:'bad'},/invalid repository/],[{ZANA_REVIEWER_LOGIN:'-x'},/login/],
     [{ZANA_CHECKS_WORKFLOW:'../x'},/workflow/],[{ZANA_MERGE_ENABLED:'yes'},/true or false/],
     [{ZANA_MERGE_METHOD:'octopus'},/squash/],[{ZANA_DOWNSTREAM_GITHUB_URL:'http://evil.example/'},/DOWNSTREAM/],
     [{ZANA_DOWNSTREAM_GITHUB_TOOLSETS:'repos;issues'},/TOOLSETS/],[{ZANA_REQUIRED_CHECKS:'x'.repeat(121)},/too long/],
-    [{ZANA_GITHUB_API_URL:'ftp://x'},/API_URL/],[{ZANA_TICKET_TTL_MINUTES:'2'},/TTL/]])
+    [{ZANA_GITHUB_API_URL:'ftp://x'},/API_URL/],[{ZANA_TICKET_TTL_MINUTES:'2'},/TTL/],
+    [{ZANA_REVIEW_MAX_DIFF_BYTES:'99999'},/MAX_DIFF_BYTES/],[{ZANA_REVIEW_MAX_DIFF_BYTES:'1900001'},/MAX_DIFF_BYTES/],
+    [{ZANA_PR_LINE_BUDGET:'49'},/LINE_BUDGET/],[{ZANA_PR_LINE_BUDGET:'5001'},/LINE_BUDGET/]])
     assert.throws(()=>remoteConfig({...L,...env}),re,JSON.stringify(env));
   assert.equal(remoteConfig({...L,ZANA_TICKET_TTL_MINUTES:'30'}).ticketTtlMinutes,30);
 });

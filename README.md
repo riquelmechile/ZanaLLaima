@@ -115,7 +115,7 @@ El CI corre en Node 22.16.0, 22.23.4 y 24, con estrés multiproceso, cobertura (
 ### Módulos
 
 - **Remoto:**
-  - `src/http.mjs`, `src/oauth.mjs`, `src/remote.mjs`: Streamable HTTP con sesiones, OAuth con registro cerrado y las 29 tools remotas.
+  - `src/http.mjs`, `src/oauth.mjs`, `src/remote.mjs`: Streamable HTTP con sesiones, OAuth con registro cerrado y las 30 tools remotas.
   - `src/downstream.mjs`, `src/github-policy.mjs`, `src/github-api.mjs`: gateway del GitHub MCP, allowlist y cliente REST con breaker.
   - `src/checks.mjs`, `src/remote-review.mjs`, `src/github-delivery.mjs`, `src/skills.mjs`: checks en Actions, tickets y diff paginado, entrega y merge, y skills.
   - `src/remote-state.mjs`, `src/remote-config.mjs`, `src/deadline.mjs`, `src/redact.mjs`, `src/actor-assertion.mjs`: sesiones, auditoría y retención, configuración, plazos por tool, redacción de secretos y aserción de actor.

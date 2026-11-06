@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {remoteFixture} from './helpers/remote-fixture.mjs';
+import {remoteFixture,sha} from './helpers/remote-fixture.mjs';
+import {remoteRead,remoteWrite} from '../src/store.mjs';
 import {lineBudget,excluded} from '../src/line-budget.mjs';
 
 const file=(filename,additions,deletions=0)=>({filename,additions,deletions,status:'modified'});
@@ -71,5 +72,43 @@ test('size limits: budget, extension, reviewer refusal, diff cap and delivery st
     assert.match((await f.call('zana_review_request',{missionId},author)).error,/^OVER_LINE_BUDGET: el PR cambia 6000 líneas .* extensión máxima es 5000/);
     // Only the active mission can be extended.
     assert.match((await f.call('zana_budget_extend',{missionId:'mission-unknown',lines:10,reason:'abc'},author)).error,/MISSION_NOT_ACTIVE/);
+  }finally{await f.cleanup();}
+});
+
+const tickets=()=>remoteRead(db=>db.prepare('SELECT COUNT(*) n FROM review_tickets').get().n);
+
+test('size limits: a head that moves while measuring gives HEAD_MOVED before the budget, without a ticket',async()=>{
+  const f=await remoteFixture();
+  try{
+    const {author,missionId,branch}=await f.authorReady();
+    // The file list is read from the live head: push between the first and the second pull read.
+    f.api.state.onPullFiles=()=>f.api.state.push(branch,sha('c'));
+    const moved=await f.call('zana_review_request',{missionId},author);
+    assert.match(moved.error,/^HEAD_MOVED: el head del PR cambió de a{40} a c{40}/);
+    assert.equal(await tickets(),0);
+    // Over budget on the other SHA: the moved head is reported, not figures of another SHA.
+    f.api.state.push(branch,sha('a'));
+    f.api.state.pullFiles[7]=[file('src/a.mjs',900)];
+    assert.match((await f.call('zana_review_request',{missionId},author)).error,/^HEAD_MOVED/);
+    assert.equal(await tickets(),0);
+  }finally{await f.cleanup();}
+});
+
+test('size limits: the claim returns the line budget measured for the ticket SHA',async()=>{
+  const f=await remoteFixture();
+  try{
+    const {author,missionId}=await f.authorReady();
+    const req=await f.call('zana_review_request',{missionId},author);
+    assert.equal(req.error,undefined,req.error);
+    // The live file list changes after the ticket: the claim keeps the measured figures.
+    f.api.state.pullFiles[7]=[file('src/a.mjs',300,90)];
+    const claim=await f.call('zana_review_claim',{ticket:req.ticket},await f.session());
+    assert.equal(claim.error,undefined,claim.error);
+    assert.deepEqual(claim.lineBudget,req.lineBudget);
+    // A ticket stored before the column existed has no measure.
+    const again=await f.call('zana_review_request',{missionId},author);
+    assert.equal(again.error,undefined,again.error);
+    await remoteWrite(db=>db.prepare("UPDATE review_tickets SET line_budget=NULL WHERE state='OPEN'").run());
+    assert.equal((await f.call('zana_review_claim',{ticket:again.ticket},await f.session())).lineBudget,null);
   }finally{await f.cleanup();}
 });

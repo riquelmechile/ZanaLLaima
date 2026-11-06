@@ -58,6 +58,7 @@ export async function fakeGitHubApi(){
       return send(200,current);
     }
     if((m=/^\/pulls\/(\d+)\/files$/.exec(p))){
+      state.onPullFiles?.(Number(m[1]));
       const files=state.pullFiles[m[1]]??[{filename:'x',additions:10,deletions:0,status:'modified'}];
       const per=Number(url.searchParams.get('per_page')),page=Number(url.searchParams.get('page'));
       return send(200,files.slice((page-1)*per,page*per));

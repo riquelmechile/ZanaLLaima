@@ -30,7 +30,7 @@ export async function fakeGitHubApi(){
     if(state.failNext){const f=state.failNext;state.failNext=null;return send(f.status,{message:f.message});}
     const p=url.pathname.replace('/repos/o/r','');
     if(!url.pathname.startsWith('/repos/o/r'))return send(404,{message:'Not Found'});
-    if(p===''&&req.method==='GET')return send(200,{id:state.repoId,full_name:'o/r',default_branch:state.defaultBranch});
+    if(p===''&&req.method==='GET')return send(200,{id:state.repoId,full_name:state.fullName??'o/r',default_branch:state.defaultBranch});
     let m;
     // files[path]: text (served as a base64 file) or a raw contents object.
     if((m=/^\/contents\/(.+)$/.exec(p))){

@@ -21,7 +21,7 @@ import {createReview,LENSES,SEVERITIES,EXECUTIONS} from './remote-review.mjs';
 import {deliveryStatus,mergeMission,ticketView} from './github-delivery.mjs';
 import {listSkills,loadSkill} from './skills.mjs';
 import {ActorSigner} from './actor-assertion.mjs';
-import {lineBudget,lineLimit} from './line-budget.mjs';
+import {lineBudget,lineLimit,EXTEND_MAX} from './line-budget.mjs';
 import {nowIso,recordActivity,remoteMission,sessionReviews,sessionWrote,sessionIsMissionAuthor,writeAudit,readAudit} from './remote-state.mjs';
 import {budgetOf,remainingStarts} from './budget.mjs';
 import {within,DeadlineError} from './deadline.mjs';
@@ -55,7 +55,7 @@ const NEW_TOOLS={
   zana_review_request:['Author session: create a one-time review ticket for the open mission PR with green checks, after zana_complete_unit (refused while a code unit is RUNNING)',false,
     z.object({missionId:missionId()}).strict()],
   zana_budget_extend:['Author session, ONLY after the user said yes to the exact number: raise the mission line budget (additions + deletions without lockfiles) after OVER_LINE_BUDGET. Never call it without asking the user',false,
-    z.object({missionId:missionId(),lines:z.number().int().min(1).max(5000),reason:z.string().min(3).max(300)}).strict()],
+    z.object({missionId:missionId(),lines:z.number().int().min(1).max(EXTEND_MAX),reason:z.string().min(3).max(300)}).strict()],
   zana_review_claim:['Reviewer session (new conversation): claim a ticket; this session becomes read-only on the mission',false,
     z.object({ticket:ticket()}).strict()],
   zana_review_lens_submit:['Reviewer session: submit one 4R lens with located, evidenced findings',false,
@@ -303,6 +303,9 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       await transact((existing,txc)=>{
         if(existing?.id!==id)throw new Error('MISSION_NOT_ACTIVE: mission '+id+' is not the active mission');
         const rm=guard(txc.db,existing,session,'zana_budget_extend');
+        // Same sessions that may merge: the creator or a holder of one of its units.
+        if(!sessionIsMissionAuthor(txc.db,session.sessionId,id))
+          throw new Error('NOT_AUTHOR: only the session that created the mission or held one of its units may extend its line budget');
         if((existing.status||'ACTIVE')!=='ACTIVE')throw new Error('MISSION_NOT_ACTIVE: mission '+id+' is '+existing.status);
         previous=lineLimit(rm,config);
         txc.db.prepare('UPDATE remote_missions SET line_budget_extension=? WHERE mission_id=?')

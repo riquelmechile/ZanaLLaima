@@ -10,7 +10,7 @@ import {missionPull} from './github-delivery.mjs';
 import {recordActivity,sessionRow,sessionWrote,nowIso,writeAudit,missionClients,remoteMission} from './remote-state.mjs';
 import {budgetOf} from './budget.mjs';
 import {redactText,envSecrets} from './redact.mjs';
-import {lineBudget,lineLimit} from './line-budget.mjs';
+import {lineBudget,lineLimit,EXTEND_MAX} from './line-budget.mjs';
 
 export const LENSES=Object.freeze(['risk','readability','reliability','resilience']);
 export const SEVERITIES=Object.freeze(['BLOCKER','CRITICAL','WARNING','SUGGESTION']);
@@ -155,7 +155,7 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
     try{diff=await github.compareDiff(repo,base,sha);}
     catch(error){
       if(/response too large/.test(String(error?.message)))
-        fail('DIFF_TOO_LARGE','el diff pesa más de 2000000 bytes y el tope es '+config.reviewMaxDiffBytes+'; divide el cambio en misiones secuenciales');
+        fail('DIFF_TOO_LARGE','el diff pasa los 2 MB que entrega GitHub y el tope es '+config.reviewMaxDiffBytes+'; divide el cambio en misiones secuenciales');
       throw error;
     }
     const entry={key:repo+':'+base+':'+sha,pages:diffPages(diff),bytes:Buffer.byteLength(diff,'utf8')};
@@ -193,12 +193,22 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
       if(verdict.state!=='SUCCESS')fail('CHECKS_NOT_GREEN','checks on '+sha+' are '+verdict.state);
       // Size limits before the ticket: the diff cap has no exception; the line
       // budget can only be raised with zana_budget_extend (user's yes).
-      const diffBytes=(await fetchPages(ctx.repo,ctx.base,sha)).bytes;
+      const measured=await fetchPages(ctx.repo,ctx.base,sha);
+      const diffBytes=measured.bytes;
+      // A rejected request does not keep its diff in the cache.
+      const reject=(...args)=>{pageCache.delete(measured.key);fail(...args);};
       if(diffBytes>config.reviewMaxDiffBytes)
-        fail('DIFF_TOO_LARGE','el diff pesa '+diffBytes+' bytes y el tope es '+config.reviewMaxDiffBytes+'; divide el cambio en misiones secuenciales');
+        reject('DIFF_TOO_LARGE','el diff pesa '+diffBytes+' bytes y el tope es '+config.reviewMaxDiffBytes+'; divide el cambio en misiones secuenciales');
       const budget=lineBudget(await github.pullFiles(ctx.repo,pull.number),{limit:lineLimit(ctx,config)});
-      if(budget.over)fail('OVER_LINE_BUDGET','el PR cambia '+(budget.truncated?'más de ':'')+budget.lines+' líneas (sin lockfiles) y el presupuesto es '+budget.limit+
+      if(budget.truncated)
+        reject('OVER_LINE_BUDGET','el PR cambia más de 3000 archivos; no hay extensión posible: divide el cambio en misiones secuenciales');
+      if(budget.over&&budget.lines>EXTEND_MAX)
+        reject('OVER_LINE_BUDGET','el PR cambia '+budget.lines+' líneas (sin lockfiles) y la extensión máxima es '+EXTEND_MAX+'; divide el cambio en misiones secuenciales');
+      if(budget.over)reject('OVER_LINE_BUDGET','el PR cambia '+budget.lines+' líneas (sin lockfiles) y el presupuesto es '+budget.limit+
         '; pregúntale al usuario si autoriza '+budget.lines+' líneas y, solo con su sí, llama zana_budget_extend');
+      // The file list is read from the PR's current head: it must still be the measured SHA.
+      const after=String((await github.pull(ctx.repo,pull.number))?.head?.sha??'');
+      if(after!==sha)reject('HEAD_MOVED','el head del PR cambió de '+sha+' a '+after+' mientras se medía; vuelve a pedir el ticket');
       const code=ticketCode(),ticketId=randomUUID();
       let expiresAt;
       let superseded=[];

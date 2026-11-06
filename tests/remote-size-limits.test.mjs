@@ -42,6 +42,9 @@ test('size limits: budget, extension, reviewer refusal, diff cap and delivery st
     assert.equal(claim.lineBudget.lines,450);
     assert.equal(claim.diffBytes,req.diffBytes);
     assert.match((await f.call('zana_budget_extend',{missionId,lines:5000,reason:'quiero más'},reviewer)).error,/^REVIEWER_READ_ONLY/);
+    // A session that never held the mission cannot extend it either.
+    const stranger=await f.session();
+    assert.match((await f.call('zana_budget_extend',{missionId,lines:500,reason:'sin permiso'},stranger)).error,/^NOT_AUTHOR/);
     // Read-only line budget in delivery status.
     const status=await f.call('zana_delivery_status',{missionId},author);
     assert.equal(status.lineBudget.limit,450);
@@ -49,11 +52,14 @@ test('size limits: budget, extension, reviewer refusal, diff cap and delivery st
     f.api.state.diffText='diff --git a/x b/x\n'+'+'.repeat(1_900_000);
     assert.match((await f.call('zana_review_request',{missionId},author)).error,/^DIFF_TOO_LARGE: el diff pesa 19000\d\d bytes y el tope es 1800000/);
     f.api.state.diffText='+'.repeat(2_100_000);
-    assert.match((await f.call('zana_review_request',{missionId},author)).error,/^DIFF_TOO_LARGE: el diff pesa más de/);
+    assert.match((await f.call('zana_review_request',{missionId},author)).error,/^DIFF_TOO_LARGE: el diff pasa los 2 MB/);
     // 31 pages of files: the list is truncated at 30 and treated as over.
     f.api.state.diffText=undefined;
     f.api.state.pullFiles[7]=Array.from({length:3100},(_,i)=>file('f'+i,0));
-    assert.match((await f.call('zana_review_request',{missionId},author)).error,/^OVER_LINE_BUDGET: el PR cambia más de 0 líneas/);
+    assert.match((await f.call('zana_review_request',{missionId},author)).error,/^OVER_LINE_BUDGET: el PR cambia más de 3000 archivos; no hay extensión posible/);
+    // Over the largest possible extension: no question to the user, just split.
+    f.api.state.pullFiles[7]=[file('src/a.mjs',6000)];
+    assert.match((await f.call('zana_review_request',{missionId},author)).error,/^OVER_LINE_BUDGET: el PR cambia 6000 líneas .* extensión máxima es 5000/);
     // Only the active mission can be extended.
     assert.match((await f.call('zana_budget_extend',{missionId:'mission-unknown',lines:10,reason:'abc'},author)).error,/MISSION_NOT_ACTIVE/);
   }finally{await f.cleanup();}

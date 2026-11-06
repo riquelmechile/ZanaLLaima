@@ -3,6 +3,8 @@
 export const LOCKFILES=Object.freeze(['package-lock.json','npm-shrinkwrap.json','pnpm-lock.yaml','yarn.lock','bun.lock',
   'bun.lockb','Cargo.lock','poetry.lock','uv.lock','Pipfile.lock','composer.lock','Gemfile.lock','go.sum','flake.lock',
   'packages.lock.json','pubspec.lock','mix.lock']);
+// Largest budget zana_budget_extend may set.
+export const EXTEND_MAX=5000;
 export const EXCLUDED=Object.freeze([...LOCKFILES,'.zanallaima.json']);
 export const excluded=path=>{
   const base=String(path).split('/').pop();

@@ -1,6 +1,18 @@
 # Contrato operativo de ZanaLLaima
 
-Motor autónomo para **una sola cuenta GPT**, sin llamadas propias a APIs de inferencia, sin trabajo entre cuentas y sin dependencias de otros coordinadores. Usar solamente herramientas y subagentes nativos realmente disponibles en el anfitrión.
+Motor de misiones para **una sola cuenta GPT**, sin llamadas propias a APIs de inferencia, sin trabajo entre cuentas y sin dependencias de otros coordinadores. Usar solamente herramientas y subagentes nativos realmente disponibles en el anfitrión.
+
+## Modo remoto (app de ChatGPT, 0.6.0)
+
+1. Al empezar, cargar `zana-odd` con `zana_skill_load` y seguirla. Al recibir un ticket `ZR-...`, cargar `zana-4r` en esa conversación.
+2. La verdad es el SHA en GitHub y sus checks de Actions. No hay shell: escribir **solo** con `zana_ds_github`, solo en `zana/<missionId>` y solo con una unidad `RUNNING` de la propia sesión. Nunca en la rama default ni en `.github/workflows/**`.
+3. Orden: con la unidad de código RUNNING escribir, abrir el PR y correr checks hasta verde (`zana_checks_start`/`zana_checks_status`); luego `zana_complete_unit` (exige check verde sobre el head actual) y recién después `zana_review_request` (con una unidad de código RUNNING responde `UNIT_STILL_RUNNING`). `leaseSeconds` igual a `maxLeaseSeconds` en `zana_start_batch` y en cada `zana_unit_heartbeat`. Si la review pide cambios, `zana_correction_start` y un ticket nuevo. Si el lease venció: `zana_recover_expired` → `zana_unit_retry` → `zana_start_batch`. `zana_session_rebind` solo sirve con el lease vigente. Después del merge, `zana_mission_close` y `zana_mission_archive`.
+4. La revisión la hace el mismo GPT en una **conversación nueva**, cuya primera tool es `zana_review_claim`; la sesión revisora queda en solo lectura y debe leer todo el diff (`zana_review_diff`). No reclamar el propio ticket ni rodear un rechazo (`AUTHOR_SESSION`, `SESSION_WROTE`, `SESSION_PREDATES_TICKET`, `REVIEWER_READ_ONLY`).
+5. Declarar `execution` tal como ocurrió (`PARALLEL_SUBAGENTS` o `SEQUENTIAL_SAME_CONVERSATION`). Los lentes no corrigen código. No inventar evidencia.
+6. `zana_merge` solo si el usuario lo pide y todo está verde sobre el mismo head. No aprobar ni descartar reviews, no desplegar.
+7. Los tokens viven solo en el servidor. No pedirlos, no mostrarlos, no ponerlos en el repo.
+
+El resto de este documento describe el **modo stdio**, que queda congelado: su código sigue probado pero no se endurece más.
 
 ## Configuración y misiones
 
@@ -41,6 +53,6 @@ La rama \`main\` tiene checks y revisión externa obligatorios. No hacer merge, 
 
 ## Integración y límites
 
-Seguir \`docs/host-codex.md\` para configurar MCP stdio y \`docs/host-e2e.md\` para el E2E real. **PASO HUMANO:** Zana ejecuta y commitea el reporte; no afirmar capacidades observadas desde tests locales. El transporte HTTP OAuth para ChatGPT web es otra iniciativa (ZL-020), fuera de la versión 0.5.2.
+Seguir \`docs/host-codex.md\` para configurar MCP stdio y \`docs/host-e2e.md\` para el E2E real. **PASO HUMANO:** Zana ejecuta y commitea el reporte; no afirmar capacidades observadas desde tests locales. El transporte HTTP OAuth para la app de ChatGPT es el modo remoto de la versión 0.6.0 (`docs/deploy-remote.md`, `docs/host-e2e-remote.md`).
 
-Mantener secretos, datos y artefactos dentro del repositorio/workspace autorizado. No introducir referencias a otros sistemas de coordinación en código o documentación. Ante incertidumbre de permisos o estado, bloquear y reportar en vez de simular cumplimiento.
+Mantener secretos, datos y artefactos dentro del repositorio/workspace autorizado. No introducir dependencias de otros sistemas de coordinación; el código reutilizado de otros proyectos lleva su procedencia en un comentario. Ante incertidumbre de permisos o estado, bloquear y reportar en vez de simular cumplimiento.

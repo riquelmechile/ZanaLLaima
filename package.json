@@ -1,6 +1,6 @@
 {
   "name": "zana-llaima",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -8,20 +8,19 @@
   },
   "scripts": {
     "test": "node --test tests/*.test.mjs",
-    "check": "node --check src/core.mjs && node --check src/review.mjs && node --check src/git-evidence.mjs && node --check src/delivery.mjs && node --check src/lifecycle.mjs && node --check src/operator.mjs && node --check src/paths.mjs && node --check src/actions.mjs && node --check src/store.mjs && node --check src/cli.mjs && node --check src/mcp.mjs && node --check src/capabilities.mjs && node --check src/budget.mjs && node --check scripts/benchmark-phase4.mjs && node --check src/write-effect.mjs && node --check src/write-operations.mjs && node --check scripts/ci-attest.mjs && node --check scripts/check-source-coverage.mjs && bash -n scripts/setup-ci-signing.sh",
+    "check": "node --check src/core.mjs && node --check src/review.mjs && node --check src/git-evidence.mjs && node --check src/delivery.mjs && node --check src/lifecycle.mjs && node --check src/operator.mjs && node --check src/paths.mjs && node --check src/actions.mjs && node --check src/store.mjs && node --check src/cli.mjs && node --check src/mcp.mjs && node --check src/capabilities.mjs && node --check src/budget.mjs && node --check src/redact.mjs && node --check src/actor-assertion.mjs && node --check src/downstream.mjs && node --check src/github-api.mjs && node --check src/github-policy.mjs && node --check src/github-delivery.mjs && node --check src/checks.mjs && node --check src/skills.mjs && node --check src/remote-state.mjs && node --check src/remote-review.mjs && node --check src/remote-config.mjs && node --check src/remote.mjs && node --check src/oauth.mjs && node --check src/http.mjs && node --check src/deadline.mjs && node --check scripts/benchmark-phase4.mjs && node --check src/write-effect.mjs && node --check src/write-operations.mjs && node --check scripts/ci-attest.mjs && node --check scripts/check-source-coverage.mjs && bash -n scripts/setup-ci-signing.sh",
     "start": "node src/mcp.mjs",
     "cli": "node src/cli.mjs",
     "test:coverage": "node scripts/check-source-coverage.mjs",
     "test:stress": "node --test tests/stress-multiprocess.test.mjs",
     "release:preflight": "node scripts/release-preflight.mjs",
-    "benchmark:phase4": "node scripts/benchmark-phase4.mjs"
+    "benchmark:phase4": "node scripts/benchmark-phase4.mjs",
+    "start:remote": "node src/http.mjs"
   },
   "license": "MIT",
   "dependencies": {
+    "@modelcontextprotocol/client": "2.4.0",
     "@modelcontextprotocol/server": "2.4.0",
     "zod": "4.6.7"
-  },
-  "devDependencies": {
-    "@modelcontextprotocol/client": "2.4.0"
   }
 }

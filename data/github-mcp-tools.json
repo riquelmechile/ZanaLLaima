@@ -1,0 +1,518 @@
+{
+  "server": "github/github-mcp-server",
+  "version": "v2.1.0",
+  "commit": "4bcdcdf8d7beee98c9448e73e257308280924cc4",
+  "remote": "https://api.githubcopilot.com/mcp/",
+  "toolsets": [
+    "context",
+    "repos",
+    "pull_requests",
+    "git",
+    "actions"
+  ],
+  "derivation": "Anotaciones leídas de pkg/github/__toolsnaps__/<tool>.snap; pertenencia a toolset y feature flag leídas del código Go en pkg/github (ubicación en source). add_issue_comment es del toolset issues y se clasifica solo para comentar el PR de la misión si el operador habilita ese toolset.",
+  "classes": {
+    "read": "Siempre permitida",
+    "write": "Solo en la rama/PR de la misión, con unidad RUNNING de la sesión (ver rule)",
+    "deny": "Siempre denegada (ver reason)"
+  },
+  "tools": {
+    "get_me": {
+      "toolset": "context",
+      "featureFlag": null,
+      "readOnlyHint": true,
+      "destructiveHint": null,
+      "zana": "read",
+      "source": "pkg/github/context_tools.go:121"
+    },
+    "get_teams": {
+      "toolset": "context",
+      "featureFlag": null,
+      "readOnlyHint": true,
+      "destructiveHint": null,
+      "zana": "read",
+      "source": "pkg/github/context_tools.go:206"
+    },
+    "get_team_members": {
+      "toolset": "context",
+      "featureFlag": null,
+      "readOnlyHint": true,
+      "destructiveHint": null,
+      "zana": "read",
+      "source": "pkg/github/context_tools.go:308"
+    },
+    "ui_get": {
+      "toolset": "context",
+      "featureFlag": null,
+      "readOnlyHint": true,
+      "destructiveHint": null,
+      "zana": "read",
+      "source": "pkg/github/ui_tools.go:36"
+    },
+    "get_commit": {
+      "toolset": "repos",
+      "featureFlag": null,
+      "readOnlyHint": true,
+      "destructiveHint": null,
+      "zana": "read",
+      "source": "pkg/github/repositories.go:66"
+    },
+    "list_commits": {
+      "toolset": "repos",
+      "featureFlag": null,
+      "readOnlyHint": true,
+      "destructiveHint": null,
+      "zana": "read",
+      "source": "pkg/github/repositories.go:239"
+    },
+    "list_branches": {
+      "toolset": "repos",
+      "featureFlag": null,
+      "readOnlyHint": true,
+      "destructiveHint": null,
+      "zana": "read",
+      "source": "pkg/github/repositories.go:360"
+    },
+    "create_or_update_file": {
+      "toolset": "repos",
+      "featureFlag": null,
+      "readOnlyHint": false,
+      "destructiveHint": null,
+      "zana": "write",
+      "rule": "file",
+      "source": "pkg/github/repositories.go:452"
+    },
+    "create_repository": {
+      "toolset": "repos",
+      "featureFlag": null,
+      "readOnlyHint": false,
+      "destructiveHint": null,
+      "zana": "deny",
+      "reason": "Crear repositorios no es parte de una misión",
+      "source": "pkg/github/repositories.go:679"
+    },
+    "delete_repository": {
+      "toolset": "repos",
+      "featureFlag": null,
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "zana": "deny",
+      "reason": "Borrar repositorios está siempre denegado",
+      "source": "pkg/github/repositories.go:787"
+    },
+    "get_file_contents": {
+      "toolset": "repos",
+      "featureFlag": null,
+      "readOnlyHint": true,
+      "destructiveHint": null,
+      "zana": "read",
+      "source": "pkg/github/repositories.go:1017"
+    },
+    "fork_repository": {
+      "toolset": "repos",
+      "featureFlag": null,
+      "readOnlyHint": false,
+      "destructiveHint": null,
+      "zana": "deny",
+      "reason": "Forks fuera del repo de la misión",
+      "source": "pkg/github/repositories.go:1240"
+    },
+    "delete_file": {
+      "toolset": "repos",
+      "featureFlag": null,
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "zana": "write",
+      "rule": "file",
+      "source": "pkg/github/repositories.go:1337"
+    },
+    "create_branch": {
+      "toolset": "repos",
+      "featureFlag": null,
+      "readOnlyHint": false,
+      "destructiveHint": null,
+      "zana": "write",
+      "rule": "branch",
+      "source": "pkg/github/repositories.go:1533"
+    },
+    "push_files": {
+      "toolset": "repos",
+      "featureFlag": null,
+      "readOnlyHint": false,
+      "destructiveHint": null,
+      "zana": "write",
+      "rule": "files",
+      "source": "pkg/github/repositories.go:1643"
+    },
+    "list_tags": {
+      "toolset": "repos",
+      "featureFlag": null,
+      "readOnlyHint": true,
+      "destructiveHint": null,
+      "zana": "read",
+      "source": "pkg/github/repositories.go:1876"
+    },
+    "get_tag": {
+      "toolset": "repos",
+      "featureFlag": null,
+      "readOnlyHint": true,
+      "destructiveHint": null,
+      "zana": "read",
+      "source": "pkg/github/repositories.go:1969"
+    },
+    "list_releases": {
+      "toolset": "repos",
+      "featureFlag": null,
+      "readOnlyHint": true,
+      "destructiveHint": null,
+      "zana": "read",
+      "source": "pkg/github/repositories.go:2103"
+    },
+    "get_latest_release": {
+      "toolset": "repos",
+      "featureFlag": null,
+      "readOnlyHint": true,
+      "destructiveHint": null,
+      "zana": "read",
+      "source": "pkg/github/repositories.go:2206"
+    },
+    "get_release_by_tag": {
+      "toolset": "repos",
+      "featureFlag": null,
+      "readOnlyHint": true,
+      "destructiveHint": null,
+      "zana": "read",
+      "source": "pkg/github/repositories.go:2283"
+    },
+    "get_file_blame": {
+      "toolset": "repos",
+      "featureFlag": "file_blame",
+      "readOnlyHint": true,
+      "destructiveHint": null,
+      "zana": "read",
+      "source": "pkg/github/repositories.go:2767"
+    },
+    "list_repository_collaborators": {
+      "toolset": "repos",
+      "featureFlag": null,
+      "readOnlyHint": true,
+      "destructiveHint": null,
+      "zana": "read",
+      "source": "pkg/github/repositories.go:3062"
+    },
+    "search_repositories": {
+      "toolset": "repos",
+      "featureFlag": null,
+      "readOnlyHint": true,
+      "destructiveHint": null,
+      "zana": "read",
+      "source": "pkg/github/search.go:54"
+    },
+    "search_code": {
+      "toolset": "repos",
+      "featureFlag": null,
+      "readOnlyHint": true,
+      "destructiveHint": null,
+      "zana": "read",
+      "source": "pkg/github/search.go:289"
+    },
+    "search_commits": {
+      "toolset": "repos",
+      "featureFlag": null,
+      "readOnlyHint": true,
+      "destructiveHint": null,
+      "zana": "read",
+      "source": "pkg/github/search.go:599"
+    },
+    "get_repository_tree": {
+      "toolset": "git",
+      "featureFlag": null,
+      "readOnlyHint": true,
+      "destructiveHint": null,
+      "zana": "read",
+      "source": "pkg/github/git.go:47"
+    },
+    "pull_request_read": {
+      "toolset": "pull_requests",
+      "featureFlag": null,
+      "readOnlyHint": true,
+      "destructiveHint": null,
+      "zana": "read",
+      "source": "pkg/github/pullrequests.go:74"
+    },
+    "create_pull_request": {
+      "toolset": "pull_requests",
+      "featureFlag": null,
+      "readOnlyHint": false,
+      "destructiveHint": null,
+      "zana": "write",
+      "rule": "pr-create",
+      "source": "pkg/github/pullrequests.go:704"
+    },
+    "update_pull_request": {
+      "toolset": "pull_requests",
+      "featureFlag": null,
+      "readOnlyHint": false,
+      "destructiveHint": null,
+      "zana": "write",
+      "rule": "pr-edit",
+      "source": "pkg/github/pullrequests.go:974"
+    },
+    "add_reply_to_pull_request_comment": {
+      "toolset": "pull_requests",
+      "featureFlag": null,
+      "readOnlyHint": false,
+      "destructiveHint": null,
+      "zana": "write",
+      "rule": "pr-reply",
+      "source": "pkg/github/pullrequests.go:1282"
+    },
+    "list_pull_requests": {
+      "toolset": "pull_requests",
+      "featureFlag": null,
+      "readOnlyHint": true,
+      "destructiveHint": null,
+      "zana": "read",
+      "source": "pkg/github/pullrequests.go:1579"
+    },
+    "merge_pull_request": {
+      "toolset": "pull_requests",
+      "featureFlag": null,
+      "readOnlyHint": false,
+      "destructiveHint": null,
+      "zana": "deny",
+      "reason": "El merge solo existe vía zana_merge",
+      "source": "pkg/github/pullrequests.go:1711"
+    },
+    "search_pull_requests": {
+      "toolset": "pull_requests",
+      "featureFlag": null,
+      "readOnlyHint": true,
+      "destructiveHint": null,
+      "zana": "read",
+      "source": "pkg/github/pullrequests.go:1848"
+    },
+    "update_pull_request_branch": {
+      "toolset": "pull_requests",
+      "featureFlag": null,
+      "readOnlyHint": false,
+      "destructiveHint": null,
+      "zana": "deny",
+      "reason": "Actualizar la rama desde la base no está en la allowlist",
+      "source": "pkg/github/pullrequests.go:1895"
+    },
+    "pull_request_review_write": {
+      "toolset": "pull_requests",
+      "featureFlag": null,
+      "readOnlyHint": false,
+      "destructiveHint": null,
+      "zana": "deny",
+      "reason": "Las reviews con el token autor están siempre denegadas",
+      "source": "pkg/github/pullrequests.go:2054"
+    },
+    "add_comment_to_pending_review": {
+      "toolset": "pull_requests",
+      "featureFlag": null,
+      "readOnlyHint": false,
+      "destructiveHint": null,
+      "zana": "deny",
+      "reason": "Las reviews con el token autor están siempre denegadas",
+      "source": "pkg/github/pullrequests.go:2548"
+    },
+    "update_pull_request_title": {
+      "toolset": "pull_requests",
+      "featureFlag": "pull_requests_granular",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "zana": "write",
+      "rule": "pr-title",
+      "source": "pkg/github/pullrequests_granular.go:127"
+    },
+    "update_pull_request_body": {
+      "toolset": "pull_requests",
+      "featureFlag": "pull_requests_granular",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "zana": "write",
+      "rule": "pr-body",
+      "source": "pkg/github/pullrequests_granular.go:144"
+    },
+    "update_pull_request_state": {
+      "toolset": "pull_requests",
+      "featureFlag": "pull_requests_granular",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "zana": "deny",
+      "reason": "Cerrar o reabrir el PR no está en la allowlist",
+      "source": "pkg/github/pullrequests_granular.go:161"
+    },
+    "update_pull_request_draft_state": {
+      "toolset": "pull_requests",
+      "featureFlag": "pull_requests_granular",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "zana": "deny",
+      "reason": "El estado draft no está en la allowlist (solo título y cuerpo)",
+      "source": "pkg/github/pullrequests_granular.go:185"
+    },
+    "request_pull_request_reviewers": {
+      "toolset": "pull_requests",
+      "featureFlag": "pull_requests_granular",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "zana": "deny",
+      "reason": "Pedir revisores no está en la allowlist",
+      "source": "pkg/github/pullrequests_granular.go:272"
+    },
+    "create_pull_request_review": {
+      "toolset": "pull_requests",
+      "featureFlag": "pull_requests_granular",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "zana": "deny",
+      "reason": "Las reviews con el token autor están siempre denegadas",
+      "source": "pkg/github/pullrequests_granular.go:351"
+    },
+    "submit_pending_pull_request_review": {
+      "toolset": "pull_requests",
+      "featureFlag": "pull_requests_granular",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "zana": "deny",
+      "reason": "Las reviews con el token autor están siempre denegadas",
+      "source": "pkg/github/pullrequests_granular.go:408"
+    },
+    "delete_pending_pull_request_review": {
+      "toolset": "pull_requests",
+      "featureFlag": "pull_requests_granular",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "zana": "deny",
+      "reason": "Las reviews con el token autor están siempre denegadas",
+      "source": "pkg/github/pullrequests_granular.go:457"
+    },
+    "add_pull_request_review_comment": {
+      "toolset": "pull_requests",
+      "featureFlag": "pull_requests_granular",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "zana": "deny",
+      "reason": "Los comentarios de review crean una review con el token autor",
+      "source": "pkg/github/pullrequests_granular.go:502"
+    },
+    "resolve_review_thread": {
+      "toolset": "pull_requests",
+      "featureFlag": "pull_requests_granular",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "zana": "deny",
+      "reason": "Resolver hilos de review no está en la allowlist",
+      "source": "pkg/github/pullrequests_granular.go:612"
+    },
+    "unresolve_review_thread": {
+      "toolset": "pull_requests",
+      "featureFlag": "pull_requests_granular",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "zana": "deny",
+      "reason": "Reabrir hilos de review no está en la allowlist",
+      "source": "pkg/github/pullrequests_granular.go:676"
+    },
+    "add_pull_request_review_comment_reaction": {
+      "toolset": "pull_requests",
+      "featureFlag": "pull_requests_granular",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "zana": "deny",
+      "reason": "Reacciones no están en la allowlist",
+      "source": "pkg/github/pullrequests_granular.go:718"
+    },
+    "remove_pull_request_review_comment_reaction": {
+      "toolset": "pull_requests",
+      "featureFlag": "pull_requests_granular",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "zana": "deny",
+      "reason": "Reacciones no están en la allowlist",
+      "source": "pkg/github/pullrequests_granular.go:788"
+    },
+    "hide_pull_request_review_comment": {
+      "toolset": "pull_requests",
+      "featureFlag": "pull_requests_granular",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "zana": "deny",
+      "reason": "Ocultar comentarios de review no está en la allowlist",
+      "source": "pkg/github/comment_minimize.go:104"
+    },
+    "unhide_pull_request_review_comment": {
+      "toolset": "pull_requests",
+      "featureFlag": "pull_requests_granular",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "zana": "deny",
+      "reason": "Mostrar comentarios de review no está en la allowlist",
+      "source": "pkg/github/comment_minimize.go:104"
+    },
+    "hide_pull_request_review": {
+      "toolset": "pull_requests",
+      "featureFlag": "pull_requests_granular",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "zana": "deny",
+      "reason": "Ocultar reviews no está en la allowlist",
+      "source": "pkg/github/comment_minimize.go:126"
+    },
+    "unhide_pull_request_review": {
+      "toolset": "pull_requests",
+      "featureFlag": "pull_requests_granular",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "zana": "deny",
+      "reason": "Mostrar reviews no está en la allowlist",
+      "source": "pkg/github/comment_minimize.go:126"
+    },
+    "actions_list": {
+      "toolset": "actions",
+      "featureFlag": null,
+      "readOnlyHint": true,
+      "destructiveHint": null,
+      "zana": "read",
+      "source": "pkg/github/actions.go:200"
+    },
+    "actions_get": {
+      "toolset": "actions",
+      "featureFlag": null,
+      "readOnlyHint": true,
+      "destructiveHint": null,
+      "zana": "read",
+      "source": "pkg/github/actions.go:382"
+    },
+    "actions_run_trigger": {
+      "toolset": "actions",
+      "featureFlag": null,
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "zana": "write",
+      "rule": "checks-dispatch",
+      "source": "pkg/github/actions.go:483"
+    },
+    "get_job_logs": {
+      "toolset": "actions",
+      "featureFlag": null,
+      "readOnlyHint": true,
+      "destructiveHint": null,
+      "zana": "read",
+      "source": "pkg/github/actions.go:575"
+    },
+    "add_issue_comment": {
+      "toolset": "issues",
+      "featureFlag": null,
+      "readOnlyHint": false,
+      "destructiveHint": null,
+      "zana": "write",
+      "rule": "pr-comment",
+      "source": "pkg/github/issues.go (toolset issues, fuera de los configurados)"
+    }
+  }
+}

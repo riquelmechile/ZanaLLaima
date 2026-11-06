@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Official MCP SDK v2. Local stdio only: no HTTP listener or model-provider calls.
+// Official MCP SDK v2. Local stdio mode: no HTTP listener or model-provider calls.
+// The remote Streamable HTTP mode lives in src/remote.mjs and src/http.mjs.
 import {readFileSync} from 'node:fs';
 import { McpServer } from '@modelcontextprotocol/server';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
@@ -40,7 +41,7 @@ const pagination = {
   limit: z.number().int().min(1).max(100).optional(),
   before: z.number().int().positive().optional(),
 };
-const TOOL_DESCRIPTIONS = Object.freeze({
+export const TOOL_DESCRIPTIONS = Object.freeze({
   zana_profile: ['profile','Show requested model settings without claiming they are active',true],
   zana_capability_status: ['capabilityStatus','Separate requested, host-reported and verified execution capabilities',true],
   zana_storage_status: ['storageStatus','Read local SQLite integrity and schema status',true],
@@ -67,7 +68,7 @@ const TOOL_DESCRIPTIONS = Object.freeze({
   zana_review_check: ['reviewCheckCandidate','Recheck actual Git worktree and invalidate changed candidate',false],
 });
 
-const schemas = {
+export const schemas = {
   zana_profile: z.object({}).strict(),
   zana_capability_status: z.object({hostReport:hostReport.optional()}).strict(),
   zana_storage_status: z.object({}).strict(),

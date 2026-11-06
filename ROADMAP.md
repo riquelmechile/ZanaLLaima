@@ -1,7 +1,26 @@
-## Candidato 0.5.2 (sin publicar): presupuesto monótono en restore y congelamiento
+## Candidato 0.6.0 (sin publicar): MCP remoto para la app de ChatGPT
 
-- R11-C1: el restore offline y el `adopt` tratan `attempts` y `leaseGeneration` por unidad como hechos monótonos (el total de starts es su suma) mediante un ledger por misión que sobrevive a cambios de misión y archivo. Código nuevo `CONSUMED_BUDGET`; con `--force-data-loss` se conserva `max(viva, backup)`. La `revision` se fusiona siempre.
-- **Cambio de rumbo:** ZanaLLaima pasa a ser un MCP remoto para la app de ChatGPT (fase siguiente, en otro PR). Quedan **congelados**: endurecimiento de `git-evidence`, gate `zana_apply_write`, grants de escritura Ed25519, aislamiento de OS (ZL-004) y los warnings pendientes de la ronda 11 (atributos y `crlf`, `**/.gitignore` del hilo Codex `4485193524`, lock con fd en Node, alias `nlink=2`, `setup-python` en CI, epoch clampeado). El código queda, sin más cambios. Límites conocidos del storage local que tampoco se tocan: si se pierde la DB SQLite el `state.json` heredado se reimporta solo (preexistente).
+**Cambio de rumbo.** ZanaLLaima deja de ser solo un MCP stdio que vigila un worktree y pasa a ser un **MCP remoto** en zana-main, conectado como conector de la app de ChatGPT. La verdad es el SHA en GitHub y los checks de Actions; GPT escribe por el downstream de GitHub solo en `zana/<missionId>`; la revisión la hace el mismo GPT en una conversación nueva y la publica la cuenta revisora.
+
+- [x] **ZL-020 (pasa a esta fase).** Streamable HTTP con sesiones, OAuth embebido con registro cerrado por ventana de alta, `/health`, `deploy/` y `docs/deploy-remote.md`.
+- [x] Downstream del GitHub MCP oficial (gateway copiado de Panter-ai) y política allowlist propia sobre la lista real de tools v2.1.0 (`docs/downstream-github.md`).
+- [x] Checks en Actions (`zana_checks_*`) y unidad de código que no se completa sin check verde sobre su SHA final.
+- [x] Skills servidas por MCP (`zana-odd`, `zana-4r`, `review-*`).
+- [x] Ticket de revisión, sesión revisora en solo lectura, publicación con `ZANA_REVIEWER_TOKEN`, `zana/4r`, `zana_delivery_status` y `zana_merge` guardado por SHA.
+- [x] Auditoría por llamada con HMAC de argumentos y redacción de tokens.
+- [ ] **ZL-018: E2E real con la app de ChatGPT** (`docs/host-e2e-remote.md`). Lo corre el operador después del deploy; incluye verificar que ChatGPT abre una sesión MCP nueva por conversación. Hasta entonces la separación de sesiones queda sin observar.
+- Pendiente de esta fase: las skills `review-*` se adaptaron desde gentle-shell (vía Panter-ai) porque la copia de Xanxito no estaba accesible al escribirlas; comparar con Xanxito y alinear si difieren.
+
+### Congelado por el cambio de rumbo
+
+El código queda y sigue probado en stdio, pero **no se toca más**:
+
+- el endurecimiento de `git-evidence`;
+- el gate `zana_apply_write`;
+- los grants de escritura Ed25519;
+- el aislamiento de OS (ZL-004);
+- los warnings pendientes de la ronda 11 (atributos y `crlf`, `**/.gitignore` del hilo Codex `4485193524`, lock con fd en Node, alias `nlink=2`, `setup-python` en CI, epoch clampeado).
+- límite conocido del storage local que tampoco se toca: si se pierde la DB SQLite el `state.json` heredado se reimporta solo (preexistente). Las rondas de revisión y el presupuesto consumido ya son monótonos en restore desde la versión anterior.
 
 <!-- HISTORICAL_VERSIONS_START -->
 ## Historial de versiones (no vigente)
@@ -11,6 +30,7 @@
 - 0.4.2: integridad Git, recuperación tras crash y checklist.
 - 0.5.0: verificación Git del worktree y diario SQLite por UUID.
 - 0.5.1: gramática autoignore exacta, adopt con fusión de revocaciones y repos anidados fail-closed.
+- 0.5.2: presupuesto monótono en restore y adopt (`CONSUMED_BUDGET`) y congelamiento de la línea local.
 <!-- HISTORICAL_VERSIONS_END -->
 
 # Roadmap técnico de ZanaLLaima

@@ -36,7 +36,7 @@ Para recuperar una base dañada o volver a un backup, **detener primero todos lo
 ZANA_RESTORE_OFFLINE=1 node src/cli.mjs storage-restore /ruta/backup.sqlite
 ```
 
-El backup debe ser válido, migrable al esquema actual (v1 a v6) y no contener trabajo `RUNNING`. Una restauración ciega sin base viva exige `--force-data-loss`, revoca todos los grants recuperados y registra un epoch que rechaza acciones firmadas antes de restaurar. Los archivos anteriores se mueven a una ruta de cuarentena recuperable. El proceso utiliza un diario JSON fsync; tras una interrupción, ejecutar abort offline o reintentar restore, que primero concilia el diario. `storage-status` enumera `.restoring.*` y `.quarantine.*` huérfanos y reporta errores de temporales WRITE sin bloquear una reconciliación firmada.
+El backup debe ser válido, migrable al esquema actual (v1 a v7) y no contener trabajo `RUNNING`. Una restauración ciega sin base viva exige `--force-data-loss`, revoca todos los grants recuperados y registra un epoch que rechaza acciones firmadas antes de restaurar. Los archivos anteriores se mueven a una ruta de cuarentena recuperable. El proceso utiliza un diario JSON fsync; tras una interrupción, ejecutar abort offline o reintentar restore, que primero concilia el diario. `storage-status` enumera `.restoring.*` y `.quarantine.*` huérfanos y reporta errores de temporales WRITE sin bloquear una reconciliación firmada.
 
 ## Pruebas y límites
 
@@ -168,4 +168,10 @@ La nueva tabla `write_effect_receipts` conserva, de manera única por intento, e
 
 La migración conservadora v5→v6 añade \`pre_mode INTEGER\` y \`post_mode INTEGER\` a \`write_effect_receipts\`, sin reescribir los recibos anteriores. En filas históricas estos campos permanecen **NULL**, porque no sería correcto inferir los permisos originales a partir del hash del archivo. En cada recibo nuevo, \`pre_mode\` registra los permisos completos del destino anterior (\`st.mode & 0o7777\`) y \`post_mode\` los permisos efectivamente aplicados; para borrados, el modo posterior es \`NULL\`.
 
-El almacenamiento sigue preservando el hash, token, generación y evidencia del efecto; el esquema objetivo actual es **\`user_version=6\`**. Una base v5 requiere su migración mediante una transacción de escritura autorizada antes de lecturas nuevas. Ver \`tests/schema-v6-migration.test.mjs\` y \`tests/write-effect.test.mjs\`.
+El almacenamiento sigue preservando el hash, token, generación y evidencia del efecto; el esquema objetivo de esa migración era \`user_version=6\`; el actual es v7 (abajo). Una base v5 requiere su migración mediante una transacción de escritura autorizada antes de lecturas nuevas. Ver \`tests/schema-v6-migration.test.mjs\` y \`tests/write-effect.test.mjs\`.
+
+## SQLite v7: tablas del modo remoto
+
+La migración v6→v7 solo **agrega** tablas (`CREATE TABLE IF NOT EXISTS`), sin tocar las existentes: `remote_sessions` (sesión MCP, host OAuth y `created_at`), `remote_missions` (repo, base, rama `zana/<missionId>` y unidades de código), `remote_activity` (qué sesión mutó qué misión), `remote_checks`, `review_tickets` (solo el SHA-256 del código del ticket) y `remote_audit`. Los lentes remotos se guardan en `review_receipts` (con `review_id` = id del ticket) y las reviews finalizadas en `review_archive`. El recorte de historial conserva los recibos de los tickets.
+
+Restore y adopt tratan estos hechos como monótonos a través de `securityFacts`/`mergeSecurityFacts`, sin cambiar sus pasos: un ticket reclamado, finalizado, `STALE_SHA` o vencido nunca vuelve a `OPEN` por restaurar un backup anterior; sesiones, actividad, checks y auditoría se unen; y un restore ciego o una adopción vencen todos los tickets abiertos (`EXPIRED`). Un lente nuevo en la base viva cuenta como recibo durable (`NEWER_RECEIPT` sin `--force-data-loss`). El ledger OAuth vive en otro archivo (`ZANA_OAUTH_DB`) y no participa del restore. Ver `tests/remote-schema-v7.test.mjs`.

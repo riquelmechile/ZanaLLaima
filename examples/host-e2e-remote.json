@@ -1,0 +1,18 @@
+{
+  "schema": "zana-host-e2e-remote/1",
+  "version": "0.6.0",
+  "assurance": "NOT_OBSERVED",
+  "note": "Plantilla. La completa el operador después del deploy. assurance pasa a OPERATOR_OBSERVED solo con todos los links.",
+  "server": {"publicUrl": "https://zanallaima.quintoestado.com/mcp", "deployedSha": null, "health": null},
+  "sandboxRepo": "riquelmechile/zanallaima-sandbox",
+  "conversationA": {"sessionId": null, "sessionCreatedAt": null, "missionId": null, "pullRequest": null, "checkRuns": [], "ticketIssuedAt": null},
+  "conversationB": {"sessionId": null, "sessionCreatedAt": null, "differentSessionThanA": null, "execution": null, "review": null, "zana4rStatus": null},
+  "negativeCases": {
+    "reviewerWriteRefused": {"observed": null, "auditId": null},
+    "authorClaimRefused": {"observed": null, "auditId": null},
+    "pushAfterTicketStale": {"observed": null, "auditId": null},
+    "mergeOrMainWriteRefused": {"observed": null, "auditId": null}
+  },
+  "sessionSeparationObserved": null,
+  "auditExcerpt": []
+}

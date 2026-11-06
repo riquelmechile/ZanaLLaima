@@ -68,3 +68,36 @@ test('W-FTS: si el rebuild falla queda metadata.fts=0 y la búsqueda usa LIKE',a
     assert.deepEqual([r.mode,'fallback' in r,r.entries.length],['like',false,1]);
   }finally{await s.cleanup();}
 });
+
+test('W-FTS: metadata.fts=1 sin tabla FTS, o un MATCH que falla, cae a LIKE con fallback',async()=>{
+  const s=await store();
+  try{
+    await s.save('Sin punto y coma');
+    await s.write(db=>db.exec('DROP TRIGGER project_memory_ai;DROP TRIGGER project_memory_ad;DROP TRIGGER project_memory_au;DROP TABLE project_memory_fts'));
+    const missing=await s.search('punto coma');
+    assert.deepEqual([missing.mode,missing.fallback,missing.entries.map(e=>e.body)],['like',true,['Sin punto y coma']]);
+    // La siguiente conexión de escritura la recrea; un MATCH que igual falla cae a LIKE.
+    await s.write(()=>{});
+    const broken=await s.read(db=>searchMemory({prepare:sql=>{
+      if(/MATCH/.test(sql))throw new Error('database disk image is malformed');
+      return db.prepare(sql);
+    }},{query:'coma'}));
+    assert.deepEqual([broken.mode,broken.fallback,broken.entries.length],['like',true,1]);
+    // Sin falla no hay fallback.
+    assert.equal('fallback' in await s.search('coma'),false);
+  }finally{await s.cleanup();}
+});
+
+test('W-FTS: FTS y LIKE exigen cada palabra y separan en _',async()=>{
+  const s=await store();
+  try{
+    for(const body of ['Sin punto y coma','Usa punto final','Una coma sola','La var de mi módulo'])await s.save(body);
+    for(const fts of ['1','0']){
+      await s.write(db=>db.prepare("UPDATE metadata SET value=? WHERE key='fts'").run(fts));
+      const r=await s.search('punto coma');
+      assert.deepEqual([r.mode,r.entries.map(e=>e.body)],[fts==='1'?'fts':'like',['Sin punto y coma']]);
+      assert.deepEqual(await s.bodies('mi_var'),['La var de mi módulo'],fts);
+      assert.deepEqual(await s.bodies('%-'),[],fts);
+    }
+  }finally{await s.cleanup();}
+});

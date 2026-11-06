@@ -32,4 +32,6 @@ Esta conversación hace los cuatro `zana_review_lens_submit(ticket, lens, findin
 
 `zana_review_finalize(ticket, execution)` con `PARALLEL_SUBAGENTS` o `SEQUENTIAL_SAME_CONVERSATION`, lo que de verdad ocurrió. Si el head del PR cambió, `STALE_SHA` y no se publica nada. Si no, se publica la review con la cuenta revisora y el status `zana/4r`. Si la respuesta se cortó, vuelve a llamar a finalize: adopta la review ya publicada y no duplica.
 
+Si el autor pidió otro ticket mientras finalizabas, tu ticket quedó reemplazado: finalize responde `published: false` (no se publicó nada), o `inconsistent: true` si la review alcanzó a publicarse antes de notarlo; en ambos casos no cuenta para el merge. No reintentes: con el ticket ya no reclamado, finalize da `TICKET_NOT_CLAIMED`. Dile al usuario que revise el ticket vigente en una conversación nueva.
+
 Lo que esto prueba y lo que no: `docs/solo-rdd.md`.

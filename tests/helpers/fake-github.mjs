@@ -121,6 +121,8 @@ export async function fakeGitHubApi(){
 // configured toolsets) with its real annotations, plus `extra` tools.
 export async function fakeGitHubMcp({extra=[],echoToken=false,annotationsOverride={}}={}){
   const calls=[];
+  // Tests may set a JSON payload per tool (shape of the real GitHub MCP answer).
+  const responses={};
   const tools=Object.entries(CATALOG.tools).filter(([,t])=>t.toolset!=='issues').map(([name,t])=>({name,
     annotations:annotationsOverride[name]??{readOnlyHint:t.readOnlyHint,...(t.destructiveHint===null?{}:{destructiveHint:t.destructiveHint})}}));
   tools.push(...extra);
@@ -129,6 +131,7 @@ export async function fakeGitHubMcp({extra=[],echoToken=false,annotationsOverrid
     for(const t of tools)server.registerTool(t.name,{description:'fake '+t.name,inputSchema:z.looseObject({}),annotations:t.annotations},
       async(args,ctx)=>{
         calls.push({name:t.name,args,meta:ctx.mcpReq?._meta??null});
+        if(responses[t.name])return {content:[{type:'text',text:JSON.stringify(responses[t.name])}]};
         return {content:[{type:'text',text:'ok '+t.name+(echoToken?' Authorization: Bearer '+AUTHOR_TOKEN:'')}]};
       });
     return server;
@@ -146,5 +149,5 @@ export async function fakeGitHubMcp({extra=[],echoToken=false,annotationsOverrid
     res.end(Buffer.from(await response.arrayBuffer()));
   });
   const url=await listen(http);
-  return {url:url+'/mcp',calls,headers,tools,close:()=>new Promise(ok=>{http.closeAllConnections?.();http.close(ok);})};
+  return {url:url+'/mcp',calls,headers,tools,responses,close:()=>new Promise(ok=>{http.closeAllConnections?.();http.close(ok);})};
 }

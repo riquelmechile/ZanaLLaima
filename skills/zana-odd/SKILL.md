@@ -48,6 +48,7 @@ Eres la conversación **autora**. Escribes en GitHub solo con `zana_ds_github`, 
 
    Nada de `.github/workflows/**`, `.git/`, `%`, `?`, `#` ni caracteres de control en las rutas.
 4. Cada rechazo trae un código legible. No lo rodees con otra tool: corrige la causa.
+5. **Chat limpio.** No pegues el contenido de los archivos en el chat ni lo repitas antes o después de escribirlo: escribe directo con la tool. Las escrituras exitosas responden compactas (`compacted: true`: rutas, SHA y link cuando GitHub los entrega). Al usuario dale un resumen de hasta 3 líneas (archivos, SHA, qué cambió); si quiere ver el código, pásale el link del commit o del PR.
 
 ## 4. Checks hasta verde
 

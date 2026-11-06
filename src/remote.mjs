@@ -18,6 +18,7 @@ import {DownstreamGateway} from './downstream.mjs';
 import {createGitHubPolicy,CATALOG,liveProblems,missionBranch} from './github-policy.mjs';
 import {createChecks} from './checks.mjs';
 import {createReview,LENSES,SEVERITIES,EXECUTIONS} from './remote-review.mjs';
+import {compactWrite} from './downstream-compact.mjs';
 import {deliveryStatus,mergeMission,ticketView} from './github-delivery.mjs';
 import {listSkills,loadSkill} from './skills.mjs';
 import {ActorSigner} from './actor-assertion.mjs';
@@ -33,7 +34,7 @@ export const REMOTE_INSTRUCTIONS=[
   'Si el primer mensaje de la conversación trae un ticket ZR-, carga solo la skill zana-4r con zana_skill_load y no llames ninguna tool de misión antes de zana_review_claim.',
   'Si no, al empezar carga zana-odd con zana_skill_load y síguela: con checks verdes, zana_complete_unit antes de zana_review_request.',
   'La verdad es el SHA en GitHub y sus checks de Actions. No hay shell: escribe solo con zana_ds_github en la rama zana/<missionId>.',
-  'No mergees por el downstream; zana_merge solo si el usuario lo pide. No apruebes reviews y no inventes evidencia. El modelo y los subagentes que declares son palabra del anfitrión.',
+  'No pegues el contenido de los archivos en el chat: escribe directo con la tool y responde al usuario con un resumen corto (archivos, SHA, link). No mergees por el downstream; zana_merge solo si el usuario lo pide. No apruebes reviews y no inventes evidencia. El modelo y los subagentes que declares son palabra del anfitrión.',
 ].join(' ');
 
 const REUSED=['zana_profile','zana_capability_status','zana_mission_status','zana_next_batch','zana_start_batch',
@@ -379,7 +380,8 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       const reviewer=id?await rr(db=>Boolean(db&&sessionReviews(db,session.sessionId,id))):false;
       const result=await gateway.call({host:session.host,sessionId:session.sessionId,clientId:session.clientId,role:reviewer?'reviewer':'author'},
         operation,args,{missionId:id??null});
-      return {passthrough:result};
+      // Successful writes come back compact (paths, SHA, link); reads stay whole.
+      return {passthrough:CATALOG.tools[operation]?.zana==='write'?compactWrite(operation,args,result):result};
     },
   };
 

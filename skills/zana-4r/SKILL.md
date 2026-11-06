@@ -26,7 +26,7 @@ Eres la conversación **revisora**, abierta por el usuario con un mensaje como "
 
 ## 4. Enviar los lentes desde esta conversación
 
-Esta conversación hace los cuatro `zana_review_lens_submit(ticket, lens, findings[], evidence[])`, uno por lente. Cada hallazgo lleva `severity` (`BLOCKER`, `CRITICAL`, `WARNING` o `SUGGESTION`), `location` (`archivo:línea`) y `evidence`. Un lente limpio envía `findings: []` con evidencia concreta. **Los lentes no corrigen código.**
+Esta conversación hace los cuatro `zana_review_lens_submit(ticket, lens, findings[], evidence[])`, uno por lente. Cada hallazgo lleva `severity` (`BLOCKER`, `CRITICAL`, `WARNING` o `SUGGESTION`), `location` (`archivo:línea`) y `evidence`. Un lente limpio envía `findings: []` con evidencia concreta. **Los lentes no corrigen código.** Reporta los hallazgos con `archivo:línea`; no copies el diff en el chat.
 
 ## 5. Finalizar una vez
 

@@ -28,7 +28,7 @@ import {budgetOf,remainingStarts} from './budget.mjs';
 import {within,DeadlineError} from './deadline.mjs';
 import {clean,redactDeep,envSecrets} from './redact.mjs';
 import {closeMission} from './lifecycle.mjs';
-import {readPointer,resolveProject,memoryContext,missionProject,setMissionProject,saveSummary} from './project-memory.mjs';
+import {readPointer,resolveProject,memoryContext,missionProject,setMissionProject,saveSummary,saveEntry,searchMemory} from './project-memory.mjs';
 
 const packageVersion=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8')).version;
 export const REMOTE_INSTRUCTIONS=[
@@ -36,6 +36,7 @@ export const REMOTE_INSTRUCTIONS=[
   'Si el primer mensaje de la conversación trae un ticket ZR-, carga solo la skill zana-4r con zana_skill_load y no llames ninguna tool de misión antes de zana_review_claim.',
   'Si no, al empezar carga zana-odd con zana_skill_load y síguela: con checks verdes, zana_complete_unit antes de zana_review_request.',
   'La verdad es el SHA en GitHub y sus checks de Actions. No hay shell: escribe solo con zana_ds_github en la rama zana/<missionId>.',
+  'Lee memory.context de zana_mission_init antes de planificar; si memory.pointer no está OK, escribe primero .zanallaima.json. Guarda con zana_memory_save las decisiones que un próximo desarrollador necesitaría; zana_mission_close exige el resumen.',
   'No pegues el contenido de los archivos en el chat: escribe directo con la tool y responde al usuario con un resumen corto (archivos, SHA, link). No mergees por el downstream; zana_merge solo si el usuario lo pide. No apruebes reviews y no inventes evidencia. El modelo y los subagentes que declares son palabra del anfitrión.',
 ].join(' ');
 
@@ -49,6 +50,8 @@ const note=()=>z.array(z.object({topic:z.string().min(3).max(80),body:z.string()
 // The mandatory close summary (§6.5); the stdio close keeps its frozen schema.
 const CLOSE_SCHEMA=z.object({summary:z.object({done:z.string().min(20).max(1000),decisions:note(),conventions:note(),
   pending:note(),keyFiles:z.array(z.string().min(1).max(260)).max(30)}).strict()}).strict();
+const projectId=()=>z.string().regex(/^zp_[0-9a-f]{16}$/);
+const NOTE_KINDS=['decision','convention','issue','pending'];
 const NEW_TOOLS={
   zana_mission_init:['Create one remote mission bound to a GitHub repository and base; code units declare code:true. Returns memory: the project context to read before planning and the .zanallaima.json pointer to write first when its status is not OK',false,
     z.object({spec:z.record(z.string(),z.unknown()),github:z.object({repo:z.string().min(3).max(201),base:z.string().min(1).max(200)}).strict()}).strict()],
@@ -85,6 +88,14 @@ const NEW_TOOLS={
     z.object({missionId:missionId()}).strict()],
   zana_merge:['Merge the mission PR only when delivery status is all green on one head SHA (sha-guarded)',false,
     z.object({missionId:missionId()}).strict()],
+  zana_memory_context:['Read-only: project memory (conventions, decisions, open pending, issues, last summaries; 16 KB) of projectId, of missionId, or of the active mission',true,
+    z.object({projectId:projectId().optional(),missionId:missionId().optional()}).strict()],
+  zana_memory_search:['Read-only: full-text search of the project memory (the active mission project, projectId, or every project with all:true); live entries first, superseded ones marked',true,
+    z.object({query:z.string().min(2).max(200),projectId:projectId().optional(),all:z.boolean().optional(),limit:z.number().int().min(1).max(50).optional()}).strict()],
+  zana_memory_save:['Author session with the mission ACTIVE: save a decision, convention, issue or pending to the mission project; the same kind and topic replaces the previous entry',false,
+    z.object({missionId:missionId(),kind:z.enum(NOTE_KINDS),topic:z.string().min(3).max(80),body:z.string().min(3).max(1000)}).strict()],
+  zana_memory_resolve:['Author session with the mission ACTIVE: mark a pending entry (seq) of the mission project as resolved',false,
+    z.object({missionId:missionId(),seq:z.number().int().positive()}).strict()],
   zana_ds_github:['GitHub MCP downstream router: operation "index" lists tools and their ZanaLLaima class; any other operation calls that tool',false,
     z.object({operation:z.string().min(1).max(64),arguments:z.record(z.string(),z.unknown()).optional(),
       missionId:missionId().optional()}).strict()],
@@ -140,6 +151,25 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     const result=await run();
     await rw(db=>recordActivity(db,{sessionId:session.sessionId,clientId:session.clientId,missionId,kind:'MISSION_WRITE',tool}));
     return result;
+  }
+
+  // The project of the active mission; one without it (created in 0.6.0 or
+  // with GitHub down) reads the pointer here, before the transaction.
+  async function projectFor(session){
+    const pre=await rr((db,mission)=>{const rm=allow(db,mission,session);return {id:mission.id,rm,projectId:missionProject(db,mission.id)};});
+    if(!pre.projectId){
+      try{pre.found=await readPointer(github,pre.rm.repo,pre.rm.base);}
+      catch(error){throw new Error('MEMORY_UNAVAILABLE: the project of this mission cannot be resolved ('+clean(error,secrets())+'); retry');}
+    }
+    return pre;
+  }
+  function projectIn(db,mission,pre){
+    if(mission.id!==pre.id||(mission.status||'ACTIVE')!=='ACTIVE')throw new Error('MISSION_NOT_ACTIVE: mission '+pre.id+' is not the active mission');
+    const id=missionProject(db,mission.id);
+    if(id)return {projectId:id};
+    const resolved=resolveProject(db,{...pre.found,missionId:mission.id});
+    setMissionProject(db,mission.id,resolved.projectId);
+    return resolved;
   }
 
   const githubPolicy=createGitHubPolicy({config,deps:{github,
@@ -245,19 +275,12 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       if(!parsed.success)throw new Error('SUMMARY_REQUIRED: zana_mission_close needs summary {done, decisions, conventions, pending, keyFiles}: '+
         parsed.error.issues.map(i=>i.path.join('.')+' '+i.message).join('; ').slice(0,200));
       const {summary}=parsed.data;
-      const pre=await rr((db,mission)=>{const rm=allow(db,mission,session);return {id:mission.id,rm,projectId:missionProject(db,mission.id)};});
-      let found=null;
-      if(!pre.projectId){
-        try{found=await readPointer(github,pre.rm.repo,pre.rm.base);}
-        catch(error){throw new Error('MEMORY_UNAVAILABLE: the project of this mission cannot be resolved ('+clean(error,secrets())+'); retry zana_mission_close');}
-      }
+      const pre=await projectFor(session);
       let status,memory;
       await transact((existing,txc)=>{
         guard(txc.db,existing,session,'zana_mission_close');
-        if(existing.id!==pre.id)throw new Error('MISSION_NOT_ACTIVE: mission '+pre.id+' is not the active mission');
+        const {projectId,pointer}=projectIn(txc.db,existing,pre);
         status=closeMission(existing);
-        let projectId=missionProject(txc.db,existing.id),pointer;
-        if(!projectId){({projectId,pointer}=resolveProject(txc.db,{...found,missionId:existing.id}));setMissionProject(txc.db,existing.id,projectId);}
         const sha=txc.db.prepare('SELECT sha FROM review_tickets WHERE mission_id=? ORDER BY created_at DESC LIMIT 1').get(existing.id)?.sha??null;
         memory={...saveSummary(txc.db,{projectId,missionId:existing.id,summary,sha,sessionId:session.sessionId,secrets:secrets()}),
           ...(pointer?{pointer}:{})};
@@ -406,6 +429,40 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
           recovered:result.recovered??false},category:'merge'});
       return result;
     },
+    zana_memory_context:({projectId:pid,missionId:id},session)=>rr((db,mission)=>{
+      if(pid&&id)throw new Error('INVALID_ARGUMENTS: pass projectId or missionId, not both');
+      const wanted=pid??missionProject(db,id??mission?.id??'');
+      const project=wanted?db.prepare('SELECT project_id,repo FROM projects WHERE project_id=?').get(wanted):null;
+      if(!project)throw new Error('NO_PROJECT: '+(pid?'unknown project '+pid:'that mission has no project yet (it is resolved at zana_mission_close)'));
+      return {repo:project.repo,...memoryContext(db,project.project_id,{maxBytes:16384})};
+    }),
+    zana_memory_search:({query,projectId:pid,all=false,limit=10},session)=>rr((db,mission)=>{
+      if(typeof query!=='string'||query.trim().length<2||query.length>200)throw new Error('INVALID_QUERY: query needs 2 to 200 characters');
+      const scope=all===true?null:pid??missionProject(db,mission?.id??'');
+      if(all!==true&&!scope)throw new Error('NO_PROJECT: pass projectId or all:true (no active mission with a project)');
+      return {query,scope:scope??'all',...searchMemory(db,{query,projectId:scope,limit:Number.isInteger(limit)&&limit>=1&&limit<=50?limit:10})};
+    }),
+    async zana_memory_save({missionId:id,kind,topic,body},session){
+      if(!NOTE_KINDS.includes(kind))throw new Error('INVALID_MEMORY_KIND: use '+NOTE_KINDS.join(', ')+' (the summary goes in zana_mission_close)');
+      const pre=await projectFor(session);
+      return rw((db,mission)=>{
+        guard(db,mission,session,'zana_memory_save');
+        if(mission.id!==id)throw new Error('MISSION_NOT_ACTIVE: mission '+id+' is not the active mission');
+        const {projectId:project,pointer}=projectIn(db,mission,pre);
+        return {missionId:id,projectId:project,...saveEntry(db,{projectId:project,kind,topic,body,missionId:id,sessionId:session.sessionId,secrets:secrets()}),
+          ...(pointer?{pointer}:{})};
+      });
+    },
+    zana_memory_resolve:({missionId:id,seq},session)=>rw((db,mission)=>{
+      guard(db,mission,session,'zana_memory_resolve');
+      if(mission.id!==id||(mission.status||'ACTIVE')!=='ACTIVE')throw new Error('MISSION_NOT_ACTIVE: mission '+id+' is not the active mission');
+      const project=missionProject(db,id);
+      const row=db.prepare('SELECT * FROM project_memory WHERE seq=? AND project_id=?').get(seq,project);
+      if(row?.kind!=='pending'||row.superseded_by)throw new Error('NOT_PENDING: '+seq+' is not a live pending entry of the project of mission '+id);
+      const resolvedAt=row.resolved_at??nowIso();
+      db.prepare('UPDATE project_memory SET resolved_at=? WHERE seq=?').run(resolvedAt,seq);
+      return {missionId:id,projectId:project,seq,resolvedAt};
+    }),
     async zana_ds_github({operation,arguments:args={},missionId:id},session){
       if(operation==='index'){
         await gateway.ensureFresh();

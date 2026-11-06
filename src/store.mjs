@@ -139,6 +139,7 @@ function connect(path, readonly = false) {
         const auditColumns=db.prepare('PRAGMA table_info(remote_audit)').all().map(x=>x.name);
         if(!auditColumns.includes('category'))db.exec("ALTER TABLE remote_audit ADD COLUMN category TEXT NOT NULL DEFAULT 'other'");
         db.exec('CREATE INDEX IF NOT EXISTS remote_audit_category ON remote_audit(category,seq)');
+        setupMemoryFts(db);
         const unitColumns=db.prepare('PRAGMA table_info(units)').all().map(x=>x.name);
         if(!unitColumns.includes('attempts')) db.exec('ALTER TABLE units ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0');
         db.exec('PRAGMA user_version = ' + SCHEMA_VERSION + '; COMMIT');
@@ -149,6 +150,21 @@ function connect(path, readonly = false) {
     }
     return db;
   } catch (e) { db.close(); throw e; }
+}
+
+// FTS5 index of project_memory (external content, kept by triggers). If this
+// Node's SQLite lacks FTS5, metadata fts='0' and search falls back to LIKE.
+export function setupMemoryFts(db){
+  const existed=Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE name='project_memory_fts'").get());
+  let fts='1';
+  try{
+    db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS project_memory_fts USING fts5(topic,body,content='project_memory',content_rowid='seq')");
+    db.exec('CREATE TRIGGER IF NOT EXISTS project_memory_ai AFTER INSERT ON project_memory BEGIN INSERT INTO project_memory_fts(rowid,topic,body) VALUES(new.seq,new.topic,new.body); END');
+    db.exec("CREATE TRIGGER IF NOT EXISTS project_memory_ad AFTER DELETE ON project_memory BEGIN INSERT INTO project_memory_fts(project_memory_fts,rowid,topic,body) VALUES('delete',old.seq,old.topic,old.body); END");
+    db.exec("CREATE TRIGGER IF NOT EXISTS project_memory_au AFTER UPDATE OF topic,body ON project_memory BEGIN INSERT INTO project_memory_fts(project_memory_fts,rowid,topic,body) VALUES('delete',old.seq,old.topic,old.body); INSERT INTO project_memory_fts(rowid,topic,body) VALUES(new.seq,new.topic,new.body); END");
+    if(!existed)db.exec("INSERT INTO project_memory_fts(project_memory_fts) VALUES('rebuild')");
+  }catch{fts='0';}
+  db.prepare("INSERT INTO metadata(key,value) VALUES('fts',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(fts);
 }
 
 async function ensureFile(path) {

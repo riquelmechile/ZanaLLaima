@@ -113,3 +113,23 @@ export function saveSummary(db,{projectId,missionId,summary,sha=null,sessionId=n
     for(const {topic,body} of summary[field])saved.push(saveEntry(db,{...base,kind,topic,body}));
   return {projectId,saved:saved.length,superseded:saved.reduce((n,s)=>n+s.superseded.length,0)};
 }
+
+// Búsqueda (§6.6): FTS5 MATCH por palabras (o LIKE si metadata fts='0'), en el
+// proyecto o en todos (all); vivas primero y las supersedidas marcadas.
+export function searchMemory(db,{query,projectId=null,limit=10}){
+  const fts=db.prepare("SELECT value FROM metadata WHERE key='fts'").get()?.value!=='0';
+  const words=String(query).match(/[\p{L}\p{N}_]+/gu)??[];
+  const scope=projectId?' AND m.project_id=?':'',args=projectId?[projectId]:[];
+  const order=' ORDER BY m.superseded_by IS NOT NULL,';
+  let rows;
+  if(fts&&words.length){
+    rows=db.prepare('SELECT m.* FROM project_memory_fts JOIN project_memory m ON m.seq=project_memory_fts.rowid WHERE project_memory_fts MATCH ?'+
+      scope+order+' bm25(project_memory_fts) LIMIT ?').all(words.map(w=>'"'+w+'"').join(' '),...args,limit);
+  }else{
+    const like='%'+String(query).replace(/[\\%_]/g,c=>'\\'+c)+'%';
+    rows=db.prepare("SELECT m.* FROM project_memory m WHERE (m.topic LIKE ? ESCAPE '\\' OR m.body LIKE ? ESCAPE '\\')"+
+      scope+order+' m.seq DESC LIMIT ?').all(like,like,...args,limit);
+  }
+  return {mode:fts&&words.length?'fts':'like',entries:rows.map(r=>({...view(r),projectId:r.project_id,
+    ...(r.superseded_by?{superseded:true,supersededBy:r.superseded_by}:{}),...(r.resolved_at?{resolvedAt:r.resolved_at}:{})}))};
+}

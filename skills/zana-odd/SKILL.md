@@ -21,6 +21,7 @@ Eres la conversación **autora**. Escribes en GitHub solo con `zana_ds_github`, 
    Las unidades son `READ`; `code: true` marca las que cambian código. Encadena las de código con `dependsOn` para no escribir la misma rama en paralelo. La rama es siempre `zana/<missionId>`.
 3. **Memoria del proyecto.** Lee `memory.context` de la respuesta antes de planificar: convenciones, decisiones, pendientes, issues y los últimos resúmenes del repo. Respétalos o dile al usuario por qué no.
 4. Si `memory.pointer.status` no es `OK`, el **primer archivo** de la rama de la misión es `.zanallaima.json` (`create_or_update_file` en la raíz) con el `memory.pointer.content` exacto, en JSON. No cuenta en el presupuesto de líneas. Si viene `memory.error`, GitHub no respondió: sigue sin memoria y avísalo en una línea.
+5. Durante el trabajo, guarda con `zana_memory_save` (`missionId`, `kind`: `decision`, `convention`, `issue` o `pending`, `topic`, `body`) cada decisión o convención que un próximo desarrollador necesitaría; el mismo `topic` reemplaza la entrada anterior. `zana_memory_resolve(missionId, seq)` cierra un `pending` ya resuelto. `zana_memory_search` busca en el proyecto (`all: true`: en todos). Más en `docs/memory.md` del repo de ZanaLLaima.
 
 ## 2. La unidad de código y su lease
 

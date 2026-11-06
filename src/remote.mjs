@@ -18,7 +18,7 @@ import {DownstreamGateway} from './downstream.mjs';
 import {createGitHubPolicy,CATALOG,liveProblems,missionBranch} from './github-policy.mjs';
 import {createChecks} from './checks.mjs';
 import {createReview,LENSES,SEVERITIES,EXECUTIONS} from './remote-review.mjs';
-import {deliveryStatus,mergeMission} from './github-delivery.mjs';
+import {deliveryStatus,mergeMission,ticketView} from './github-delivery.mjs';
 import {listSkills,loadSkill} from './skills.mjs';
 import {ActorSigner} from './actor-assertion.mjs';
 import {recordActivity,remoteMission,sessionReviews,sessionWrote,sessionIsMissionAuthor,writeAudit,readAudit} from './remote-state.mjs';
@@ -311,7 +311,6 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       let result;
       // Serialized with ticket requests and publications of this mission; the
       // DB re-read before the merge call also covers other processes.
-      const view=t=>t?JSON.stringify([t.ticket_id,t.state,t.verdict??null,t.sha,t.github_review_id??null]):'none';
       try{
         result=await review.withMissionLock(id,async()=>{
           const evaluated=await review.latest(id);
@@ -319,7 +318,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
             revalidate:async()=>{
               const now=await review.latest(id);
               // Any live (possibly blocking) ticket would be newer than the evaluated one.
-              return view(now)!==view(evaluated)
+              return ticketView(now)!==ticketView(evaluated)
                 ?'Current review ticket changed during the merge checks ('+(now?now.ticket_id+' '+now.state:'none')+'); evaluate again':null;
             },
             onAttempt:headSha=>audit({caller:session,tool:'zana_merge.attempt',missionId:id,outcome:'ATTEMPT',

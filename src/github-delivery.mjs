@@ -90,13 +90,16 @@ export async function deliveryStatus({github,config,ctx,openBlockingTickets=[],c
     ...(deadline.partial.length?{partial:deadline.partial}:{}),readOnly:true};
 }
 
+// The parts of a ticket that decide a merge; any change means "evaluate again".
+export const ticketView=t=>t?JSON.stringify([t.ticket_id,t.state,t.verdict??null,t.sha,t.github_review_id??null]):'none';
+
 // Merge only when deliveryStatus is green on one head SHA. The merge API gets
 // sha = that head (equivalent to --match-head-commit): if the head moved,
 // GitHub refuses and ZanaLLaima answers STALE_SHA without retrying. If the
 // answer is lost, the pull request is read again: merged means MERGED.
-// revalidate() runs after every GitHub read and right before the merge call:
-// it re-reads the mission's current ticket in the DB and returns a blocker
-// when it is no longer the one evaluated (another request may have run).
+// revalidate() runs once, after all the GitHub reads and right before the
+// merge call: it re-reads the mission's current ticket in the DB and returns a
+// blocker when it is no longer the one evaluated (another request may have run).
 export async function mergeMission({github,config,ctx,openBlockingTickets,currentTicket=null,revalidate=async()=>null,onAttempt=async()=>{}}){
   if(!config.mergeEnabled)return {merged:false,state:'MERGE_DISABLED',reason:'ZANA_MERGE_ENABLED=false'};
   const status=await deliveryStatus({github,config,ctx,openBlockingTickets,currentTicket});

@@ -51,9 +51,25 @@ test('W1 redacción: URL con credenciales conserva esquema y host',()=>{
   assert.equal(redactStored('ver postgres://admin:hunter2@db.example.com:5432/x y https://u:p@h.io/a'),
     'ver postgres://[redacted]@db.example.com:5432/x y https://[redacted]@h.io/a');
 });
-test('W1 redacción: asignaciones conservan la clave',()=>{
-  assert.equal(redactStored('password=hunter2 API_KEY: abc123 aws_secret_access_key = wJalrXUtn "token":"t0k3n" passwd:x'),
-    'password=[redacted] API_KEY: [redacted] aws_secret_access_key = [redacted] "token":[redacted] passwd:[redacted]');
+const REDACTS={
+  asignaciones:['password=hunter2 API_KEY: abc123 aws_secret_access_key = wJalrXUtn "token":"t0k3n" passwd:xyz123',
+    'password=[redacted] API_KEY: [redacted] aws_secret_access_key = [redacted] "token":[redacted] passwd:[redacted]'],
+  'con prefijo':['DB_PASSWORD=hunter2 GITHUB_TOKEN=xyz123 STRIPE_API_KEY=k1k2k3 client_secret=cs1234 access_token=abc123def456 refresh_token: zzzzzz',
+    'DB_PASSWORD=[redacted] GITHUB_TOKEN=[redacted] STRIPE_API_KEY=[redacted] client_secret=[redacted] access_token=[redacted] refresh_token: [redacted]'],
+  'entre comillas':['secret = "dos palabras" y token=\'otra frase\' fin','secret = [redacted] y token=[redacted] fin'],
+  'URL sin usuario':['redis://:hunter2@cache:6379/0','redis://[redacted]@cache:6379/0'],
+  'pk_live, whsec y hf':['pk_live_'+'a'.repeat(24)+' whsec_'+'b'.repeat(32)+' hf_'+'c'.repeat(34),'[redacted] [redacted] [redacted]'],
+  'Authorization Basic':['Authorization: Basic dXNlcjpwYXNzd29yZA==','Authorization: Basic [redacted]'],
+  'asignación seguida de PEM':['token: -----BEGIN PRIVATE KEY-----\nMIIEvQIBADAN\n-----END PRIVATE KEY----- fin','token: [redacted] fin'],
+};
+for(const [name,[input,output]] of Object.entries(REDACTS))test('W1 redacción: '+name,()=>assert.equal(redactStored(input),output));
+for(const keep of ['token: usar JWT','password: z.string().min(8)','token === null','PASSWORD_FILE=/run/secreto','Basic configuración del servidor'])
+  test('W1 no redacta: '+keep,()=>assert.equal(redactStored(keep),keep));
+test('S-1: patrones acotados, 100 KB hostiles en menos de 200 ms',()=>{
+  for(const evil of ['eyJ-'.repeat(25_000),'a'.repeat(100_000)+'://','a_'.repeat(50_000)+'=']){
+    const t0=performance.now();redactStored(evil);
+    assert.ok(performance.now()-t0<200,'lento: '+evil.slice(0,8));
+  }
 });
 test('W1 redacción: texto normal no cambia y la redacción previa se mantiene',()=>{
   const plain='La decisión: usar tokens cortos; el password se rota cada 90 días a las 10:30. Ver https://github.com/o/r/pull/7, '+
@@ -91,7 +107,7 @@ test('W3: un puntero mal formado no tumba init ni close',async()=>{
     const s=await f.session(),id='zp_'+'a'.repeat(16);
     const bad=[{zanallaima:1,projectId:[id],githubRepoId:4242},{zanallaima:1,projectId:123},{zanallaima:1,projectId:{}},
       {zanallaima:1,projectId:null},[{zanallaima:1,projectId:id}],5,{zanallaima:1,projectId:id,githubRepoId:-1},
-      {zanallaima:1,projectId:id,githubRepoId:'4242'},{zanallaima:1,projectId:id,githubRepoId:1.5}];
+      {zanallaima:1,projectId:id,githubRepoId:'4242'},{zanallaima:1,projectId:id,githubRepoId:1.5},{zanallaima:1,projectId:id,githubRepoId:null}];
     for(const pointer of bad){
       f.api.state.files[POINTER_PATH]=JSON.stringify(pointer);
       const memory=await initOnly(f,s);

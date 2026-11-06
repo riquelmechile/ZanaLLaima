@@ -74,6 +74,10 @@ test('memory search: proyecto actual, all:true, supersedidas al final y LIKE con
     assert.deepEqual([all.scope,all.entries.length,all.entries.every(e=>!e.superseded)],['all',2,true]);
     assert.equal((await f.call('zana_memory_search',{query:'punto',all:true},s)).entries.length,3);
     assert.match((await f.call('zana_memory_search',{query:' x'},s)).error,/INVALID_QUERY/);
+    // Como zana_memory_context: projectId y all:true no van juntos, y un projectId desconocido es NO_PROJECT.
+    assert.match((await f.call('zana_memory_search',{query:'punto',projectId:a.memory.projectId,all:true},s)).error,/^INVALID_ARGUMENTS: /);
+    assert.equal((await f.call('zana_memory_search',{query:'punto',projectId:a.memory.projectId,all:false},s)).entries.length,2);
+    assert.match((await f.call('zana_memory_search',{query:'punto',projectId:'zp_'+'0'.repeat(16)},s)).error,/^NO_PROJECT: unknown project zp_0{16}/);
     // Only symbols: no FTS words, LIKE on the raw text.
     assert.deepEqual((await f.call('zana_memory_search',{query:'%-',all:true},s)).mode,'like');
     // A manual delete keeps the FTS index consistent (AFTER DELETE trigger).

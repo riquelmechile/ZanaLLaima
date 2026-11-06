@@ -454,6 +454,8 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     }),
     zana_memory_search:({query,projectId:pid,all=false,limit=10},session)=>rr((db,mission)=>{
       if(typeof query!=='string'||query.trim().length<2||query.length>200)throw new Error('INVALID_QUERY: query needs 2 to 200 characters');
+      if(all===true&&pid)throw new Error('INVALID_ARGUMENTS: pass projectId or all:true, not both');
+      if(pid&&!db.prepare('SELECT 1 FROM projects WHERE project_id=?').get(pid))throw new Error('NO_PROJECT: unknown project '+pid);
       const scope=all===true?null:pid??missionProject(db,mission?.id??'');
       if(all!==true&&!scope)throw new Error('NO_PROJECT: pass projectId or all:true (no active mission with a project)');
       return {query,scope:scope??'all',...searchMemory(db,{query,projectId:scope,limit:Number.isInteger(limit)&&limit>=1&&limit<=50?limit:10})};

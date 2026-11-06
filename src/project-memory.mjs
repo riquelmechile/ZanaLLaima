@@ -74,7 +74,8 @@ export function memoryContext(db,projectId,{maxBytes=4096}={}){
   let used=Buffer.byteLength(JSON.stringify({projectId,entries:[],truncated:false})),truncated=false;
   for(const row of rows){
     const entry=view(row),size=Buffer.byteLength(JSON.stringify(entry))+1;
-    if(used+size>maxBytes){truncated=true;break;}
+    // An entry that does not fit is skipped, not the rest: smaller ones may still fit.
+    if(used+size>maxBytes){truncated=true;continue;}
     entries.push(entry);used+=size;
   }
   return {projectId,entries,truncated};
@@ -96,8 +97,9 @@ export function saveEntry(db,{projectId,kind,topic,body,missionId=null,sha=null,
 // El resumen obligatorio de zana_mission_close (§6.5), en la transacción del cierre.
 export function saveSummary(db,{projectId,missionId,summary,sha=null,sessionId=null,secrets=[]}){
   const base={projectId,missionId,sha,sessionId,secrets};
-  const files=summary.keyFiles.length?'\nArchivos clave: '+summary.keyFiles.join(', '):'';
-  const saved=[saveEntry(db,{...base,kind:'summary',topic:missionId,body:summary.done+files})];
+  // The key files survive the 1000-char cap: done is shortened first.
+  const files=summary.keyFiles.length?('\nArchivos clave: '+summary.keyFiles.join(', ')).slice(0,400):'';
+  const saved=[saveEntry(db,{...base,kind:'summary',topic:missionId,body:summary.done.slice(0,1000-files.length)+files})];
   for(const [field,kind] of [['decisions','decision'],['conventions','convention'],['pending','pending']])
     for(const {topic,body} of summary[field])saved.push(saveEntry(db,{...base,kind,topic,body}));
   return {projectId,saved:saved.length,superseded:saved.reduce((n,s)=>n+s.superseded.length,0)};

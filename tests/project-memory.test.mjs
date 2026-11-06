@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {remoteFixture,AUTHOR_TOKEN} from './helpers/remote-fixture.mjs';
 import {remoteRead,remoteWrite} from '../src/store.mjs';
-import {memoryContext,saveEntry,POINTER_PATH} from '../src/project-memory.mjs';
+import {memoryContext,saveEntry,saveSummary,POINTER_PATH} from '../src/project-memory.mjs';
 
 const spec={objective:'Misión de memoria',units:[{id:'a',effect:'READ',instruction:'Leer el repo'}]};
 const target={repo:'o/r',base:'main'};
@@ -142,6 +142,18 @@ test('el contexto se corta a maxBytes con truncated:true, en el orden del diseñ
     const big=await remoteRead(db=>memoryContext(db,projectId,{maxBytes:16384}));
     assert.deepEqual([big.truncated,big.entries.length],[false,22]);
     assert.deepEqual(big.entries.slice(-2).map(e=>e.kind),['issue','summary']);
+    // Small entries after the cut still get in: the issue and the summary fit at 4 KB.
+    assert.deepEqual(small.entries.slice(-2).map(e=>e.kind),['issue','summary']);
+    // One entry that cannot fit does not empty the context.
+    await remoteWrite(db=>saveEntry(db,{projectId,kind:'convention',topic:'enorme',body:'\u0001'.repeat(1000)}));
+    const odd=await remoteRead(db=>memoryContext(db,projectId));
+    assert.ok(odd.entries.length>0&&!odd.entries.some(e=>e.topic==='enorme'));
+    // A long done keeps its key files.
+    const long=await remoteWrite(db=>{
+      saveSummary(db,{projectId,missionId:'m-long',summary:summary({done:'z'.repeat(1000),keyFiles:['src/clave.mjs']})});
+      return db.prepare("SELECT body FROM project_memory WHERE topic='m-long'").get().body;
+    });
+    assert.ok(long.length<=1000&&long.endsWith('Archivos clave: src/clave.mjs'));
     assert.throws(()=>saveEntry({},{kind:'nope'}),/INVALID_MEMORY_KIND/);
   }finally{await f.cleanup();}
 });

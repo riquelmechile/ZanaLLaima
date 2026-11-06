@@ -69,8 +69,10 @@ export class GitHubApi{
           ...(body!==undefined?{'content-type':'application/json'}:{})},
         ...(body!==undefined?{body:JSON.stringify(body)}:{})});
     }catch(error){failed();throw new GitHubApiError(502,'GitHub unreachable: '+clean(error,this.secrets()));}
-    if(res.status>=500||res.status===429)failed();else{breaker.failures=0;breaker.openUntil=0;}
     const text=await res.text();
+    // 5xx, 429 and a rate-limit 403 (primary or secondary) count; any other answer closes it.
+    const rateLimited=res.status===403&&(res.headers.get('x-ratelimit-remaining')==='0'||res.headers.has('retry-after')||/rate limit/i.test(text));
+    if(res.status>=500||res.status===429||rateLimited)failed();else{breaker.failures=0;breaker.openUntil=0;}
     if(text.length>MAX_BYTES)throw new GitHubApiError(502,'GitHub response too large');
     if(!res.ok){
       let message='';

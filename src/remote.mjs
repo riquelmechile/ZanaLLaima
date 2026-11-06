@@ -230,9 +230,10 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     // the normal budget when started (maxWorkStarts, maxUnitAttempts) and the
     // next ticket consumes a review round (maxReviewRounds).
     async zana_correction_start({missionId:id},session){
+      // Only the unit id comes from this read; the authoritative check runs
+      // inside the mission transaction below.
       const last=await review.latest(id);
-      if(!last||last.state!=='FINALIZED'||last.verdict!=='REQUEST_CHANGES')
-        throw new Error('NO_CHANGES_REQUESTED: the latest ticket of mission '+id+' did not end in REQUEST_CHANGES');
+      if(!last)throw new Error('NO_CHANGES_REQUESTED: mission '+id+' has no review ticket');
       const unitId='fix-'+last.ticket_id.slice(0,8);
       let added;
       await transact((existing,txc)=>{
@@ -244,6 +245,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         if(now?.ticket_id!==last.ticket_id||now.state!=='FINALIZED'||now.verdict!=='REQUEST_CHANGES')
           throw new Error('NO_CHANGES_REQUESTED: the latest ticket of mission '+id+' changed and did not end in REQUEST_CHANGES');
         if((existing.status||'ACTIVE')!=='ACTIVE')throw new Error('MISSION_NOT_ACTIVE: mission '+id+' is '+existing.status);
+        if(!remoteMission(txc.db,id).codeUnits.length)throw new Error('NO_CODE_UNITS: mission '+id+' has no code units to correct');
         if(existing.units.some(u=>u.id===unitId))throw new Error('CORRECTION_EXISTS: unit '+unitId+' already corrects that review');
         if((existing.reviewCount||0)>=budgetOf(existing).maxReviewRounds)
           throw new Error('REVIEW_ROUNDS_EXHAUSTED: no review round left for a corrected candidate');

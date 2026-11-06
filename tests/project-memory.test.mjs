@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {remoteFixture,AUTHOR_TOKEN} from './helpers/remote-fixture.mjs';
 import {remoteRead,remoteWrite} from '../src/store.mjs';
 import {GitHubApi} from '../src/github-api.mjs';
-import {memoryContext,saveEntry,saveSummary,POINTER_PATH} from '../src/project-memory.mjs';
+import {memoryContext,saveEntry,saveSummary,POINTER_PATH,UNTRUSTED_NOTE} from '../src/project-memory.mjs';
 
 const spec={objective:'Misión de memoria',units:[{id:'a',effect:'READ',instruction:'Leer el repo'}]};
 const target={repo:'o/r',base:'main'};
@@ -37,7 +37,7 @@ test('puntero: los seis casos de resolución del proyecto',async()=>{
     assert.match(a.projectId,/^zp_[0-9a-f]{16}$/);
     assert.deepEqual(a.pointer,{status:'POINTER_MISSING',path:POINTER_PATH,content:{zanallaima:1,projectId:a.projectId,githubRepoId:4242,
       note:'Antes de trabajar en este repositorio, pide zana_memory_context con este projectId a ZanaLLaima.'}});
-    assert.deepEqual(a.context,{projectId:a.projectId,entries:[],truncated:false});
+    assert.deepEqual(a.context,{projectId:a.projectId,entries:[],truncated:false,untrusted:true,note:UNTRUSTED_NOTE});
     const b=await initOnly(f,s);
     assert.deepEqual([b.projectId,b.pointer.status],[a.projectId,'POINTER_MISSING']);
     // Válido con el mismo repo: OK.

@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {remoteFixture,sha} from './helpers/remote-fixture.mjs';
 import {remoteRead,remoteWrite} from '../src/store.mjs';
+import {deliveryStatus} from '../src/github-delivery.mjs';
+import {createDeadline} from '../src/deadline.mjs';
 import {lineBudget,excluded} from '../src/line-budget.mjs';
 
 const file=(filename,additions,deletions=0)=>({filename,additions,deletions,status:'modified'});
@@ -111,4 +113,27 @@ test('size limits: the claim returns the line budget measured for the ticket SHA
     await remoteWrite(db=>db.prepare("UPDATE review_tickets SET line_budget=NULL WHERE state='OPEN'").run());
     assert.equal((await f.call('zana_review_claim',{ticket:again.ticket},await f.session())).lineBudget,null);
   }finally{await f.cleanup();}
+});
+
+test('size limits: the delivery line budget runs inside the tool deadline and is partial when it does not fit',async()=>{
+  const ctx={missionId:'m',repo:'o/r',branch:'zana/m',base:'main'};
+  const gh={openPullsFor:async()=>[{number:1,head:{ref:'zana/m'},base:{ref:'main'}}],
+    pull:async()=>({number:1,state:'open',mergeable:true,head:{sha:'h'}}),
+    checkRuns:async()=>[],statuses:async()=>[],pullCommits:async()=>[],pullReviews:async()=>[]};
+  const config={reviewerLogin:'rev',requiredChecks:[]};
+  let started=0;
+  const slow=()=>{started++;return new Promise(ok=>setTimeout(()=>ok({lines:1}),2000));};
+  const t0=Date.now();
+  const r=await deliveryStatus({github:gh,config,ctx,deadline:createDeadline(200),lineBudgetOf:slow});
+  assert.ok(Date.now()-t0<1500,'the slow file list must not outlive the deadline');
+  assert.equal(started,1);
+  assert.deepEqual(r.lineBudget,{unavailable:'DEADLINE'});
+  assert.deepEqual(r.partial,['lineBudget']);
+  // No time left: not even started.
+  const none=await deliveryStatus({github:gh,config,ctx,deadline:createDeadline(0),lineBudgetOf:slow});
+  assert.equal(started,1);
+  assert.deepEqual(none.partial,['ci','zana/4r','review','lineBudget']);
+  // In time it is returned as measured; without the callback there is no lineBudget.
+  assert.deepEqual((await deliveryStatus({github:gh,config,ctx,lineBudgetOf:async p=>({pull:p.number})})).lineBudget,{pull:1});
+  assert.equal('lineBudget' in await deliveryStatus({github:gh,config,ctx}),false);
 });

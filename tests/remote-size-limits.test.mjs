@@ -137,3 +137,21 @@ test('size limits: the delivery line budget runs inside the tool deadline and is
   assert.deepEqual((await deliveryStatus({github:gh,config,ctx,lineBudgetOf:async p=>({pull:p.number})})).lineBudget,{pull:1});
   assert.equal('lineBudget' in await deliveryStatus({github:gh,config,ctx}),false);
 });
+
+test('size limits: GitHub refusing a diff over 300 files (406/422) is DIFF_TOO_LARGE',async()=>{
+  const f=await remoteFixture();
+  try{
+    const {author,missionId}=await f.authorReady();
+    const request=async()=>(await f.call('zana_review_request',{missionId},author)).error;
+    f.api.state.compareError={status:406,body:{message:'Sorry, the diff exceeded the maximum number of files (300). Consider using the files API instead.'}};
+    assert.match(await request(),/^DIFF_TOO_LARGE: GitHub no entrega el diff \(HTTP 406: más de 300 archivos o demasiado grande\); divide el cambio/);
+    f.api.state.compareError={status:422,body:{message:'Validation Failed',errors:[{resource:'Compare',field:'diff',code:'too_large'}]}};
+    assert.match(await request(),/^DIFF_TOO_LARGE: GitHub no entrega el diff \(HTTP 422/);
+    // Another 406/422 is not a size answer.
+    f.api.state.compareError={status:422,body:{message:'No common ancestor',errors:[{code:'invalid'}]}};
+    assert.match(await request(),/^GitHub HTTP 422: No common ancestor/);
+    f.api.state.compareError={status:406,body:{message:'Not Acceptable'}};
+    assert.match(await request(),/^GitHub HTTP 406: Not Acceptable/);
+    assert.equal(await tickets(),0);
+  }finally{await f.cleanup();}
+});

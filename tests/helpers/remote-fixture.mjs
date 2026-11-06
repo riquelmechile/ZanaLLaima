@@ -40,7 +40,9 @@ export async function remoteFixture({envExtra={},mcp={}}={}){
     units:[{id:'code',effect:'READ',code:true,instruction:'Implement the function and its test'},
       {id:'notes',effect:'READ',instruction:'Summarize the change',dependsOn:['code']}]};
   // Author: mission, started code unit, branch pushed with commit, open PR, green checks.
-  async function authorReady({green=true,pull=true}={}){
+  // W3 order: with green checks and an open PR the code unit is completed
+  // (complete:true, the default) before any ticket; complete:false keeps it RUNNING.
+  async function authorReady({green=true,pull=true,complete=green&&pull}={}){
     const author=await session();
     const init=await call('zana_mission_init',{spec,github:{repo:'o/r',base:'main'}},author);
     const batch=await call('zana_start_batch',{},author);
@@ -48,7 +50,13 @@ export async function remoteFixture({envExtra={},mcp={}}={}){
     api.state.push(branch,sha('a'));
     if(green)api.state.green(sha('a'));
     if(pull)api.state.openPull(branch);
-    return {author,init,batch,branch,missionId:init.id,packet:batch.packets[0]};
+    const packet=batch.packets[0];
+    if(complete){
+      const done=await call('zana_complete_unit',{unitId:packet.unitId,token:packet.token,leaseGeneration:packet.leaseGeneration,
+        outcome:{success:true,summary:'code on '+sha('a'),evidence:['green checks on '+sha('a')]}},author);
+      if(done.error)throw new Error('authorReady: '+done.error);
+    }
+    return {author,init,batch,branch,missionId:init.id,packet,completed:complete};
   }
   return {dir,api,ds,env,runtime,session,call,spec,authorReady,
     cleanup:async()=>{await runtime.close();await api.close();await ds.close();

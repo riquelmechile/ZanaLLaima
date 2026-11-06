@@ -22,7 +22,7 @@ const outcome=s=>({success:true,summary:'done on '+s,evidence:['head '+s]});
 test('C1: completed code unit + REQUEST_CHANGES -> correction unit -> new ticket -> APPROVE -> merge',async()=>{
   const f=await remoteFixture();
   try{
-    const {author,missionId,branch,packet}=await f.authorReady();
+    const {author,missionId,branch,packet}=await f.authorReady({complete:false});
     // The author completes the code unit before review (allowed, but then no unit is RUNNING).
     const done=await f.call('zana_complete_unit',{unitId:'code',token:packet.token,leaseGeneration:packet.leaseGeneration,outcome:outcome(sha('a'))},author);
     assert.equal(done.error,undefined,done.error);
@@ -46,11 +46,13 @@ test('C1: completed code unit + REQUEST_CHANGES -> correction unit -> new ticket
       arguments:{owner:'o',repo:'r',branch,path:'src/sum.mjs',content:'a+b',message:'fix'}},author);
     assert.equal(Boolean(w.error||w.isError),false,JSON.stringify(w));
     f.api.state.push(branch,sha('b'));f.api.state.green(sha('b'));
+    // W3 order: the correction unit is completed before the new ticket.
+    assert.match((await f.call('zana_review_request',{missionId},author)).error??'',/UNIT_STILL_RUNNING/);
+    const c2=await f.call('zana_complete_unit',{unitId:corr.unitId,token:cp.token,leaseGeneration:cp.leaseGeneration,outcome:outcome(sha('b'))},author);
+    assert.equal(c2.error,undefined,c2.error);
     const t2=await f.call('zana_review_request',{missionId},author);
     assert.equal(t2.error,undefined,t2.error);
     assert.equal((await review(f,t2.ticket,await f.session())).event,'APPROVE');
-    const c2=await f.call('zana_complete_unit',{unitId:corr.unitId,token:cp.token,leaseGeneration:cp.leaseGeneration,outcome:outcome(sha('b'))},author);
-    assert.equal(c2.error,undefined,c2.error);
     assert.equal((await f.call('zana_merge',{missionId},author)).state,'MERGED');
   }finally{await f.cleanup();}
 });

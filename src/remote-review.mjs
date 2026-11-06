@@ -7,7 +7,7 @@
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {canonicalJson} from './actor-assertion.mjs';
 import {missionPull} from './github-delivery.mjs';
-import {recordActivity,sessionRow,sessionWrote,nowIso,writeAudit,missionClients} from './remote-state.mjs';
+import {recordActivity,sessionRow,sessionWrote,nowIso,writeAudit,missionClients,remoteMission} from './remote-state.mjs';
 import {budgetOf} from './budget.mjs';
 import {redactText,envSecrets} from './redact.mjs';
 
@@ -121,6 +121,16 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
     db.prepare("UPDATE review_tickets SET state='ABANDONED',updated_at=? WHERE state IN ('CLAIMED','FINALIZING') AND claimed_at<=?")
       .run(at,new Date(now-config.claimTtlMinutes*60_000).toISOString());
   }
+  const missionLock=id=>'mission:'+id;
+  // The authoritative publication check: still FINALIZING by this reviewer and
+  // the current (latest, not superseded) ticket of its mission.
+  const current=(db,t,session)=>{
+    const row=db.prepare('SELECT * FROM review_tickets WHERE ticket_id=?').get(t.ticket_id);
+    const latest=latestIn(db,t.mission_id);
+    return row?.state==='FINALIZING'&&row.reviewer_session===session.sessionId&&latest?.ticket_id===row.ticket_id?row:null;
+  };
+  const superseded=(code,t,state)=>({ticket:code,state,published:false,ticketSha:t.sha,
+    note:'This ticket was superseded or abandoned while finalizing; nothing was published. Ask the author for the current ticket.'});
   async function exclusive(key,fn){
     const before=locks.get(key)??Promise.resolve();
     let release;
@@ -162,14 +172,22 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
       const sha=String(pull.head?.sha??'');
       const verdict=await checks.verdict(ctx.repo,sha);
       if(verdict.state!=='SUCCESS')fail('CHECKS_NOT_GREEN','checks on '+sha+' are '+verdict.state);
-      const code=ticketCode(),at=Date.now();
-      const expiresAt=new Date(at+config.ticketTtlMinutes*60_000).toISOString();
-      const ticketId=randomUUID();
+      const code=ticketCode(),ticketId=randomUUID();
+      let expiresAt;
       let superseded=[];
-      await transact((mission,txc)=>{
+      // Superseding tickets and publishing a review are serialized per mission,
+      // so a finalize never publishes for a ticket replaced meanwhile.
+      await exclusive(missionLock(missionId),()=>transact((mission,txc)=>{
         const db=txc.db;
         if(!mission||mission.id!==missionId)fail('MISSION_NOT_ACTIVE','mission '+missionId+' is not the active mission');
+        // W3 order: the code unit is completed (green checks on the head) before the ticket.
+        const codeUnits=remoteMission(db,missionId).codeUnits;
+        const running=mission.units.filter(u=>codeUnits.includes(u.id)&&u.status==='RUNNING').map(u=>u.id);
+        if(running.length)fail('UNIT_STILL_RUNNING','complete '+running.join(', ')+' with zana_complete_unit (green checks on the head) before asking for a ticket');
         expire(db);
+        // Timestamps once the mission lock is held: tickets are ordered by creation.
+        const at=Date.now();
+        expiresAt=new Date(at+config.ticketTtlMinutes*60_000).toISOString();
         // Same SHA with requested changes (a REQUEST_CHANGES verdict or a
         // BLOCKER/CRITICAL lens, in ANY state: abandoned, expired, stale or
         // finalized): the code must change before another review. Waiting for
@@ -190,7 +208,7 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
         mission.reviewCount=(mission.reviewCount||0)+1;
         mission.revision++;
         return mission;
-      });
+      }));
       return {ticket:code,missionId,repo:ctx.repo,pullNumber:pull.number,sha,expiresAt,
         superseded:superseded.map(x=>x.ticket_id),
         message:'Revisa el ticket '+code+' con ZanaLLaima',
@@ -266,7 +284,8 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
     async finalize({ticket:code,execution},session){
       if(!EXECUTIONS.includes(execution))fail('INVALID_EXECUTION','execution must be '+EXECUTIONS.join(' or '));
       if(!reviewerGithub.configured)fail('REVIEWER_TOKEN_MISSING','ZANA_REVIEWER_TOKEN is not set on the server');
-      return exclusive(code,async()=>{
+      const mid=await remoteWrite(db=>ticketBy(db,code).mission_id);
+      return exclusive(missionLock(mid),async()=>{
         const {t,lenses,unread}=await remoteWrite(db=>{
           expire(db);
           const row=ticketBy(db,code);
@@ -292,8 +311,25 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
         if(verdict.state!=='SUCCESS')fail('CHECKS_NOT_GREEN','checks on '+t.sha+' are '+verdict.state+'; nothing was published');
         const ordered=LENSES.map(l=>lenses.find(x=>x.lens===l));
         const event=ordered.some(l=>blocking(l.findings))?'REQUEST_CHANGES':'APPROVE';
-        await remoteWrite(db=>db.prepare("UPDATE review_tickets SET state='FINALIZING',execution=?,verdict=?,updated_at=? WHERE ticket_id=?")
-          .run(execution,event,nowIso(),t.ticket_id));
+        const moved=await remoteWrite(db=>{
+          expire(db);
+          if(latestIn(db,t.mission_id)?.ticket_id!==t.ticket_id)return 0;
+          return db.prepare("UPDATE review_tickets SET state='FINALIZING',execution=?,verdict=?,updated_at=? WHERE ticket_id=? AND state IN ('CLAIMED','FINALIZING') AND reviewer_session=?")
+            .run(execution,event,nowIso(),t.ticket_id,session.sessionId).changes;
+        });
+        if(!moved)return superseded(code,t,(await remoteRead(db=>db.prepare('SELECT state FROM review_tickets WHERE ticket_id=?').get(t.ticket_id)))?.state??'UNKNOWN');
+        // Something outside this process (TTL expiry, operator) may still
+        // change the ticket while GitHub answers: revalidate right before each
+        // publication, and make every later state change conditional.
+        const stillCurrent=()=>remoteWrite(db=>{expire(db);return current(db,t,session);});
+        const inconsistent=async what=>{
+          const now=await remoteRead(db=>db.prepare('SELECT state,github_review_id FROM review_tickets WHERE ticket_id=?').get(t.ticket_id));
+          await remoteWrite(db=>writeAudit(db,{caller:{host:'zana-review',sessionId:session.sessionId},tool:'zana_review_finalize',
+            missionId:t.mission_id,outcome:'INCONSISTENT',args:{ticketId:t.ticket_id},
+            detail:{published:what,state:now?.state??null,githubReviewId:now?.github_review_id??null,sha:t.sha},category:'review'}));
+          return {...superseded(code,t,now?.state??'UNKNOWN'),published:what.includes('review'),inconsistent:true,
+            note:'The ticket stopped being current while GitHub published its review; it was recorded as an inconsistency and does not count for the merge.'};
+        };
         let reviewId=t.github_review_id,reviewUrl=null,adopted=false;
         if(reviewId===null){
           // A lost response must not publish twice: adopt our own review of this commit with this ticket's marker.
@@ -303,14 +339,17 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
             r?.commit_id===t.sha&&String(r?.body??'').includes(marker));
           if(existing){reviewId=Number(existing.id);reviewUrl=existing.html_url??null;adopted=true;}
           else{
+            if(!await stillCurrent())return superseded(code,t,(await remoteRead(db=>db.prepare('SELECT state FROM review_tickets WHERE ticket_id=?').get(t.ticket_id)))?.state??'UNKNOWN');
             const review=await reviewerGithub.createReview(t.repo,t.pr_number,{commitId:t.sha,event,
               body:reviewBody({code,ticket:t,lenses:ordered,execution,event})});
             reviewId=Number(review?.id);reviewUrl=review?.html_url??null;
           }
+          // The review id is a fact even if the ticket stopped being current.
           await remoteWrite(db=>db.prepare('UPDATE review_tickets SET github_review_id=?,updated_at=? WHERE ticket_id=?')
             .run(reviewId,nowIso(),t.ticket_id));
         }
         const statusState=event==='APPROVE'?'success':'failure';
+        if(!await stillCurrent())return inconsistent(['review']);
         if(!t.status_posted){
           await reviewerGithub.createStatus(t.repo,t.sha,{state:statusState,
             description:'ZanaLLaima 4R '+event+' (ticket '+code.slice(0,7)+'…)'});
@@ -319,13 +358,15 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
           sha:t.sha,event,execution,githubReviewId:reviewId,lenses:ordered.map(l=>({lens:l.lens,hash:l.hash,
             findings:l.findings,evidence:l.evidence})),finalizedAt:nowIso(),authorSession:t.author_session,
           reviewerSession:t.reviewer_session};
-        await remoteWrite(db=>{
-          db.prepare("UPDATE review_tickets SET state='FINALIZED',status_posted=1,finalized_at=?,updated_at=? WHERE ticket_id=?")
-            .run(nowIso(),nowIso(),t.ticket_id);
-          db.prepare('INSERT OR IGNORE INTO review_archive(mission_id,review_id,content,created_at) VALUES(?,?,?,?)')
+        const done=await remoteWrite(db=>{
+          const changed=db.prepare("UPDATE review_tickets SET state='FINALIZED',status_posted=1,finalized_at=?,updated_at=? WHERE ticket_id=? AND state='FINALIZING' AND reviewer_session=?")
+            .run(nowIso(),nowIso(),t.ticket_id,session.sessionId).changes;
+          if(changed)db.prepare('INSERT OR IGNORE INTO review_archive(mission_id,review_id,content,created_at) VALUES(?,?,?,?)')
             .run(t.mission_id,t.ticket_id,JSON.stringify(archived),nowIso());
+          return changed;
         });
         pageCache.delete(t.ticket_id);
+        if(!done)return inconsistent(['review','zana/4r']);
         return {ticket:code,state:'FINALIZED',published:true,event,githubReviewId:reviewId,reviewUrl,adoptedExistingReview:adopted,
           status:{context:'zana/4r',state:statusState},sha:t.sha,lensHashes:Object.fromEntries(ordered.map(l=>[l.lens,l.hash]))};
       });
@@ -361,6 +402,8 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
         // so its blockers no longer stop a new review of the same SHA.
         if(t.state==='FINALIZED')fail('TICKET_TERMINAL','a finalized review cannot be abandoned');
         if(t.operator_released)fail('TICKET_TERMINAL','ticket was already released by the operator');
+        // A review already on GitHub is a fact: abandoning would hide it.
+        if(t.github_review_id!==null)fail('TICKET_TERMINAL','ticket already published GitHub review '+t.github_review_id);
         db.prepare("UPDATE review_tickets SET state='ABANDONED',operator_released=1,updated_at=? WHERE ticket_id=?").run(nowIso(),ticketId);
         writeAudit(db,{caller,tool:'remote-ticket-abandon',missionId:t.mission_id,outcome:'ABANDONED',
           args:{ticketId},detail:{previousState:t.state,sha:t.sha,released:true},category:'operator'});

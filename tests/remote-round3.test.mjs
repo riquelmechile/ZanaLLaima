@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {remoteFixture,readDiff,sha,sleep} from './helpers/remote-fixture.mjs';
-import {remoteRead,remoteWrite} from '../src/store.mjs';
+import {remoteRead,remoteWrite,readState} from '../src/store.mjs';
 
 const clean=lens=>({lens,findings:[],evidence:['read every page']});
 const blocker={lens:'risk',findings:[{severity:'BLOCKER',location:'src/sum.mjs:3',evidence:'returns a-b'}],evidence:['diff']};
@@ -22,7 +22,7 @@ async function complete(f,author,packet){
 test('P1-A: zana_review_request refuses while a code unit is still RUNNING, and correction next includes zana_complete_unit',async()=>{
   const f=await remoteFixture();
   try{
-    const {author,missionId,packet}=await f.authorReady();
+    const {author,missionId,packet}=await f.authorReady({complete:false});
     const early=await f.call('zana_review_request',{missionId},author);
     assert.match(early.error??'',/UNIT_STILL_RUNNING/,'W3 order: complete the unit before asking for a ticket');
     await complete(f,author,packet);
@@ -34,7 +34,7 @@ test('P1-A: zana_review_request refuses while a code unit is still RUNNING, and 
 test('P1-A: the next step of zana_correction_start follows the skill order',async()=>{
   const f=await remoteFixture();
   try{
-    const {author,missionId,packet}=await f.authorReady();
+    const {author,missionId,packet}=await f.authorReady({complete:false});
     await complete(f,author,packet);
     const t=await f.call('zana_review_request',{missionId},author);
     const s=await f.session();
@@ -46,15 +46,15 @@ test('P1-A: the next step of zana_correction_start follows the skill order',asyn
     const order=['zana_start_batch','zana_checks_','zana_complete_unit','zana_review_request'].map(x=>next.indexOf(x));
     assert.ok(order.every(i=>i>=0),'next must name every step: '+next);
     assert.deepEqual([...order].sort((a,b)=>a-b),order,'next must keep the skill order: '+next);
-    const unit=(await f.call('zana_mission_status',{},author)).units.find(u=>u.id===corr.unitId);
-    assert.match(unit.instruction,/zana_complete_unit/);
+    const unit=(await readState()).units.find(u=>u.id===corr.unitId);
+    assert.match(unit?.instruction??'',/zana_complete_unit/,'the correction unit instruction names zana_complete_unit');
   }finally{await f.cleanup();}
 });
 
 test('P1-B: a ticket superseded while its finalize waits on GitHub never revives nor enables the merge',async()=>{
   const f=await remoteFixture();
   try{
-    const {author,missionId,packet}=await f.authorReady();
+    const {author,missionId,packet}=await f.authorReady({complete:false});
     await complete(f,author,packet);
     const t1=await f.call('zana_review_request',{missionId},author);
     const s1=await f.session();
@@ -83,6 +83,7 @@ test('P1-B: a ticket superseded while its finalize waits on GitHub never revives
     const r1=await finalize(f,t1.ticket,s1);
     if(!raced&&second)await runSecond();
     gh.createReview=real;
+    assert.equal(raced,false,'superseding a ticket waits for the publication in progress of the same mission');
     const rows=await remoteRead(db=>db.prepare('SELECT ticket_id,state,verdict,created_at,finalized_at FROM review_tickets WHERE mission_id=? ORDER BY created_at').all(missionId));
     assert.equal(rows.length,2);
     const [a,b]=rows;
@@ -101,7 +102,7 @@ test('P1-B: a ticket superseded while its finalize waits on GitHub never revives
 test('P1-B: finalize revalidates the ticket in the DB before publishing and never publishes or revives a superseded one',async()=>{
   const f=await remoteFixture();
   try{
-    const {author,missionId,packet}=await f.authorReady();
+    const {author,missionId,packet}=await f.authorReady({complete:false});
     await complete(f,author,packet);
     const gh=f.runtime.reviewerGithub;
     const realReviews=gh.pullReviews.bind(gh),realCreate=gh.createReview.bind(gh),realStatus=gh.createStatus.bind(gh);
@@ -140,5 +141,68 @@ test('P1-B: finalize revalidates the ticket in the DB before publishing and neve
     const audit=await remoteRead(db=>db.prepare("SELECT outcome FROM remote_audit WHERE mission_id=? AND outcome='INCONSISTENT'").all(missionId));
     assert.equal(audit.length,1,'a publication of a superseded ticket is audited');
     assert.equal((await f.call('zana_delivery_status',{missionId},author)).ready,false);
+  }finally{await f.cleanup();}
+});
+
+test('P1-B: every state change of finalize is conditional (ticket abandoned during the GitHub reads or the status)',async()=>{
+  for(const when of ['verdict','newer','newer-later','status']){
+    const f=await remoteFixture();
+    try{
+      const {author,missionId}=await f.authorReady();
+      const t=await f.call('zana_review_request',{missionId},author);
+      const s=await f.session();
+      await lenses(f,t.ticket,s);
+      const gh=f.runtime.reviewerGithub;
+      let created=0;const realCreate=gh.createReview.bind(gh),realStatus=gh.createStatus.bind(gh);
+      gh.createReview=async(...a)=>{created++;return realCreate(...a);};
+      const realVerdict=f.runtime.checks.verdict;
+      if(when==='verdict')f.runtime.checks.verdict=async(...a)=>{
+        await remoteWrite(db=>db.prepare("UPDATE review_tickets SET state='ABANDONED' WHERE mission_id=?").run(missionId));
+        return realVerdict(...a);};
+      if(when==='newer')f.runtime.checks.verdict=async(...a)=>{
+        const at=new Date(Date.now()+1000).toISOString();
+        await remoteWrite(db=>db.prepare("INSERT INTO review_tickets(ticket_id,code_hash,mission_id,repo,pr_number,sha,author_session,created_at,expires_at,state,updated_at) VALUES('newer','h-newer',?,'o/r',7,?,?,?,?,'OPEN',?)")
+          .run(missionId,sha('a'),author.sessionId,at,at,at));
+        return realVerdict(...a);};
+      const realReviews=gh.pullReviews.bind(gh);
+      if(when==='newer-later')gh.pullReviews=async(...a)=>{
+        const at=new Date(Date.now()+1000).toISOString();
+        await remoteWrite(db=>db.prepare("INSERT OR IGNORE INTO review_tickets(ticket_id,code_hash,mission_id,repo,pr_number,sha,author_session,created_at,expires_at,state,updated_at) VALUES('newer2','h-newer2',?,'o/r',7,?,?,?,?,'OPEN',?)")
+          .run(missionId,sha('a'),author.sessionId,at,at,at));
+        return realReviews(...a);};
+      if(when==='status')gh.createStatus=async(...a)=>{
+        await remoteWrite(db=>db.prepare("UPDATE review_tickets SET state='ABANDONED' WHERE state='FINALIZING'").run());
+        return realStatus(...a);};
+      const r=await finalize(f,t.ticket,s);
+      f.runtime.checks.verdict=realVerdict;
+      const row=(await remoteRead(db=>db.prepare('SELECT * FROM review_tickets WHERE mission_id=? ORDER BY created_at').all(missionId)))[0];
+      assert.notEqual(r.state,'FINALIZED',when);
+      if(when==='verdict'){assert.equal(row.state,'ABANDONED','not revived to FINALIZING');assert.equal(created,0);}
+      if(when==='newer'){assert.equal(row.state,'CLAIMED','a superseded ticket is not moved to FINALIZING');assert.equal(created,0);}
+      if(when==='newer-later'){assert.equal(created,0,'superseded after FINALIZING: nothing is published');assert.equal(row.state,'FINALIZING');}
+      if(when==='status'){
+        assert.equal(row.state,'ABANDONED','the final UPDATE is conditional');
+        assert.equal(r.inconsistent,true);
+        assert.equal((await remoteRead(db=>db.prepare("SELECT COUNT(*) n FROM remote_audit WHERE outcome='INCONSISTENT'").get())).n,1);
+      }
+    }finally{await f.cleanup();}
+  }
+});
+
+test('P1-B: the merge authority is the current ticket, not any APPROVE on the SHA',async()=>{
+  const f=await remoteFixture();
+  try{
+    const {author,missionId}=await f.authorReady();
+    const t1=await f.call('zana_review_request',{missionId},author);
+    const s=await f.session();
+    await lenses(f,t1.ticket,s);
+    assert.equal((await finalize(f,t1.ticket,s)).event,'APPROVE');
+    assert.equal((await f.call('zana_delivery_status',{missionId},author)).ready,true);
+    // A newer ticket on the same SHA (allowed after an APPROVE) is now the authority.
+    assert.equal((await f.call('zana_review_request',{missionId},author)).error,undefined);
+    const ds=await f.call('zana_delivery_status',{missionId},author);
+    assert.equal(ds.ready,false);
+    assert.ok(ds.blockers.some(b=>/Current review ticket: OPEN/.test(b)),JSON.stringify(ds.blockers));
+    assert.equal((await f.call('zana_merge',{missionId},author)).state,'NOT_READY');
   }finally{await f.cleanup();}
 });

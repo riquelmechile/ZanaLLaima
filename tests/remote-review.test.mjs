@@ -86,6 +86,10 @@ test('review request needs an open mission PR with green checks; claim rules',as
     f.api.state.checkRuns={};
     assert.match((await f.call('zana_review_request',{missionId:noPr.missionId},noPr.author)).error,/CHECKS_NOT_GREEN/);
     f.api.state.green(sha('a'));
+    // W3 order: a RUNNING code unit blocks the ticket until it is completed.
+    assert.match((await f.call('zana_review_request',{missionId:noPr.missionId},noPr.author)).error,/UNIT_STILL_RUNNING/);
+    assert.equal((await f.call('zana_complete_unit',{unitId:'code',token:noPr.packet.token,leaseGeneration:noPr.packet.leaseGeneration,
+      outcome:{success:true,summary:'code done',evidence:['green checks']}},noPr.author)).error,undefined);
     const before=await f.session();
     const writer=await f.session();
     const req=await f.call('zana_review_request',{missionId:noPr.missionId},noPr.author);
@@ -95,7 +99,7 @@ test('review request needs an open mission PR with green checks; claim rules',as
     // A session that wrote in the mission (any mutating tool counts).
     await sleep(3);
     const wroteAfter=await f.session();
-    await f.call('zana_unit_heartbeat',{unitId:'code',token:noPr.packet.token,leaseGeneration:noPr.packet.leaseGeneration},wroteAfter);
+    assert.equal((await f.call('zana_checks_start',{missionId:noPr.missionId},wroteAfter)).error,undefined);
     assert.match((await f.call('zana_review_claim',{ticket:req.ticket},wroteAfter)).error,/SESSION_WROTE/);
     // A session created before the ticket.
     assert.match((await f.call('zana_review_claim',{ticket:req.ticket},before)).error,/SESSION_PREDATES_TICKET/);

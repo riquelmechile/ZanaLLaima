@@ -117,7 +117,7 @@ test('mission-branch writes: allowed with a RUNNING unit, refused outside the br
 test('PR edits: only title and body of the mission PR; replies and comments only on it',async()=>{
   const f=await remoteFixture();
   try{
-    const {author,missionId,branch}=await f.authorReady();
+    const {author,missionId,branch}=await f.authorReady({complete:false});
     f.api.state.pulls.push({number:9,state:'open',head:{ref:'feature',sha:sha('b'),repo:{full_name:'o/r'}},base:{ref:'main'}});
     f.api.state.pulls.push({number:10,state:'closed',head:{ref:branch,sha:sha('a'),repo:{full_name:'o/r'}},base:{ref:'main'}});
     f.api.state.pulls.push({number:11,state:'open',head:{ref:branch,sha:sha('a'),repo:{full_name:'o/r'}},base:{ref:'dev'}});

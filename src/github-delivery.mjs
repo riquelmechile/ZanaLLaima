@@ -46,7 +46,21 @@ export function fourRStatus(statuses,reviewer){
   return mine.length?mine[0].state:'MISSING';
 }
 
-export async function deliveryStatus({github,config,ctx,openBlockingTickets=[],deadline=createDeadline(config.toolDeadlineMs)}){
+// The authority for the merge is the current (latest, not superseded) ticket
+// of the mission: FINALIZED with APPROVE on the head, and its own review must
+// be the latest decisive one on GitHub. An APPROVE of a superseded ticket on
+// the same SHA never counts. A missing ticket is a blocker (fail closed).
+export function ticketAuthority(ticket,head,review){
+  if(!ticket)return {ok:false,reason:'no review ticket'};
+  const view={ticketId:ticket.ticket_id,state:ticket.state,verdict:ticket.verdict??null,sha:ticket.sha,
+    githubReviewId:ticket.github_review_id??null};
+  const ok=ticket.state==='FINALIZED'&&ticket.verdict==='APPROVE'&&ticket.sha===head&&
+    ticket.github_review_id!==null&&ticket.github_review_id!==undefined&&Number(ticket.github_review_id)===review.reviewId;
+  return {ok,ticket:view,...(ok?{}:{reason:view.state+'/'+(view.verdict??'-')+' on '+view.sha+
+    (ticket.github_review_id!=null&&Number(ticket.github_review_id)!==review.reviewId?' (its review is not the latest decisive one)':'')})};
+}
+
+export async function deliveryStatus({github,config,ctx,openBlockingTickets=[],currentTicket=null,deadline=createDeadline(config.toolDeadlineMs)}){
   const pull=await missionPull(github,ctx);
   if(!pull)return {missionId:ctx.missionId,state:'NO_PULL_REQUEST',ready:false,
     blockers:['No single open pull request from '+ctx.branch+' to '+ctx.base],readOnly:true};
@@ -66,8 +80,10 @@ export async function deliveryStatus({github,config,ctx,openBlockingTickets=[],d
   if(fourR!=='success')blockers.push('zana/4r on '+head+': '+fourR);
   if(!mergeable)blockers.push('Pull request not mergeable ('+(pull.draft===true?'draft':pull.mergeable_state??String(pull.mergeable))+')');
   if(openBlockingTickets.length)blockers.push('Open review tickets with BLOCKER or CRITICAL: '+openBlockingTickets.join(', '));
+  const authority=ticketAuthority(currentTicket,head,review);
+  if(!authority.ok)blockers.push('Current review ticket: '+authority.reason);
   return {missionId:ctx.missionId,repo:ctx.repo,pullNumber:pull.number,pullUrl:pull.html_url??null,headSha:head,
-    review,ci:{state:ci.state,runs:ci.runs,missing:ci.missing},fourR,mergeable,
+    review,currentTicket:authority.ticket??null,ci:{state:ci.state,runs:ci.runs,missing:ci.missing},fourR,mergeable,
     mergeableState:pull.mergeable_state??null,openBlockingTickets,ready:blockers.length===0,blockers,
     ...(deadline.partial.length?{partial:deadline.partial}:{}),readOnly:true};
 }
@@ -76,9 +92,9 @@ export async function deliveryStatus({github,config,ctx,openBlockingTickets=[],d
 // sha = that head (equivalent to --match-head-commit): if the head moved,
 // GitHub refuses and ZanaLLaima answers STALE_SHA without retrying. If the
 // answer is lost, the pull request is read again: merged means MERGED.
-export async function mergeMission({github,config,ctx,openBlockingTickets,onAttempt=async()=>{}}){
+export async function mergeMission({github,config,ctx,openBlockingTickets,currentTicket=null,onAttempt=async()=>{}}){
   if(!config.mergeEnabled)return {merged:false,state:'MERGE_DISABLED',reason:'ZANA_MERGE_ENABLED=false'};
-  const status=await deliveryStatus({github,config,ctx,openBlockingTickets});
+  const status=await deliveryStatus({github,config,ctx,openBlockingTickets,currentTicket});
   if(!status.ready)return {merged:false,state:'NOT_READY',blockers:status.blockers,headSha:status.headSha??null};
   await onAttempt(status.headSha);
   const recovered=async()=>{

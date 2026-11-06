@@ -162,9 +162,12 @@ test('delivery helpers: missing PR, unreadable evidence, dismissed review, merge
     checkRuns:async()=>[{name:'t',status:'completed',conclusion:'success',head_sha:'h'}],
     statuses:async()=>[{context:'zana/4r',state:'success',creator:{login:'rev'}}],
     pullReviews:async()=>[{user:{login:'rev'},state:'APPROVED',commit_id:'h',id:1}]});
-  assert.equal((await mergeMission({github:{...ready,merge:async()=>({merged:false,message:'nope'})},config,ctx,openBlockingTickets:[]})).state,'MERGE_REFUSED');
-  assert.equal((await mergeMission({github:{...ready,merge:async()=>{throw Object.assign(new Error('Head sha mismatch'),{status:422});}},config,ctx,openBlockingTickets:[]})).state,'STALE_SHA');
-  await assert.rejects(mergeMission({github:{...ready,merge:async()=>{throw Object.assign(new Error('Forbidden'),{status:403});}},config,ctx,openBlockingTickets:[]}),/Forbidden/);
+  const currentTicket={ticket_id:'t',state:'FINALIZED',verdict:'APPROVE',sha:'h',github_review_id:1};
+  // Without the current ticket of the mission the merge is never ready (fail closed).
+  assert.equal((await mergeMission({github:{...ready,merge:async()=>({merged:true})},config,ctx,openBlockingTickets:[]})).state,'NOT_READY');
+  assert.equal((await mergeMission({github:{...ready,merge:async()=>({merged:false,message:'nope'})},config,ctx,openBlockingTickets:[],currentTicket})).state,'MERGE_REFUSED');
+  assert.equal((await mergeMission({github:{...ready,merge:async()=>{throw Object.assign(new Error('Head sha mismatch'),{status:422});}},config,ctx,openBlockingTickets:[],currentTicket})).state,'STALE_SHA');
+  await assert.rejects(mergeMission({github:{...ready,merge:async()=>{throw Object.assign(new Error('Forbidden'),{status:403});}},config,ctx,openBlockingTickets:[],currentTicket}),/Forbidden/);
   assert.equal(evaluateRuns([{name:'t',status:'completed',conclusion:'skipped'}],'h').state,'FAILURE');
   assert.equal(evaluateRuns([{name:'t',status:'completed',conclusion:'success',head_sha:'other'}],'h').state,'PENDING');
 });

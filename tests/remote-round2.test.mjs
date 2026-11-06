@@ -18,7 +18,7 @@ const outcome=x=>({success:true,summary:'done on '+x,evidence:['head '+x]});
 test('P1: correction_start revalidates the latest ticket inside the mission transaction (TOCTOU)',async()=>{
   const f=await remoteFixture();
   try{
-    const {author,missionId,branch,packet}=await f.authorReady();
+    const {author,missionId,branch,packet}=await f.authorReady({complete:false});
     await f.call('zana_complete_unit',{unitId:'code',token:packet.token,leaseGeneration:packet.leaseGeneration,outcome:outcome(sha('a'))},author);
     const t1=await f.call('zana_review_request',{missionId},author);
     assert.equal((await review(f,t1.ticket,await f.session(),blocker)).event,'REQUEST_CHANGES');

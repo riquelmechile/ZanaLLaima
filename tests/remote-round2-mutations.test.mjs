@@ -33,7 +33,7 @@ async function review(f,ticket,s,risk=clean('risk')){
   return f.call('zana_review_finalize',{ticket,execution:'PARALLEL_SUBAGENTS'},s);
 }
 async function completedAndRejected(f){
-  const r=await f.authorReady();
+  const r=await f.authorReady({complete:false});
   await f.call('zana_complete_unit',{unitId:'code',token:r.packet.token,leaseGeneration:r.packet.leaseGeneration,outcome:outcome(sha('a'))},r.author);
   const t=await f.call('zana_review_request',{missionId:r.missionId},r.author);
   assert.equal((await review(f,t.ticket,await f.session(),blocker)).event,'REQUEST_CHANGES');
@@ -43,7 +43,7 @@ async function completedAndRejected(f){
 test('W3: unit completed before the ticket; REQUEST_CHANGES -> correction -> APPROVE -> merge -> close -> archive',async()=>{
   const f=await remoteFixture();
   try{
-    const {author,missionId,branch,packet}=await f.authorReady();
+    const {author,missionId,branch,packet}=await f.authorReady({complete:false});
     // Checks green on the PR head, then complete, then request: no RUNNING unit needed for the ticket.
     const done=await f.call('zana_complete_unit',{unitId:'code',token:packet.token,leaseGeneration:packet.leaseGeneration,outcome:outcome(sha('a'))},author);
     assert.equal(done.error,undefined,done.error);
@@ -75,7 +75,7 @@ test('W3: unit completed before the ticket; REQUEST_CHANGES -> correction -> APP
 test('M1: rebind refuses a wrong token, an expired lease, and records UNIT_REBIND',async()=>{
   const f=await remoteFixture();
   try{
-    const {missionId,packet}=await f.authorReady();
+    const {missionId,packet}=await f.authorReady({complete:false});
     const s=await f.session();
     const args={missionId,unitId:'code',token:packet.token,leaseGeneration:packet.leaseGeneration};
     assert.match((await f.call('zana_session_rebind',{...args,token:'00000000-0000-4000-8000-000000000000'},s)).error,/Invalid or stale run token/);
@@ -193,7 +193,8 @@ test('M6: deliveryStatus with no time left is never green',async()=>{
   const r=await deliveryStatus({github:gh,config:{reviewerLogin:'rev',requiredChecks:[]},ctx,deadline:createDeadline(0)});
   assert.deepEqual({ci:r.ci.state,fourR:r.fourR,review:r.review.state,ready:r.ready},{ci:'UNKNOWN',fourR:'UNKNOWN',review:'UNAVAILABLE',ready:false});
   assert.deepEqual(r.partial,['ci','zana/4r','review']);
-  assert.equal((await deliveryStatus({github:gh,config:{reviewerLogin:'rev',requiredChecks:[]},ctx})).ready,true);
+  const currentTicket={ticket_id:'t',state:'FINALIZED',verdict:'APPROVE',sha:'h',github_review_id:1};
+  assert.equal((await deliveryStatus({github:gh,config:{reviewerLogin:'rev',requiredChecks:[]},ctx,currentTicket})).ready,true);
 });
 
 const raw=(base,path,headers={})=>new Promise((ok,fail)=>{

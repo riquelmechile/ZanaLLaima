@@ -45,7 +45,7 @@ test('W6: a new ticket on the same SHA after REQUEST_CHANGES is refused; CRITICA
 test('W7/W9/R3: exact argument keys, URL-ish paths, exact head branch, issue comments only on the mission PR',async()=>{
   const f=await remoteFixture();
   try{
-    const {author,missionId,branch}=await f.authorReady();
+    const {author,missionId,branch}=await f.authorReady({complete:false});
     f.api.state.pulls.push({number:9,state:'open',head:{ref:'feature',sha:sha('b'),repo:{full_name:'o/r'}},base:{ref:'main'}});
     for(const [name,t] of Object.entries(CATALOG.tools))if(t.zana==='write')assert.ok(ALLOWED_KEYS[name],'keys for '+name);
     const base={owner:'o',repo:'r',message:'m'};
@@ -142,7 +142,7 @@ test('W8: refused or failed operations record no activity; merge needs the creat
 test('W13: session rebind moves a RUNNING unit without an attempt and bars that session from reviewing',async()=>{
   const f=await remoteFixture();
   try{
-    const {author,missionId,branch,packet}=await f.authorReady();
+    const {author,missionId,branch,packet}=await f.authorReady({complete:false});
     const restarted=await f.session();
     assert.match(errText(await ds(f,'create_or_update_file',{owner:'o',repo:'r',branch,path:'a',content:'x',message:'m'},restarted,missionId)),/NO_RUNNING_UNIT/);
     assert.match((await f.call('zana_session_rebind',{missionId,unitId:'code',token:packet.token,leaseGeneration:packet.leaseGeneration+1},restarted)).error,/stale/);
@@ -151,7 +151,11 @@ test('W13: session rebind moves a RUNNING unit without an attempt and bars that 
     assert.equal(r.previousSessionId,author.sessionId);
     assert.equal((await f.call('zana_mission_status',{},restarted)).units.find(u=>u.id==='code').attempts,1);
     assert.equal(Boolean((await ds(f,'create_or_update_file',{owner:'o',repo:'r',branch,path:'a',content:'x',message:'m'},restarted,missionId)).isError),false);
+    // W3 order: the rebound session completes the unit, then asks for the ticket.
+    assert.equal((await f.call('zana_complete_unit',{unitId:'code',token:packet.token,leaseGeneration:packet.leaseGeneration,
+      outcome:{success:true,summary:'done after rebind',evidence:['green checks']}},restarted)).error,undefined);
     const t=await f.call('zana_review_request',{missionId},restarted);
+    assert.equal(t.error,undefined,t.error);
     const later=await f.session();
     void later;
     // The rebound session (and the author) cannot claim.
@@ -234,7 +238,7 @@ test('W17: deadlines, log budget and the shared REST breaker',async()=>{
 test('W19/W20: complete revalidates the head; a closed mission can be archived remotely and a new one started',async()=>{
   const f=await remoteFixture();
   try{
-    const {author,missionId,branch,packet}=await f.authorReady();
+    const {author,missionId,branch,packet}=await f.authorReady({complete:false});
     const realVerdict=f.runtime.checks.verdict;
     f.runtime.checks.verdict=async(...a)=>{const v=await realVerdict(...a);f.api.state.push(branch,sha('c'));return v;};
     const r=await f.call('zana_complete_unit',{unitId:'code',token:packet.token,leaseGeneration:packet.leaseGeneration,

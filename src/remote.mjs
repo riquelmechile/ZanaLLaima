@@ -30,7 +30,7 @@ const packageVersion=JSON.parse(readFileSync(new URL('../package.json',import.me
 export const REMOTE_INSTRUCTIONS=[
   'ZanaLLaima remoto.',
   'Si el primer mensaje de la conversación trae un ticket ZR-, carga solo la skill zana-4r con zana_skill_load y no llames ninguna tool de misión antes de zana_review_claim.',
-  'Si no, al empezar carga zana-odd con zana_skill_load y síguela.',
+  'Si no, al empezar carga zana-odd con zana_skill_load y síguela: con checks verdes, zana_complete_unit antes de zana_review_request.',
   'La verdad es el SHA en GitHub y sus checks de Actions. No hay shell: escribe solo con zana_ds_github en la rama zana/<missionId>.',
   'No mergees por el downstream; zana_merge solo si el usuario lo pide. No apruebes reviews y no inventes evidencia. El modelo y los subagentes que declares son palabra del anfitrión.',
 ].join(' ');
@@ -51,7 +51,7 @@ const NEW_TOOLS={
     z.object({missionId:missionId()}).strict()],
   zana_checks_status:['Check runs of the exact SHA of a checkId, with the redacted log tail of failed jobs',true,
     z.object({checkId:z.string().min(8).max(64)}).strict()],
-  zana_review_request:['Author session: create a one-time review ticket for the open mission PR with green checks',false,
+  zana_review_request:['Author session: create a one-time review ticket for the open mission PR with green checks, after zana_complete_unit (refused while a code unit is RUNNING)',false,
     z.object({missionId:missionId()}).strict()],
   zana_review_claim:['Reviewer session (new conversation): claim a ticket; this session becomes read-only on the mission',false,
     z.object({ticket:ticket()}).strict()],
@@ -64,12 +64,12 @@ const NEW_TOOLS={
     z.object({ticket:ticket(),page:z.number().int().min(0).max(100000)}).strict()],
   zana_correction_start:['Author session: after a REQUEST_CHANGES review, add one PENDING code unit to correct it (normal budget and review rounds)',false,
     z.object({missionId:missionId()}).strict()],
-  zana_session_rebind:['After a server restart or a new MCP session: move a RUNNING unit of this mission to this session without consuming an attempt',false,
+  zana_session_rebind:['After a server restart or a new MCP session: move a RUNNING unit with a live lease to this session without consuming an attempt (expired: zana_recover_expired, zana_unit_retry, zana_start_batch)',false,
     z.object({missionId:missionId(),unitId:z.string().min(1).max(64),token:uuid(),leaseGeneration:z.number().int().positive()}).strict()],
   zana_mission_archive:['Archive the active remote mission once it is CLOSED or CANCELLED, so a new one can start',false,z.object({}).strict()],
   zana_review_finalize:['Reviewer session: re-read the PR head and publish the review and zana/4r with the reviewer account',false,
     z.object({ticket:ticket(),execution:z.enum(EXECUTIONS)}).strict()],
-  zana_delivery_status:['Read-only: exact-SHA approval, CI, zana/4r, mergeable and blocking tickets for the mission PR',true,
+  zana_delivery_status:['Read-only: exact-SHA approval of the current ticket, CI, zana/4r, mergeable and blocking tickets for the mission PR',true,
     z.object({missionId:missionId()}).strict()],
   zana_merge:['Merge the mission PR only when delivery status is all green on one head SHA (sha-guarded)',false,
     z.object({missionId:missionId()}).strict()],
@@ -252,7 +252,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         if(remainingStarts(existing)<=0)throw new Error('Mission work-start budget exhausted');
         if(existing.units.length>=100)throw new Error('Mission already has 100 units');
         existing.units.push({id:unitId,instruction:'Corregir los hallazgos BLOCKER/CRITICAL de la review del ticket '+last.ticket_id+
-          ' (SHA '+last.sha+') en la rama de la misión, con checks verdes, y pedir un ticket nuevo.',
+          ' (SHA '+last.sha+') en la rama de la misión: zana_start_batch → escribir → zana_checks_* hasta verde → zana_complete_unit → zana_review_request (ticket nuevo).',
           effect:'READ',dependsOn:[],paths:[],status:'PENDING',attempts:0,run:null,result:null});
         existing.revision++;
         const rm=remoteMission(txc.db,id);
@@ -261,7 +261,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         return existing;
       });
       return {missionId:id,unitId,correctsTicket:last.ticket_id,sha:last.sha,mission:publicStatus(added),
-        next:'zana_start_batch, then write on the mission branch, zana_checks_* until green, and zana_review_request'};
+        next:'zana_start_batch → write on the mission branch → zana_checks_start/zana_checks_status until green → zana_complete_unit → zana_review_request'};
     },
     // Move a RUNNING unit to this session (after a restart or a new MCP
     // session) without consuming an attempt. The new session counts as a
@@ -299,7 +299,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     zana_review_finalize:(args,session)=>review.finalize(args,session),
     async zana_delivery_status({missionId:id}){
       const ctx=await missionContext(id,null,{allowInactive:true});
-      return deliveryStatus({github,config,ctx,openBlockingTickets:await review.openBlocking(id)});
+      return deliveryStatus({github,config,ctx,openBlockingTickets:await review.openBlocking(id),currentTicket:await review.latest(id)});
     },
     async zana_merge({missionId:id},session){
       const ctx=await missionContext(id,session.sessionId,{allowInactive:true});
@@ -310,7 +310,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       }
       let result;
       try{
-        result=await mergeMission({github,config,ctx,openBlockingTickets:await review.openBlocking(id),
+        result=await mergeMission({github,config,ctx,openBlockingTickets:await review.openBlocking(id),currentTicket:await review.latest(id),
           onAttempt:headSha=>audit({caller:session,tool:'zana_merge.attempt',missionId:id,outcome:'ATTEMPT',
             args:{missionId:id},detail:{headSha,method:config.mergeMethod},category:'merge'})});
       }catch(error){

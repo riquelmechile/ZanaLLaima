@@ -121,8 +121,11 @@ test('Streamable HTTP sessions: two conversations get two sessions; the reviewer
     // Author conversation over HTTP.
     const init=await a.call('zana_mission_init',{spec:f.spec,github:{repo:'o/r',base:'main'}});
     assert.equal(init.github.branch,'zana/'+init.id);
-    await a.call('zana_start_batch',{});
+    const p=(await a.call('zana_start_batch',{})).packets[0];
     f.api.state.push(init.github.branch,'a'.repeat(40));f.api.state.green('a'.repeat(40));f.api.state.openPull(init.github.branch);
+    // W3 order: complete the code unit, then ask for the ticket.
+    assert.equal((await a.call('zana_complete_unit',{unitId:p.unitId,token:p.token,leaseGeneration:p.leaseGeneration,
+      outcome:{success:true,summary:'code done',evidence:['green checks']}})).error,undefined);
     const req=await a.call('zana_review_request',{missionId:init.id});
     assert.match((await a.call('zana_review_claim',{ticket:req.ticket})).error,/AUTHOR_SESSION/);
     // New conversation: new transport session, same OAuth identity.

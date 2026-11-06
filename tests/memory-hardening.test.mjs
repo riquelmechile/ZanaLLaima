@@ -138,6 +138,39 @@ test('W4: si saveSummary falla, el close no cierra la misión ni deja memoria',a
   }finally{await f.cleanup();}
 });
 
+test('W5: tope de 4 KB, renombre, puntero propio sin githubRepoId y LIMIT 200',async()=>{
+  const f=await remoteFixture();
+  try{
+    const s=await f.session();
+    const gh=new GitHubApi({baseUrl:f.env.ZANA_GITHUB_API_URL,token:AUTHOR_TOKEN});
+    f.api.state.files['edge.json']='"'+'x'.repeat(4094)+'"';
+    assert.equal((await gh.fileJson('o/r','edge.json','main')).length,4094);
+    f.api.state.files['edge.json']='"'+'x'.repeat(4095)+'"';
+    await assert.rejects(gh.fileJson('o/r','edge.json','main'),/at most 4 KB/);
+    const a=await initOnly(f,s);
+    f.api.state.files[POINTER_PATH]=JSON.stringify({zanallaima:1,projectId:a.projectId,githubRepoId:4242,note:'n'.repeat(4100)});
+    const big=await initOnly(f,s);
+    assert.deepEqual([big.projectId,big.pointer.status],[a.projectId,'POINTER_MISSING']);
+    assert.match(big.pointer.invalid,/at most 4 KB/);
+    // Mismo id de repo con otro full_name: el proyecto sigue y su repo se actualiza.
+    f.api.state.fullName='o/r2';
+    f.api.state.files[POINTER_PATH]=JSON.stringify({zanallaima:1,projectId:a.projectId});
+    const own=await initOnly(f,s);
+    assert.deepEqual([own.projectId,own.pointer.status],[a.projectId,'POINTER_STALE']);
+    assert.deepEqual(await q('SELECT repo FROM projects'),[{repo:'o/r2'}]);
+    // Más de 200 convenciones: la consulta trae 200, las más nuevas primero.
+    const {rows,entries}=await remoteWrite(db=>{
+      for(let i=0;i<250;i++)saveEntry(db,{projectId:a.projectId,kind:'convention',topic:'c'+i,body:'b'});
+      let rows=0;
+      const counted={prepare:sql=>{const st=db.prepare(sql);return {all:(...p)=>{const r=st.all(...p);rows+=r.length;return r;}};}};
+      memoryContext(counted,a.projectId);
+      return {rows,entries:memoryContext(db,a.projectId,{maxBytes:1e7}).entries};
+    });
+    assert.equal(rows,200);
+    assert.deepEqual([entries.length,entries[0].topic,entries.at(-1).topic],[200,'c249','c50']);
+  }finally{await f.cleanup();}
+});
+
 test('S4: close de una misión que no está ACTIVE no llama a GitHub',async()=>{
   const f=await remoteFixture();
   try{

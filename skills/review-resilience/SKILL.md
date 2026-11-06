@@ -12,5 +12,6 @@ description: Lente R4 Resilience — recuperación, rollback, observabilidad, re
 - Marca cambios que pueden fallar en producción sin observabilidad: sin logs, métricas o alertas que lo muestren.
 - Marca rendimiento sin medir cuando el cambio toca un camino caliente o un límite visible para el usuario; exige la medición, no "podría ser lento".
 - Marca fallos silenciosos: errores tragados, `catch` vacíos, resultados parciales reportados como éxito.
+- **Origen** (`origin`): `INTRODUCED` si el diff agrega o cambia la línea; `ACTIVATED` si hace alcanzable un defecto previo; `WORSENED` si lo agrava; `PREEXISTING` solo si ya estaba igual en la base, con `proof` que cite `archivo:línea` de la base (`get_file_contents` con `ref=<base>` o el contexto del diff); con duda, `UNKNOWN`. Nunca `PREEXISTING` para no bloquear algo que el PR toca.
 
-Salida: hallazgos con `severity`, `location` (`archivo:línea`) y `evidence`. Si está limpio, `findings: []` con evidencia concreta.
+Salida: hallazgos con `severity`, `location` (`archivo:línea`), `evidence` y `origin` (`proof` si es `PREEXISTING`). Si está limpio, `findings: []` con evidencia concreta.

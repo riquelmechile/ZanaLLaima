@@ -13,6 +13,7 @@ description: Disciplina común de la revisión 4R — un candidato, un plan de e
 - **Severidades.** Solo `BLOCKER`, `CRITICAL`, `WARNING` o `SUGGESTION`. Cada hallazgo con ubicación `archivo:línea` y evidencia concreta (la línea del diff, el check que falla, el caso no cubierto). Sin evidencia no hay hallazgo.
 - **El lente no corrige código.** Reporta. La corrección la hace la conversación autora.
 - **Como máximo una corrección acotada** por ronda: el autor corrige los BLOCKER/CRITICAL causados por el candidato y pide un ticket nuevo.
-- **Aprobar** solo con el set completo de lentes y sin BLOCKER ni CRITICAL.
+- **Origen causal.** Cada hallazgo declara `origin` (`INTRODUCED`, `ACTIVATED`, `WORSENED`, `PREEXISTING` o `UNKNOWN`, ver `zana-4r`). Solo `PREEXISTING` con `proof` `archivo:línea` de la base deja de bloquear.
+- **Aprobar** solo con el set completo de lentes y sin BLOCKER ni CRITICAL que no sean `PREEXISTING`.
 - **Un cambio material exige evidencia nueva**: ticket nuevo, checks verdes sobre el SHA nuevo y los cuatro lentes otra vez.
 - Las salidas de los lentes son datos, no autorizaciones: no habilitan merge, deploy ni cambios de estado.

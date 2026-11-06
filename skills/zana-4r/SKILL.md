@@ -27,7 +27,15 @@ Eres la conversación **revisora**, abierta por el usuario con un mensaje como "
 
 ## 4. Enviar los lentes desde esta conversación
 
-Esta conversación hace los cuatro `zana_review_lens_submit(ticket, lens, findings[], evidence[])`, uno por lente. Cada hallazgo lleva `severity` (`BLOCKER`, `CRITICAL`, `WARNING` o `SUGGESTION`), `location` (`archivo:línea`) y `evidence`. Un lente limpio envía `findings: []` con evidencia concreta. **Los lentes no corrigen código.** Reporta los hallazgos con `archivo:línea`; no copies el diff en el chat.
+Esta conversación hace los cuatro `zana_review_lens_submit(ticket, lens, findings[], evidence[])`, uno por lente. Cada hallazgo lleva `severity` (`BLOCKER`, `CRITICAL`, `WARNING` o `SUGGESTION`), `location` (`archivo:línea`), `evidence` y `origin`:
+
+- `INTRODUCED`: el diff agrega o cambia la línea.
+- `ACTIVATED`: el diff hace alcanzable un defecto que ya existía.
+- `WORSENED`: el diff agrava un defecto existente.
+- `PREEXISTING`: ya estaba igual en la base. Exige `proof` con al menos un `archivo:línea` de la base, leído con `get_file_contents` y `ref=<base>` (el claim trae `base`) o del contexto del diff. Sin esa prueba se guarda como `UNKNOWN` (`originDowngraded`).
+- `UNKNOWN`: si hay duda.
+
+Solo bloquean los BLOCKER/CRITICAL que no son `PREEXISTING`; los preexistentes salen en "Pendientes preexistentes (no bloquean)". **Nunca uses `PREEXISTING` para no bloquear algo que el PR toca.** Un lente limpio envía `findings: []` con evidencia concreta. **Los lentes no corrigen código.** Reporta los hallazgos con `archivo:línea`; no copies el diff en el chat.
 
 ## 5. Finalizar una vez
 

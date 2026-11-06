@@ -125,6 +125,7 @@ function connect(path, readonly = false) {
         const ticketColumns=db.prepare('PRAGMA table_info(review_tickets)').all().map(x=>x.name);
         if(!ticketColumns.includes('author_client'))db.exec('ALTER TABLE review_tickets ADD COLUMN author_client TEXT');
         if(!ticketColumns.includes('operator_released'))db.exec('ALTER TABLE review_tickets ADD COLUMN operator_released INTEGER NOT NULL DEFAULT 0');
+        if(!ticketColumns.includes('line_budget'))db.exec('ALTER TABLE review_tickets ADD COLUMN line_budget TEXT');
         const missionColumns=db.prepare('PRAGMA table_info(remote_missions)').all().map(x=>x.name);
         if(!missionColumns.includes('line_budget_extension'))db.exec('ALTER TABLE remote_missions ADD COLUMN line_budget_extension TEXT');
         if(!missionColumns.includes('project_id'))db.exec('ALTER TABLE remote_missions ADD COLUMN project_id TEXT');

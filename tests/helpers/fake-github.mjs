@@ -47,8 +47,9 @@ export async function fakeGitHubApi(){
       const head=url.searchParams.get('head');
       return send(200,state.pulls.filter(x=>x.state==='open'&&(!head||'o:'+x.head.ref===head)));
     }
+    // compareError: {status, body} as GitHub answers a diff it will not render (406/422).
     if((m=/^\/compare\/(.+)\.\.\.([0-9a-f]{40})$/.exec(p)))
-      return send(200,state.diffText??('diff --git a/x b/x\n+'+AUTHOR_TOKEN+'\n'),'text/plain');
+      return state.compareError?send(state.compareError.status,state.compareError.body):send(200,state.diffText??('diff --git a/x b/x\n+'+AUTHOR_TOKEN+'\n'),'text/plain');
     if((m=/^\/pulls\/comments\/(\d+)$/.exec(p)))return state.comments[m[1]]?send(200,state.comments[m[1]]):send(404,{message:'nf'});
     if((m=/^\/pulls\/(\d+)$/.exec(p))&&req.method==='GET'){
       const pull=state.pulls.find(x=>x.number===Number(m[1]));
@@ -58,6 +59,7 @@ export async function fakeGitHubApi(){
       return send(200,current);
     }
     if((m=/^\/pulls\/(\d+)\/files$/.exec(p))){
+      state.onPullFiles?.(Number(m[1]));
       const files=state.pullFiles[m[1]]??[{filename:'x',additions:10,deletions:0,status:'modified'}];
       const per=Number(url.searchParams.get('per_page')),page=Number(url.searchParams.get('page'));
       return send(200,files.slice((page-1)*per,page*per));

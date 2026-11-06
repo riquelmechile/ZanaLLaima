@@ -73,10 +73,20 @@ test('startRemote listens on 127.0.0.1 (port 0 = free port), refuses relative pa
     const {ZANA_PUBLIC_HOST:_h,...noHost}=base;
     assert.equal(httpSettings(noHost).publicUrl,null);
     assert.deepEqual(httpSettings(noHost).allowedHosts,['127.0.0.1','localhost']);
-    await assert.rejects(startRemote(noHost),/ZANA_PUBLIC_HOST/);
+    // A start that should be refused must not leave a server listening (or the test would hang).
+    const refused=async(env,re)=>{
+      let s;
+      await assert.rejects((async()=>{s=await startRemote(env);})(),re);
+      if(s){s.server.closeAllConnections();await new Promise(ok=>s.server.close(ok));s.oauth.close();await s.runtime.close();}
+    };
+    await refused(noHost,/ZANA_PUBLIC_HOST/);
+    // Only ZANA_PUBLIC_MCP_URL: the Host allowlist follows its hostname.
+    assert.deepEqual(httpSettings({ZANA_PUBLIC_MCP_URL:'https://Zl.Example.org/mcp'}).allowedHosts,['zl.example.org','127.0.0.1','localhost']);
+    assert.throws(()=>httpSettings({ZANA_PUBLIC_HOST:'a.example.org',ZANA_PUBLIC_MCP_URL:'https://b.example.org/mcp'}),/different hosts/);
+    assert.throws(()=>httpSettings({ZANA_PUBLIC_MCP_URL:'not a url'}),/absolute URL/);
     // Same for the reviewer login: no default, the server refuses to start.
     const {ZANA_REVIEWER_LOGIN:_l,...noLogin}=base;
-    await assert.rejects(startRemote(noLogin),/ZANA_REVIEWER_LOGIN/);
+    await refused(noLogin,/ZANA_REVIEWER_LOGIN/);
     started=await startRemote(base);
     assert.equal(started.settings.bind,'127.0.0.1');
     assert.ok(started.settings.port>0);

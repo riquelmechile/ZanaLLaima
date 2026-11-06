@@ -1,4 +1,4 @@
-# PENDIENTE DE ZANA: este archivo NO es una llave pública válida.
+# PENDIENTE DEL OPERADOR: este archivo NO es una llave pública válida.
 # Sustituir completamente por la salida de:
 # openssl pkey -in ~/.config/zana-llaima/ci-attest-private.pem -pubout
 # No generar ni commitear la llave privada dentro del repositorio.

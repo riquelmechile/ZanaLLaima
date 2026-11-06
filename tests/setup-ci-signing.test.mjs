@@ -44,6 +44,11 @@ test('unexpected CLI flags and absent operator public key fail closed before any
     const noReviewer=spawnSync('bash',[script],{encoding:'utf8',env:{...s.env,ZANA_CI_REVIEWER:''}});
     assert.notEqual(noReviewer.status,0);
     assert.match(noReviewer.stderr,/Define ZANA_CI_REVIEWER/);
+    for(const bad of ['a/b','-x','../users','x'.repeat(40)]){
+      const r=spawnSync('bash',[script],{encoding:'utf8',env:{...s.env,ZANA_CI_REVIEWER:bad}});
+      assert.notEqual(r.status,0,bad);
+      assert.match(r.stderr,/Define ZANA_CI_REVIEWER/,bad);
+    }
     const missingPublic=spawnSync('bash',[script],{encoding:'utf8',env:{...s.env,ZANA_CI_REVIEWER:'reviewer-bot'}});
     assert.notEqual(missingPublic.status,0);
     assert.match(missingPublic.stderr,/Falta llave pública válida/);

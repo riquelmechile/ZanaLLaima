@@ -315,3 +315,15 @@ test('ticket codes and review body helpers',()=>{
     execution:'PARALLEL_SUBAGENTS',event:'APPROVE'});
   assert.match(huge,/cuerpo recortado/);
 });
+
+test('finalize without ZANA_REVIEWER_LOGIN fails closed and publishes nothing',async()=>{
+  const f=await remoteFixture({envExtra:{ZANA_REVIEWER_LOGIN:''}});
+  try{
+    const {ticket,reviewer}=await claimed(f);
+    await allLenses(f,ticket,reviewer);
+    const r=await f.call('zana_review_finalize',{ticket,execution:'PARALLEL_SUBAGENTS'},reviewer);
+    assert.match(r.error,/REVIEWER_LOGIN_MISSING/);
+    assert.equal((f.api.state.reviews[7]??[]).length,0);
+    assert.equal((f.api.state.statuses?.[sha('a')]??[]).length,0);
+  }finally{await f.cleanup();}
+});

@@ -62,10 +62,17 @@ export function httpSettings(env=process.env){
   // No default: the public hostname is the operator's own, set only on the server.
   const publicHost=String(env.ZANA_PUBLIC_HOST??'').trim();
   const publicUrl=env.ZANA_PUBLIC_MCP_URL||(publicHost?'https://'+publicHost+'/mcp':null);
+  // The Host allowlist and the OAuth issuer must name the same hostname.
+  let urlHost='';
+  if(publicUrl){
+    try{urlHost=new URL(publicUrl).hostname.toLowerCase();}catch{throw new Error('ZANA_PUBLIC_MCP_URL must be an absolute URL');}
+    if(publicHost&&hostname(publicHost)!==urlHost)
+      throw new Error('ZANA_PUBLIC_HOST and ZANA_PUBLIC_MCP_URL name different hosts');
+  }
   const origins=String(env.ZANA_ALLOWED_ORIGINS??'https://chatgpt.com').split(',').map(x=>x.trim()).filter(Boolean);
   const redirectUris=String(env.ZANA_OAUTH_REDIRECT_URIS??'https://chatgpt.com/connector_platform_oauth_redirect')
     .split(',').map(x=>x.trim()).filter(Boolean);
-  const allowedHosts=[...new Set([...(publicHost?[hostname(publicHost)]:[]),'127.0.0.1','localhost'])];
+  const allowedHosts=[...new Set([...(urlHost?[urlHost]:[]),'127.0.0.1','localhost'])];
   const oauthDb=resolve(env.ZANA_OAUTH_DB||join(dirname(statePath()),'oauth.sqlite'));
   return {port,bind:'127.0.0.1',publicUrl,origins,redirectUris,allowedHosts,oauthDb,
     password:env.ZANA_OAUTH_CONSENT_PASSWORD??''};

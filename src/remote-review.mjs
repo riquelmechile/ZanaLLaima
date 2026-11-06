@@ -284,6 +284,7 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
     async finalize({ticket:code,execution},session){
       if(!EXECUTIONS.includes(execution))fail('INVALID_EXECUTION','execution must be '+EXECUTIONS.join(' or '));
       if(!reviewerGithub.configured)fail('REVIEWER_TOKEN_MISSING','ZANA_REVIEWER_TOKEN is not set on the server');
+      if(!config.reviewerLogin)fail('REVIEWER_LOGIN_MISSING','ZANA_REVIEWER_LOGIN is not set on the server');
       const mid=await remoteWrite(db=>ticketBy(db,code).mission_id);
       return exclusive(missionLock(mid),async()=>{
         const {t,lenses,unread}=await remoteWrite(db=>{
@@ -335,7 +336,7 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
           // A lost response must not publish twice: adopt our own review of this commit with this ticket's marker.
           const marker='<!-- zana-ticket:'+t.ticket_id+' -->';
           const existing=(await reviewerGithub.pullReviews(t.repo,t.pr_number)).find(r=>
-            String(r?.user?.login??'').toLowerCase()===String(config.reviewerLogin??'').toLowerCase()&&config.reviewerLogin&&
+            config.reviewerLogin&&String(r?.user?.login??'').toLowerCase()===config.reviewerLogin.toLowerCase()&&
             r?.commit_id===t.sha&&String(r?.body??'').includes(marker));
           if(existing){reviewId=Number(existing.id);reviewUrl=existing.html_url??null;adopted=true;}
           else{

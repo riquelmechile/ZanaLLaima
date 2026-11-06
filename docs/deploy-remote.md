@@ -7,13 +7,13 @@ Esta guía deja ZanaLLaima funcionando como conector de la app de ChatGPT, desde
 ## Qué vas a armar
 
 ```
-App de ChatGPT ──MCP + OAuth──▶ https://<tu-dominio>/mcp ──túnel──▶ ZanaLLaima (loopback, puerto 8787)
+App de ChatGPT ──MCP + OAuth──▶ https://zanallaima.<tu-dominio>/mcp ──túnel──▶ ZanaLLaima (loopback, puerto 8787)
                                                                        │
                                      GitHub MCP oficial ◀──token autor──┤
                                      API de GitHub      ◀──token revisora┘
 ```
 
-- ZanaLLaima corre en tu servidor y escucha solo en loopback. Un túnel HTTPS lo publica en `https://<tu-dominio>/mcp`.
+- ZanaLLaima corre en tu servidor y escucha solo en loopback. Un túnel HTTPS lo publica en `https://zanallaima.<tu-dominio>/mcp`.
 - La app de ChatGPT se conecta con OAuth. El registro es cerrado: solo entran las cuentas que tú das de alta en una ventana de tiempo.
 - GPT escribe en GitHub con el **token autor**. La review la publica la **cuenta revisora**, con su propio token.
 
@@ -43,6 +43,8 @@ Es la cuenta con la que GPT hace commits, abre PR, dispara los checks y mergea. 
 | Metadata | lectura | obligatorio |
 | Issues | lectura y escritura | solo si agregas el toolset `issues` (para `add_issue_comment`) |
 
+GitHub documenta algunos límites de los tokens fine-grained con la API de Checks. Si `zana_checks_status` responde 403 al leer los check runs, usa para la cuenta autora un token **classic** con el scope `repo`.
+
 **No** le des Administration, Secrets, Variables, Webhooks ni Workflows. Sin el permiso *Workflows*, GitHub rechaza por su cuenta cualquier cambio en `.github/workflows`: es una segunda llave además de la política de ZanaLLaima.
 
 Si los repos son de una organización, el *resource owner* del token es la organización y puede que un admin tenga que aprobarlo.
@@ -53,8 +55,8 @@ Es una segunda cuenta de GitHub que **solo** publica reviews y el status `zana/4
 
 1. Desde la cuenta dueña del repo, invítala como colaboradora con permiso **Write**. Sin acceso de escritura su aprobación no cuenta para la protección de la rama. Acepta la invitación desde la cuenta revisora.
 2. Crea su token:
-   - **Repos de una organización:** token fine-grained con la organización como *resource owner* y los permisos *Pull requests* lectura y escritura, *Commit statuses* lectura y escritura, *Contents* lectura y *Metadata* lectura.
-   - **Repos de una cuenta personal ajena:** los tokens fine-grained solo alcanzan repos del propio *resource owner*, así que para un repo donde la revisora es colaboradora hace falta un token **classic** con el scope `repo`. Es más amplio: dale vencimiento y guárdalo solo en el servidor.
+   - **La revisora es miembro de la organización dueña del repo:** token fine-grained con la organización como *resource owner* y los permisos *Pull requests* lectura y escritura, *Commit statuses* lectura y escritura, *Contents* lectura y *Metadata* lectura.
+   - **Cualquier otro caso** (repo de una cuenta personal ajena, o la revisora es *outside collaborator* de la organización): los tokens fine-grained no alcanzan repos donde solo eres colaboradora, así que hace falta un token **classic** con el scope `repo`. Es más amplio: dale vencimiento y guárdalo solo en el servidor.
 
 ### 1.3 Clave del operador
 
@@ -111,7 +113,7 @@ Edítalo con un editor en el servidor, nunca en el repo ni en un chat. **Rutas a
 | `ZANA_GITHUB_REPOS` | sí | `owner/repo` separados por coma. GPT no puede tocar ningún otro. |
 | `ZANA_DOWNSTREAM_GITHUB_TOKEN` | sí | Token de la cuenta autora (1.1). |
 | `ZANA_REVIEWER_TOKEN` | sí | Token de la cuenta revisora (1.2). |
-| `ZANA_REVIEWER_LOGIN` | sí | Login de GitHub de la cuenta revisora. No tiene valor por defecto: sin él el servidor no arranca y `/health` queda `degraded`. |
+| `ZANA_REVIEWER_LOGIN` | sí | Login de GitHub de la cuenta revisora. No tiene valor por defecto: sin él el servidor no arranca, y `node src/cli.mjs remote-health` lo muestra como `degraded`. |
 | `ZANA_HTTP_PORT` | no | Puerto local, 8787 por defecto. |
 | `ZANA_REQUIRED_CHECKS` | no | Nombres de checks que deben estar verdes. Vacío = todos los check runs del SHA. |
 | `ZANA_CHECKS_WORKFLOW` | no | Nombre del workflow de checks, `zana-checks.yml` por defecto. |
@@ -146,7 +148,12 @@ cloudflared tunnel create zanallaima          # crea el túnel y su archivo de c
 cloudflared tunnel route dns zanallaima zanallaima.<tu-dominio>
 ```
 
-Copia `deploy/cloudflared-zanallaima.yml.example` a `~/.cloudflared/config.yml`, completa el id del túnel, la ruta de credenciales y tu hostname, y deja el servicio de loopback IPv4 en el puerto 8787 tal como está escrito en el ejemplo. No uses `localhost`, que puede resolver a IPv6. Después instala `cloudflared` como servicio (`sudo cloudflared service install`) o reinícialo.
+Copia `deploy/cloudflared-zanallaima.yml.example` a `~/.cloudflared/config.yml`, completa el id del túnel, la ruta de credenciales y tu hostname, y deja el servicio de loopback IPv4 en el puerto 8787 tal como está escrito en el ejemplo. No uses `localhost`, que puede resolver a IPv6. Después instálalo como servicio. Con `sudo`, `cloudflared` no busca en tu `~/.cloudflared`, así que pásale la ruta:
+
+```sh
+sudo cloudflared --config /home/<usuario>/.cloudflared/config.yml service install
+sudo systemctl start cloudflared
+```
 
 Comprueba desde afuera:
 
@@ -228,8 +235,10 @@ Cada `remote-*` exige solo la DB que usa, con ruta absoluta y ya existente, así
 | El servicio no arranca: `ZANA_PUBLIC_HOST ... must be set` | Falta el hostname público en el env. |
 | El servicio no arranca: `ZANA_REVIEWER_LOGIN must be set` | Falta el login de la cuenta revisora. |
 | `... must be set to an absolute path` | Una ruta con `~` o relativa en el env. |
-| `/health` da `503 degraded` | Mira `problems` en `node src/cli.mjs remote-health`: token faltante, DB que no abre o login de revisora vacío. |
+| `/health` da `503 degraded` | Mira `problems` en `node src/cli.mjs remote-health`: token faltante o DB que no abre. |
 | ChatGPT no puede registrar el conector | La ventana de alta está cerrada (`remote-enroll`) o la URL no termina en `/mcp`. |
-| El túnel responde 404 | El hostname de `config.yml` no coincide con `ZANA_PUBLIC_HOST`. |
+| El túnel responde 404 | El `hostname` del ingress de `config.yml` no coincide con el DNS que creaste con `cloudflared tunnel route dns`. |
+| ZanaLLaima responde 403 `Host not allowed` | `ZANA_PUBLIC_HOST` no coincide con el hostname del túnel. |
+| El servicio no arranca: `... name different hosts` | `ZANA_PUBLIC_HOST` y `ZANA_PUBLIC_MCP_URL` apuntan a hosts distintos; basta con definir uno. |
 | `zana_delivery_status` dice `REVIEWER_IS_AUTHOR` | La cuenta revisora tiene commits en el PR. |
 | La review de la revisora no cuenta para la protección | La revisora no tiene permiso Write en el repo. |

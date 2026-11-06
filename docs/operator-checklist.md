@@ -14,7 +14,7 @@ gh pr checks 1 --repo <owner>/ZanaLLaima
 
 ## 2. Firma CI segura por workflow_run (main-only)
 
-Desde una máquina controlada por el operador (no desde el MCP):
+Desde una máquina controlada por el operador (no desde el MCP). `scripts/setup-ci-signing.sh` y `scripts/ci-attest.mjs` fijan el repo canónico en `REPO`; en un fork, cambia ese valor antes de correrlos:
 
 ```sh
 git switch feat/gpt-native-solo-engine

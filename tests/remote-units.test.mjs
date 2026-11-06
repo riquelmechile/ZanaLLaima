@@ -68,7 +68,7 @@ test('downstream config, URLs and classes',()=>{
 });
 
 test('downstream gateway: missing token, writes deny, tool errors, policy failure, circuit breaker',async()=>{
-  const missing=new DownstreamGateway({name:'github',url:'http://127.0.0.1:9/mcp'});
+  const missing=new DownstreamGateway({name:'github',url:'https://never-contacted.invalid/mcp'});
   assert.equal(missing.status().state,'TOKEN_MISSING');
   assert.match((await missing.call({host:'h'},'x',{})).content[0].text,/token is not set/);
   const mcp=await fakeGitHubMcp({extra:[{name:'boom',annotations:{readOnlyHint:true}}]});
@@ -86,17 +86,7 @@ test('downstream gateway: missing token, writes deny, tool errors, policy failur
     assert.equal((await allow.call({host:'h'},'push_files',{},{missionId:'m'})).isError,undefined);
     assert.ok(audits.every(a=>a.args!==undefined&&a.outcome));
   }finally{await mcp.close();}
-  // A dead server: refresh fails, calls fail fast, then the breaker opens.
-  let t=1_000_000;
-  const dead=new DownstreamGateway({name:'github',url:'http://127.0.0.1:9/mcp',token:AUTHOR_TOKEN,timeoutMs:1000},{now:()=>t});
-  for(let i=0;i<3;i++){
-    assert.match((await dead.call({host:'h'},'get_me',{})).content[0].text,/could not read its tool list/);
-    assert.match((await dead.call({host:'h'},'get_me',{})).content[0].text,/could not read its tool list/,'fails fast');
-    t+=20_000;
-  }
-  assert.equal(dead.status().state,'CIRCUIT_OPEN');
-  await assert.rejects(dead.refresh(),/circuit open/);
-  await dead.close();
+  // The dead-server breaker is covered with a connection-dropping server in remote-round1-warnings.
 });
 
 test('GitHub REST client: guards, errors, pagination limits and job logs',async()=>{

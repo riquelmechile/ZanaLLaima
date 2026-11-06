@@ -242,3 +242,27 @@ test('operator CLI: enrollment window, clients, audit and argument validation',a
     await f.cleanup();
   }
 });
+
+test('R3: with the window closed, an already registered client can neither authorize nor consent',async()=>{
+  const f=await remoteFixture();
+  const s=await server(f);
+  try{
+    setEnrollment(s.settings.oauthDb,5);
+    const reg=await (await fetch(s.base+'/register',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({redirect_uris:[REDIRECT]})})).json();
+    const verifier=randomBytes(32).toString('base64url');
+    const q=form({client_id:reg.client_id,redirect_uri:REDIRECT,response_type:'code',
+      code_challenge:createHash('sha256').update(verifier).digest('base64url'),code_challenge_method:'S256',state:'s',resource:PUBLIC});
+    const auth=await fetch(s.base+'/authorize?'+q,{redirect:'manual'});
+    assert.equal(auth.status,302,'pending consent opened inside the window');
+    const csrf=/__Host-zana-consent=([^;]+)/.exec(auth.headers.get('set-cookie'))[1];
+    const sid=new URL(auth.headers.get('location'),s.base).searchParams.get('sid');
+    setEnrollment(s.settings.oauthDb,0);
+    assert.equal((await fetch(s.base+'/authorize?'+q,{redirect:'manual'})).status,400,'authorize refused');
+    assert.equal((await fetch(s.base+'/oauth/consent?sid='+sid,{headers:{cookie:'__Host-zana-consent='+csrf}})).status,400,'consent page refused');
+    const post=await fetch(s.base+'/oauth/consent?sid='+sid,{method:'POST',redirect:'manual',
+      headers:{'content-type':'application/x-www-form-urlencoded',origin:'https://zanallaima.test'},
+      body:form({csrf,password:PASSWORD,host:'zana-chatgpt',decision:'allow'})});
+    assert.equal(post.status,403,'consent submit refused');
+  }finally{await s.close();await f.cleanup();}
+});

@@ -332,7 +332,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       }
       const reviewer=id?await rr(db=>Boolean(db&&sessionReviews(db,session.sessionId,id))):false;
       const result=await gateway.call({host:session.host,sessionId:session.sessionId,role:reviewer?'reviewer':'author'},
-        operation==='@index'?'index':operation,args,{missionId:id??null});
+        operation,args,{missionId:id??null});
       return {passthrough:result};
     },
   };
@@ -352,7 +352,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       outcome='ERROR';
       const text=error instanceof DeadlineError
         ?'TOOL_DEADLINE: '+name+' exceeded '+config.toolDeadlineMs+' ms; the operation may still complete, read state before retrying'
-        :clean(error,secrets()).slice(0,2000);
+        :clean(error,secrets());
       result={isError:true,content:[{type:'text',text}]};
     }
     let auditFailed=false;

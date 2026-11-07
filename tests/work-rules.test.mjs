@@ -36,5 +36,8 @@ test('reglas del verificador en zana-4r, review-reliability y review-discipline;
   const odd=read('skills/zana-odd/SKILL.md');
   assert.match(odd,/Antes de abrir el PR, carga `zana-pr` con `zana_skill_load` y síguela/);
   assert.ok(odd.indexOf('`zana-pr`')<odd.indexOf('`create_pull_request` con `head'),'zana-pr va antes de abrir el PR');
+  const rdd=read('docs/solo-rdd.md').split('**No prueba:**')[1];
+  assert.match(rdd,/vuelve alcanzable \(`ACTIVATED`\), no se etiquete `PREEXISTING`/);
+  assert.match(rdd,/el servidor no la busca en el árbol de `baseSha`/);
 });
 

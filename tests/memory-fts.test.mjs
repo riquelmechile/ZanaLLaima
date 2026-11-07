@@ -1,11 +1,12 @@
 // Endurecimiento de la búsqueda FTS (WARNING de la 4R de #10 y sugerencias de #11 y #12).
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {DatabaseSync} from 'node:sqlite';
 import {mkdtemp,rm} from 'node:fs/promises';
 import {readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {remoteRead,remoteWrite,ensureSchema,setupMemoryFts} from '../src/store.mjs';
+import {remoteRead,remoteWrite,ensureSchema,setupMemoryFts,databasePath} from '../src/store.mjs';
 import {saveEntry,searchMemory} from '../src/project-memory.mjs';
 import {REMOTE_INSTRUCTIONS} from '../src/remote.mjs';
 import {redactStored} from '../src/redact.mjs';
@@ -18,7 +19,7 @@ async function store(){
   const write=fn=>remoteWrite(fn,file);
   const read=fn=>remoteRead(fn,file),search=query=>read(db=>searchMemory(db,{query,projectId:pid}));
   const bodies=async query=>(await search(query)).entries.map(e=>e.body);
-  return {write,read,search,bodies,save:body=>write(db=>saveEntry(db,{projectId:pid,kind:'issue',topic:'t'+body.length,body})),
+  return {file,write,read,search,bodies,save:body=>write(db=>saveEntry(db,{projectId:pid,kind:'issue',topic:'t'+body.length,body})),
     cleanup:()=>rm(dir,{recursive:true,force:true})};
 }
 
@@ -62,7 +63,8 @@ test('W-FTS: si el rebuild falla queda metadata.fts=0 y la búsqueda usa LIKE',a
     await s.save('Sin punto y coma');
     await s.write(db=>{
       db.exec('DROP TABLE project_memory_fts');
-      setupMemoryFts({prepare:sql=>db.prepare(sql),exec:sql=>{if(/'rebuild'/.test(sql))throw new Error('disk I/O error');return db.exec(sql);}});
+      setupMemoryFts({prepare:sql=>db.prepare(sql),get isTransaction(){return db.isTransaction;},
+        exec:sql=>{if(/'rebuild'/.test(sql))throw new Error('disk I/O error');return db.exec(sql);}});
     });
     const r=await s.search('punto');
     assert.deepEqual([r.mode,'fallback' in r,r.entries.length],['like',false,1]);
@@ -99,6 +101,43 @@ test('W-FTS: FTS y LIKE exigen cada palabra y separan en _',async()=>{
       assert.deepEqual(await s.bodies('mi_var'),['La var de mi módulo'],fts);
       assert.deepEqual(await s.bodies('%-'),[],fts);
     }
+  }finally{await s.cleanup();}
+});
+
+test('W-FTS: una conexión sobre un índice sano no lo reconstruye',async()=>{
+  const s=await store();
+  try{
+    await s.save('Sin punto y coma');
+    const rebuilds=await s.write(db=>{
+      let n=0;
+      setupMemoryFts({prepare:sql=>db.prepare(sql),get isTransaction(){return db.isTransaction;},
+        exec:sql=>{if(/'rebuild'/.test(sql))n++;return db.exec(sql);}});
+      return n;
+    });
+    assert.equal(rebuilds,0);
+  }finally{await s.cleanup();}
+});
+
+test('W-FTS: un rebuild sin espacio relanza el error y no deja user_version escrito',async()=>{
+  const s=await store();
+  try{
+    // Más de 1 MB de términos distintos: FTS5 escribe páginas durante el rebuild.
+    const body=i=>Array.from({length:60},(_,j)=>'p'+(i*60+j)).join(' ');
+    await s.write(db=>{for(let i=0;i<3000;i++)saveEntry(db,{projectId:pid,kind:'issue',topic:'t'+i,body:body(i)});});
+    const raw=new DatabaseSync(databasePath(s.file));
+    raw.exec('DROP TABLE project_memory_fts;PRAGMA user_version=7;VACUUM');
+    const exec=DatabaseSync.prototype.exec;
+    // El rebuild corre con la base topada: SQLITE_FULL revierte toda la transacción del esquema.
+    DatabaseSync.prototype.exec=function(sql){
+      if(/'rebuild'/.test(sql))exec.call(this,'PRAGMA max_page_count='+this.prepare('PRAGMA page_count').get().page_count);
+      return exec.call(this,sql);
+    };
+    try{await assert.rejects(s.write(()=>{}),e=>/full/i.test(e.message)&&!/no transaction/.test(e.message));}
+    finally{DatabaseSync.prototype.exec=exec;}
+    assert.equal(raw.prepare('PRAGMA user_version').get().user_version,7);
+    raw.close();
+    await s.write(()=>{});
+    assert.deepEqual(await s.bodies('p420'),[body(7)]);
   }finally{await s.cleanup();}
 });
 

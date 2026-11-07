@@ -94,7 +94,7 @@ test('memory search: proyecto actual, all:true, supersedidas al final y LIKE con
     // A SQLite without FTS5 records fts='0' instead of failing the migration.
     const raw=new DatabaseSync(':memory:');
     raw.exec("CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)");
-    setupMemoryFts({prepare:sql=>raw.prepare(sql),exec:sql=>{if(/VIRTUAL/.test(sql))throw new Error('no such module: fts5');return raw.exec(sql);}});
+    setupMemoryFts({prepare:sql=>raw.prepare(sql),get isTransaction(){return raw.isTransaction;},exec:sql=>{if(/VIRTUAL/.test(sql))throw new Error('no such module: fts5');return raw.exec(sql);}});
     assert.equal(raw.prepare("SELECT value FROM metadata WHERE key='fts'").get().value,'0');
     raw.close();
   }finally{await f.cleanup();}

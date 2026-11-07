@@ -1,20 +1,25 @@
 // PR3: hallazgos causales. Solo bloquea lo grave que trae el PR; lo
-// PREEXISTING con prueba de la base pasa a "Pendientes" y no bloquea.
+// PREEXISTING con prueba, en un archivo que el PR no toca, pasa a "Pendientes" y no bloquea.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {remoteFixture,readDiff} from './helpers/remote-fixture.mjs';
-import {validateLens,validProof,lensDigest,reviewBody,addedLines,onAddedLine} from '../src/remote-review.mjs';
+import {validateLens,validProof,lensDigest,reviewBody,canonPath,inTouchedFile,touchedFiles} from '../src/remote-review.mjs';
 import {remoteWrite} from '../src/store.mjs';
 
 const clean=lens=>({lens,findings:[],evidence:['read every page']});
 // Head: line 1 context (a-b, already in the base), line 2 added by the PR, line 3 context.
 const DIFF='diff --git a/src/sum.mjs b/src/sum.mjs\n--- a/src/sum.mjs\n+++ b/src/sum.mjs\n@@ -1,2 +1,3 @@\n'+
   ' export const sum=(a,b)=>a-b;\n+export const twice=x=>sum(x,x);\n // fin\n';
-const PROOF='src/sum.mjs:1 ya restaba en la base (get_file_contents ref=baseSha)';
+const PROOF='lib/other.mjs:5 ya restaba en la base (get_file_contents ref=baseSha)';
+// Files of the PR (GitHub's /pulls/7/files): src/sum.mjs and a rename src/old.mjs → src/new.mjs.
+const FILES=[{filename:'src/sum.mjs',additions:1,deletions:0,status:'modified'},
+  {filename:'src/new.mjs',previous_filename:'src/old.mjs',additions:0,deletions:0,status:'renamed'}];
+const OLD={location:'lib/other.mjs:5',proof:PROOF};
 const finding=(origin,extra={})=>({severity:'BLOCKER',location:'src/sum.mjs:3',evidence:'returns a-b',origin,...extra});
 const risk=(...findings)=>({lens:'risk',findings,evidence:['diff']});
-async function claimed(f){
-  f.api.state.diffText=DIFF;
+async function claimed(f,diff=DIFF,files=FILES){
+  f.api.state.diffText=diff;
+  f.api.state.pullFiles['7']=files;
   const ready=await f.authorReady();
   const req=await f.call('zana_review_request',{missionId:ready.missionId},ready.author);
   const reviewer=await f.session();
@@ -30,12 +35,12 @@ async function rest(f,ticket,reviewer){
 const finalize=(f,ticket,reviewer)=>f.call('zana_review_finalize',{ticket,execution:'PARALLEL_SUBAGENTS'},reviewer);
 const sentBody=f=>JSON.parse(f.api.state.requests.find(x=>x.method==='POST'&&x.path.endsWith('/pulls/7/reviews')).body);
 
-test('a PREEXISTING BLOCKER with a file:line proof approves and is listed as a pending item',async()=>{
+test('a PREEXISTING BLOCKER with a file:line proof in a file the PR does not touch approves and is a pending item',async()=>{
   const f=await remoteFixture();
   try{
     const {ticket,reviewer,missionId}=await claimed(f);
-    const r=await f.call('zana_review_lens_submit',{ticket,...risk(finding('PREEXISTING',{location:'src/sum.mjs:1',proof:PROOF,title:'resta'}),
-      finding('PREEXISTING',{location:'lib/other.mjs:5',proof:'lib/other.mjs:5 sin cambios'}))},reviewer);
+    const r=await f.call('zana_review_lens_submit',{ticket,...risk(finding('PREEXISTING',{...OLD,title:'resta'}),
+      finding('PREEXISTING',{location:'other/sum.mjs:5',proof:'other/sum.mjs:5 sin cambios'}))},reviewer);
     assert.deepEqual({blocking:r.blocking,down:r.originDowngraded},{blocking:false,down:[]});
     await rest(f,ticket,reviewer);
     assert.deepEqual(await f.runtime.review.openBlocking(missionId),[]);
@@ -45,7 +50,7 @@ test('a PREEXISTING BLOCKER with a file:line proof approves and is listed as a p
     assert.equal(event,'APPROVE');
     assert.match(body,/\| risk \| 0 \| 0 \| 0 \| 0 \| 2 \|/);
     assert.match(body,/### risk\nSin hallazgos del PR\./);
-    assert.match(body,/Veredicto: \*\*APPROVE\*\*[^]*### Pendientes preexistentes \(no bloquean\)\n- \*\*BLOCKER\*\* `src\/sum.mjs:1` — resta\. Lente: risk\..*Prueba en la base: src\/sum.mjs:1 ya restaba/);
+    assert.match(body,/Veredicto: \*\*APPROVE\*\*[^]*### Pendientes preexistentes \(no bloquean\)\n- \*\*BLOCKER\*\* `lib\/other.mjs:5` — resta\. Lente: risk\..*Prueba en la base: lib\/other.mjs:5 ya restaba/);
   }finally{await f.cleanup();}
 });
 
@@ -53,13 +58,13 @@ test('a PREEXISTING without a valid proof is stored as UNKNOWN and requests chan
   const f=await remoteFixture();
   try{
     const {ticket,reviewer}=await claimed(f);
-    const r=await f.call('zana_review_lens_submit',{ticket,...risk(finding('PREEXISTING'),
-      finding('PREEXISTING',{proof:'ya estaba así en main'}),finding('PREEXISTING',{proof:'src/sum.mjs sin línea'}),
+    const at=proof=>finding('PREEXISTING',{location:'lib/other.mjs:5',proof});
+    const r=await f.call('zana_review_lens_submit',{ticket,...risk(at(),at('ya estaba así en main'),at('lib/other.mjs sin línea'),
       finding('PREEXISTING',{location:'src/sum.mjs:2',proof:'src/sum.mjs:2'}),// the PR adds line 2
-      finding('PREEXISTING',{location:'src/sum.mjs:1-3',proof:PROOF}),// range crosses line 2
-      finding('PREEXISTING',{location:'src/sum.mjs:1',proof:'src/sum.mjs:2'}),// S7: the proof cites base lines, not compared with the head
-      finding('PREEXISTING',{location:'src/sum.mjs:1',proof:'a las 16:30, ratio 1:2, Node:22'}),
-      finding('PREEXISTING',{proof:PROOF,severity:'WARNING'}))},reviewer);
+      finding('PREEXISTING',{location:'src/sum.mjs:1',proof:PROOF}),// a line the PR does not add, but its file is touched
+      at('src/sum.mjs:2'),// the proof cites base lines: only the location is checked
+      at('a las 16:30, ratio 1:2, Node:22'),
+      finding('PREEXISTING',{...OLD,severity:'WARNING'}))},reviewer);
     assert.deepEqual(r.originDowngraded,[0,1,2,3,4,6]);
     assert.equal(r.blocking,true);
     const stored=await remoteWrite(db=>JSON.parse(db.prepare("SELECT result FROM review_receipts WHERE lens_id='risk'").get().result));
@@ -69,7 +74,7 @@ test('a PREEXISTING without a valid proof is stored as UNKNOWN and requests chan
     assert.equal((await finalize(f,ticket,reviewer)).event,'REQUEST_CHANGES');
     const {body}=sentBody(f);
     assert.match(body,/\| risk \| 6 \| 0 \| 0 \| 0 \| 2 \|/);
-    assert.match(body,/- \*\*BLOCKER\*\* `src\/sum.mjs:3`\. Origen: `UNKNOWN`\./);
+    assert.match(body,/- \*\*BLOCKER\*\* `lib\/other.mjs:5`\. Origen: `UNKNOWN`\./);
   }finally{await f.cleanup();}
 });
 
@@ -102,16 +107,21 @@ test('a lens stored before origin existed counts as UNKNOWN and keeps blocking',
   }finally{await f.cleanup();}
 });
 
-test('without the diff, or in a row stored without a valid proof, PREEXISTING fails closed',async()=>{
+test('without the file list (missing, truncated or unreadable), or in a row stored without a valid proof, PREEXISTING fails closed',async()=>{
   const f=await remoteFixture();
   try{
     const {ticket,reviewer,missionId}=await claimed(f);
-    await remoteWrite(db=>db.prepare("UPDATE review_diff_pages SET sha256='changed'").run());
-    const r=await f.call('zana_review_lens_submit',{ticket,...risk(finding('PREEXISTING',{location:'src/sum.mjs:1',proof:PROOF}))},reviewer);
-    assert.deepEqual([r.originDowngraded,r.blocking],[[0],true]);
+    const lenses=['risk','readability','reliability'];
+    const stored=await remoteWrite(db=>JSON.parse(db.prepare('SELECT line_budget FROM review_tickets').get().line_budget));
+    assert.deepEqual(stored.touched,['src/sum.mjs','src/new.mjs','src/old.mjs']);
+    for(const [i,budget] of [{...stored,touched:undefined},{...stored,truncated:true},'{nope'].entries()){
+      await remoteWrite(db=>db.prepare('UPDATE review_tickets SET line_budget=?').run(typeof budget==='string'?budget:JSON.stringify(budget)));
+      const r=await f.call('zana_review_lens_submit',{ticket,lens:lenses[i],findings:[finding('PREEXISTING',OLD)],evidence:['diff']},reviewer);
+      assert.deepEqual([r.originDowngraded,r.blocking],[[0],true],String(i));
+    }
+    await remoteWrite(db=>db.prepare("DELETE FROM review_receipts").run());
     await remoteWrite(db=>db.prepare("INSERT INTO review_receipts(review_id,lens_id,token,result,created_at) SELECT ticket_id,'readability',?,?,? FROM review_tickets")
       .run('h'.repeat(64),JSON.stringify({findings:[{severity:'BLOCKER',location:'a.mjs:1',evidence:'x',origin:'PREEXISTING',proof:'16:30'}],evidence:['x']}),new Date().toISOString()));
-    await remoteWrite(db=>db.prepare("DELETE FROM review_receipts WHERE lens_id='risk'").run());
     assert.equal((await f.runtime.review.openBlocking(missionId)).length,1);
     assert.equal((await f.runtime.review.list(missionId))[0].blocking,true);
   }finally{await f.cleanup();}
@@ -122,7 +132,7 @@ test('same SHA: only a PREEXISTING BLOCKER allows a new ticket; an INTRODUCED on
     const f=await remoteFixture();
     try{
       const {ticket,reviewer,missionId,author}=await claimed(f);
-      await f.call('zana_review_lens_submit',{ticket,...risk(finding(origin,{proof:PROOF}))},reviewer);
+      await f.call('zana_review_lens_submit',{ticket,...risk(finding(origin,OLD))},reviewer);
       assert.equal((await f.runtime.review.list(missionId))[0].blocking,refused,'list '+origin);
       const again=await f.call('zana_review_request',{missionId},author);
       if(refused)assert.match(again.error,/CHANGES_REQUESTED_SAME_SHA/);
@@ -167,30 +177,38 @@ test('review body: the verdict survives the size cut; pending items go last',()=
   assert.match(body,/Veredicto: \*\*APPROVE\*\*\.\n\nPrueba: sesión revisora[^]*### Pendientes preexistentes/);
 });
 
-const H=(p,body,q=p)=>'diff --git a/'+p+' b/'+p+'\n--- a/'+q+'\n+++ b/'+q+'\n'+body;
-const lines=d=>{const r=addedLines(d);return {files:Object.fromEntries([...r.files].map(([k,v])=>[k,[...v]])),unparsed:r.unparsed};};
-test('hunk parser: head numbering, - lines, no newline at EOF, deleted file and path reset',()=>{
-  const deleted='diff --git a/gone.mjs b/gone.mjs\ndeleted file mode 100644\n--- a/gone.mjs\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-a\n-b\n';
-  const d=H('a.mjs','@@ -10,3 +12,5 @@\n c\n-gone\n+n13\n+n14\n c\n+n16\n@@ -40,1 +50,2 @@\n-old\n\\ No newline at end of file\n+new\n+tail\n')+
-    deleted+H('b.mjs','@@ -1 +1,2 @@\n b\n+c\n');
-  assert.deepEqual(lines(d),{files:{'a.mjs':[13,14,16,50,51],'b.mjs':[2]},unparsed:false});
-  // A block without "+++" (binary, rename, malformed) resets the path and fails closed.
-  assert.deepEqual(lines(d+'diff --git a/c b/c\n@@ -1 +1,2 @@\n x\n+y\n'),{files:{'a.mjs':[13,14,16,50,51],'b.mjs':[2]},unparsed:true});
+// The W1b escapes of rounds 1-3 (repro3): any line of a touched file is UNKNOWN and requests changes.
+const REPRO=[['src/my file.mjs:2','src/my file.mjs:1'],['src/año.mjs:2','src/año.mjs:1'],['src/s.mjs:3','src/s.mjs:1'],
+  ['b/src/s.mjs:2','src/s.mjs:1'],['src/s.mjs:3-1','src/s.mjs:1'],['s.mjs:2','src/s.mjs:1'],['src/s.mjs:53','src/s.mjs:50']];
+test('repro3 end to end: a PREEXISTING on any line of a touched file is UNKNOWN and requests changes',async()=>{
+  const f=await remoteFixture();
+  try{
+    const hunk=p=>'diff --git a/'+p+' b/'+p+'\n--- a/'+p+'\n+++ b/'+p+'\n@@ -1 +1,2 @@\n a\n+eval(process.env.X);\n';
+    const diff=hunk('src/my file.mjs')+hunk('src/año.mjs')+hunk('src/s.mjs').replace('+eval','+++ b/src/decoy.mjs\n+eval')+
+      '@@ -1,1 +1,3 @@\n a\n+// auth: Bearer\n+ABCDEFGHIJKLMNOPQRSTUV==\n@@ -50,1 +52,2 @@\n x\n+eval(process.env.X);\n';
+    const {ticket,reviewer}=await claimed(f,diff,['src/my file.mjs','src/año.mjs','src/s.mjs'].map(filename=>({filename,additions:2,deletions:0})));
+    const r=await f.call('zana_review_lens_submit',{ticket,...risk(...REPRO.map(([location,proof])=>
+      finding('PREEXISTING',{location,proof:proof+' igual en la base'})))},reviewer);
+    assert.deepEqual([r.originDowngraded,r.blocking],[[0,1,2,3,4,5,6],true]);
+    await rest(f,ticket,reviewer);
+    assert.equal((await finalize(f,ticket,reviewer)).event,'REQUEST_CHANGES');
+  }finally{await f.cleanup();}
 });
-test('hunk parser closes the W1b escapes: spaces, quoted paths, injected headers, prefixes and ranges',()=>{
-  const on=(d,loc)=>onAddedLine(addedLines(d),loc);
-  const space='diff --git a/src/my file.mjs b/src/my file.mjs\n--- a/src/my file.mjs\t\n+++ b/src/my file.mjs\t\n@@ -1 +1,2 @@\n a\n+e\n';
-  assert.deepEqual([on(space,'src/my file.mjs:2'),on(space,'src/my file.mjs:1')],[true,false]);
-  const q='"b/src/a\\303\\261o.mjs"';
-  assert.equal(on('diff --git x\n--- '+q+'\n+++ '+q+'\n@@ -1 +1,2 @@\n a\n+e\n','src/año.mjs:2'),true);
-  assert.equal(addedLines('diff --git x\n+++ "b/\\377.mjs"\n').unparsed,true);
-  const injected=H('src/s.mjs','@@ -1 +1,3 @@\n a\n+++ b/src/decoy.mjs\n+e\n');
-  assert.deepEqual(lines(injected).files,{'src/s.mjs':[2,3]});
-  const plain=H('src/s.mjs','@@ -1 +1,2 @@\n a\n+e\n');
-  for(const loc of ['b/src/s.mjs:2','./src/s.mjs:2','src/s.mjs:3-1','src/s.mjs:2-2'])assert.equal(on(plain,loc),true,loc);
-  for(const loc of ['a/src/s.mjs:1','src/s.mjs:3-9','src/other.mjs:2'])assert.equal(on(plain,loc),false,loc);
-  assert.equal(on(H('s.mjs','@@ -1,0 +15000,1 @@\n+e\n'),'s.mjs:1-20000'),true);
-  assert.equal(on('diff --git a/i.png b/i.png\nBinary files a/i.png and b/i.png differ\n','i.png:1'),true);
+test('file granularity: path forms of a touched file (rename under both names) are UNKNOWN; other files keep PREEXISTING',async()=>{
+  const touched=['src/sum.mjs:1','sum.mjs:1','/src/sum.mjs:1','SRC/Sum.MJS:1','src\\sum.mjs:1','o/r/src/sum.mjs:1','a/src/sum.mjs:1',
+    './src//./sum.mjs:1','src/sum.mjs :1','src:1','src/old.mjs:4','old.mjs:4','src/new.mjs:4','src/su\u200bm.mjs:1','src/../lib/x.mjs:1'];
+  const untouched=['lib/other.mjs:5','other/sum.mjs:5','xsum.mjs:5','um.mjs:5','xsrc/sum.mjs:5','src/sum.mjs.bak:5','lib/src.mjs:5'];
+  const f=await remoteFixture();
+  try{
+    const {ticket,reviewer}=await claimed(f);
+    const r=await f.call('zana_review_lens_submit',{ticket,...risk(...[...touched,...untouched].map(location=>finding('PREEXISTING',{location,proof:PROOF})))},reviewer);
+    assert.deepEqual([r.originDowngraded,r.blocking],[touched.map((_,i)=>i),true]);
+  }finally{await f.cleanup();}
+  assert.deepEqual(touchedFiles(Object.assign([{filename:'a'}],{truncated:true})),null);
+  assert.deepEqual(touchedFiles([{filename:'a',previousFilename:'b'},{filename:'c'}]),['a','b','c']);
+  for(const bad of ['','/','./.','a/..','x\u0007y'])assert.equal(canonPath(bad),null,JSON.stringify(bad));
+  assert.deepEqual([canonPath(' B/Src\\A.mjs '),canonPath('b')],['src/a.mjs','b']);
+  assert.equal(inTouchedFile(['bad\u0001name'],'lib/x.mjs:1'),true);
 });
 
 test('claim: baseSha is null when the compare JSON fails; mergeBase refuses an invalid base',async()=>{

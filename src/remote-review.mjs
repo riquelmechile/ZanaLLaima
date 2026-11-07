@@ -84,45 +84,24 @@ export function diffManifest(pages){
 export const proofLocations=proof=>typeof proof!=='string'?[]:proof.split(/[\s`'"()[\],;]+/)
   .map(t=>t.replace(/[.:]+$/,'')).filter(t=>LOCATION.test(t)&&/[/.]/.test(t.slice(0,t.lastIndexOf(':'))));
 export const validProof=proof=>proofLocations(proof).length>0;
-// Path of a "+++ " header: drops git's trailing TAB and decodes C quotes (octal bytes to UTF-8).
-// null for /dev/null (deleted file), undefined when it cannot be read.
-function headerPath(raw){
-  let p=raw.replace(/\t$/,'');
-  if(/^".*"$/.test(p))p=Buffer.from(p.slice(1,-1).replace(/\\([0-7]{3}|.)/g,(_,e)=>
-    e.length===3?String.fromCharCode(parseInt(e,8)):({n:'\n',t:'\t'}[e]??e)),'latin1').toString('utf8');
-  return p==='/dev/null'?null:p.startsWith('b/')&&!p.includes('\uFFFD')?p.slice(2):undefined;
+// Ruta canónica de una location o de un archivo del PR: \ a /, sin ./ // a/ b/ ni / inicial,
+// NFKC, minúsculas y sin espacios (calzar de más solo bloquea más). null: no es una ruta.
+export function canonPath(raw){
+  const s=String(raw).normalize('NFKC').toLowerCase().replace(/\\/g,'/').replace(/\s+/g,'');
+  const parts=s.split('/').filter(x=>x&&x!=='.');
+  if(parts.length>1&&/^[ab]$/.test(parts[0]))parts.shift();
+  return !parts.length||parts.includes('..')||/\p{C}/u.test(s)?null:parts.join('/');
 }
-// Head lines that a unified diff adds, per path. Inside a hunk (-a,b +c,d) every line is
-// content until its counts run out, even one that looks like "+++ b/x" or "diff --git".
-// unparsed: some header could not be read, or a file block had no "+++" (binary, rename).
-export function addedLines(text){
-  const files=new Map();let path=null,n=0,left=0,right=0,unparsed=false,header=true;
-  for(const line of String(text).split('\n')){
-    if(left>0||right>0){
-      const c=line[0];
-      if(c==='\\')continue;
-      if(c!=='+')left--;
-      if(c!=='-'){if(c==='+'&&path)files.get(path).add(n);n++;right--;}
-      continue;
-    }
-    let m;
-    if(line.startsWith('diff --git ')){unparsed||=!header;header=false;path=null;}
-    else if(line.startsWith('+++ ')){
-      header=true;path=headerPath(line.slice(4));unparsed||=path===undefined;
-      if(path)files.set(path,files.get(path)??new Set());
-    }else if((m=/^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line))){left=Number(m[1]??1);n=Number(m[2]);right=Number(m[3]??1);}
-  }
-  return {files,unparsed:unparsed||!header};
+// ¿file:line cae en un archivo que el PR toca? Segmentos enteros de una ruta tocada (s.mjs, src)
+// o una ruta tocada como sufijo (o/r/src/s.mjs). Sin la lista de archivos: sí (falla cerrado).
+export function inTouchedFile(touched,location){
+  const p=canonPath(location.replace(/:[\d-]+$/,''));
+  if(p===null||!Array.isArray(touched))return true;
+  return touched.some(t=>{const c=canonPath(t);return c===null||('/'+c+'/').includes('/'+p+'/')||p.endsWith('/'+c);});
 }
-// Does file:from[-to] (either order, ./ or a/ b/ prefix) touch a line the diff adds?
-// A path that matches no file of the diff fails closed when some header was unreadable.
-export function onAddedLine({files,unparsed},location){
-  const [,raw,from,to=from]=/^(.+):(\d+)(?:-(\d+))?$/.exec(location);
-  const p=raw.replace(/^\.\//,''),path=files.has(p)?p:/^[ab]\//.test(p)&&files.has(p.slice(2))?p.slice(2):null;
-  if(path===null)return unparsed;
-  const min=Math.min(from,to),max=Math.max(from,to);
-  return [...files.get(path)].some(x=>x>=min&&x<=max);
-}
+// Archivos del PR en el SHA del ticket (pullFiles), un rename con ambos nombres; null si está truncada.
+export const touchedFiles=files=>files.truncated?null:files.flatMap(f=>[f.filename,...(f.previousFilename?[f.previousFilename]:[])]);
+const storedTouched=json=>{try{const b=JSON.parse(json);return b.truncated||!Array.isArray(b.touched)?null:b.touched;}catch{return null;}};
 // Stored lenses without origin count as UNKNOWN; a PREEXISTING without a valid proof also blocks.
 const preexisting=f=>f.origin==='PREEXISTING'&&validProof(f.proof);
 const blocking=findings=>findings.some(f=>(f.severity==='BLOCKER'||f.severity==='CRITICAL')&&!preexisting(f));
@@ -261,7 +240,8 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
       const reject=(...args)=>{pageCache.delete(measured.key);fail(...args);};
       if(diffBytes>config.reviewMaxDiffBytes)
         reject('DIFF_TOO_LARGE','el diff pesa '+diffBytes+' bytes y el tope es '+config.reviewMaxDiffBytes+'; divide el cambio en misiones secuenciales');
-      const budget=lineBudget(await github.pullFiles(ctx.repo,pull.number),{limit:lineLimit(ctx,config),changedFiles:pull.changed_files});
+      const files=await github.pullFiles(ctx.repo,pull.number);
+      const budget=lineBudget(files,{limit:lineLimit(ctx,config),changedFiles:pull.changed_files});
       // The file list is read from the PR's current head: it must still be the
       // measured SHA before any budget answer, which would give another SHA's figures.
       const after=String((await github.pull(ctx.repo,pull.number))?.head?.sha??'');
@@ -306,7 +286,7 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
         recordActivity(db,{sessionId:session.sessionId,clientId:session.clientId,missionId,kind:'REVIEW_REQUEST',tool:'zana_review_request'});
         db.prepare('INSERT INTO review_tickets(ticket_id,code_hash,mission_id,repo,pr_number,sha,author_session,author_client,created_at,expires_at,state,updated_at,line_budget) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)')
           .run(ticketId,hash(code),missionId,ctx.repo,pull.number,sha,session.sessionId,session.clientId??null,
-            new Date(at).toISOString(),expiresAt,'OPEN',nowIso(),JSON.stringify(budget));
+            new Date(at).toISOString(),expiresAt,'OPEN',nowIso(),JSON.stringify({...budget,touched:touchedFiles(files)}));
         mission.reviewCount=(mission.reviewCount||0)+1;
         mission.revision++;
         return mission;
@@ -347,6 +327,7 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
       // A corrupt stored value must not burn an already CLAIMED ticket.
       let budget=null;
       try{budget=t.line_budget?JSON.parse(t.line_budget):null;}catch{budget={error:'UNREADABLE'};}
+      if(budget)delete budget.touched;
       const verdict=await checks.verdict(t.repo,t.sha);
       // The merge-base is a reading aid for PREEXISTING proofs; without it the claim still works.
       const baseSha=await github.mergeBase(t.repo,ctx.base,t.sha).catch(()=>null);
@@ -373,15 +354,6 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
     },
     async lensSubmit({ticket:code,lens,findings,evidence},session){
       validateLens(lens,findings,evidence);
-      // A PREEXISTING needs the diff: its location must not sit on a line the PR adds
-      // (the proof cites base lines, so it is not compared with head numbers).
-      // Without the diff (fetch error, changed manifest) it fails closed to UNKNOWN.
-      let added=null;
-      if(findings.some(f=>f.origin==='PREEXISTING')){
-        const t=await remoteWrite(db=>{expire(db);return ticketBy(db,code);});
-        if(t.state==='CLAIMED'&&t.reviewer_session===session.sessionId)
-          try{added=addedLines((await ensureManifest(t)).pages.map(p=>p.text).join(''));}catch{added=null;}
-      }
       return remoteWrite(db=>{
         expire(db);
         const t=ticketBy(db,code);
@@ -389,11 +361,11 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
         if(t.reviewer_session!==session.sessionId)fail('NOT_REVIEWER','only the session that claimed the ticket may submit lenses');
         if(db.prepare('SELECT 1 FROM review_receipts WHERE review_id=? AND lens_id=?').get(t.ticket_id,lens))
           fail('LENS_ALREADY_SUBMITTED','lens '+lens+' was already submitted');
-        // A PREEXISTING without a valid proof, or located on a line the diff adds, is stored as UNKNOWN (it blocks).
-        const originDowngraded=[];
+        // Un PREEXISTING sin prueba válida, o en un archivo que el PR toca (o sin la lista
+        // de archivos, o truncada), se guarda como UNKNOWN: bloquea.
+        const originDowngraded=[],touched=storedTouched(t.line_budget);
         const clean=findings.map((f,i)=>{
-          const keep=f.origin!=='PREEXISTING'||(added!==null&&validProof(f.proof)&&
-            !onAddedLine(added,f.location));
+          const keep=f.origin!=='PREEXISTING'||(validProof(f.proof)&&!inTouchedFile(touched,f.location));
           if(!keep)originDowngraded.push(i);
           return {severity:f.severity,location:f.location,evidence:f.evidence,...(f.title?{title:f.title}:{}),
             origin:keep?f.origin:'UNKNOWN',...(f.proof!==undefined?{proof:f.proof}:{})};

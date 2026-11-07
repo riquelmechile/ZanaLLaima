@@ -35,7 +35,7 @@ test('W6: a new ticket on the same SHA after REQUEST_CHANGES is refused; CRITICA
     const {author,missionId,branch}=await f.authorReady();
     const t1=await f.call('zana_review_request',{missionId},author);
     const r=await finishReview(f,t1.ticket,await f.session(),
-      {lens:'risk',findings:[{severity:'CRITICAL',location:'src/a.mjs:1',evidence:'token logged'}],evidence:['diff']});
+      {lens:'risk',findings:[{severity:'CRITICAL',location:'src/a.mjs:1',evidence:'token logged',origin:'INTRODUCED'}],evidence:['diff']});
     assert.equal(r.event,'REQUEST_CHANGES');
     assert.match((await f.call('zana_review_request',{missionId},author)).error,/CHANGES_REQUESTED_SAME_SHA/);
     f.api.state.push(branch,sha('b'));f.api.state.green(sha('b'));

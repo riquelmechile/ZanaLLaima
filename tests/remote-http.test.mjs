@@ -122,6 +122,7 @@ test('Streamable HTTP sessions: two conversations get two sessions; the reviewer
     const init=await a.call('zana_mission_init',{spec:f.spec,github:{repo:'o/r',base:'main'}});
     assert.equal(init.github.branch,'zana/'+init.id);
     const p=(await a.call('zana_start_batch',{})).packets[0];
+    f.api.state.diffText='diff --git a/src/a.mjs b/src/a.mjs\n--- a/src/a.mjs\n+++ b/src/a.mjs\n@@ -1 +1,2 @@\n a\n+b\n';
     f.api.state.push(init.github.branch,'a'.repeat(40));f.api.state.green('a'.repeat(40));f.api.state.openPull(init.github.branch);
     // W3 order: complete the code unit, then ask for the ticket.
     assert.equal((await a.call('zana_complete_unit',{unitId:p.unitId,token:p.token,leaseGeneration:p.leaseGeneration,
@@ -136,6 +137,11 @@ test('Streamable HTTP sessions: two conversations get two sessions; the reviewer
     const w=await b.call('zana_ds_github',{operation:'push_files',missionId:init.id,
       arguments:{owner:'o',repo:'r',branch:init.github.branch,files:[{path:'a',content:'x'}],message:'m'}});
     assert.match(w.error,/REVIEWER_READ_ONLY/);
+    // The MCP schema (zod) requires origin and accepts a proof.
+    const lens={ticket:req.ticket,lens:'risk',evidence:['diff'],findings:[{severity:'WARNING',location:'src/a.mjs:1',evidence:'x'}]};
+    assert.match((await b.call('zana_review_lens_submit',lens)).error,/Input validation error.*findings\.0\.origin/);
+    lens.findings[0]={...lens.findings[0],origin:'PREEXISTING',proof:'src/a.mjs:1 en main'};
+    assert.deepEqual((await b.call('zana_review_lens_submit',lens)).originDowngraded,[]);
     // A session id is bound to the identity that opened it.
     setEnrollment(s.settings.oauthDb,5);
     const other=await login(s.base,{host:'other-host'});

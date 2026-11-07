@@ -117,6 +117,11 @@ export class GitHubApi{
     return this.request('GET',repoPath(repo)+'/compare/'+refPath(base)+'...'+sha(commit),
       {accept:'application/vnd.github.diff',raw:'measured'});
   }
+  // Merge-base SHA of base...commit: the base the diff is computed against.
+  async mergeBase(repo,base,commit){
+    if(!validRefName(base))throw new GitHubApiError(400,'Invalid base');
+    return sha((await this.request('GET',repoPath(repo)+'/compare/'+refPath(base)+'...'+sha(commit)+'?per_page=1'))?.merge_base_commit?.sha);
+  }
   async openPullsFor(repo,branch){
     const owner=repo.split('/')[0];
     const list=await this.request('GET',repoPath(repo)+'/pulls?state=open&per_page=100&head='+
@@ -141,7 +146,8 @@ export class GitHubApi{
       const data=await this.request('GET',repoPath(repo)+'/pulls/'+positive(number)+'/files?per_page=100&page='+page);
       if(!Array.isArray(data))throw new GitHubApiError(502,'Unreadable file list');
       out.push(...data.map(f=>({filename:String(f?.filename??''),additions:Number(f?.additions)||0,
-        deletions:Number(f?.deletions)||0,status:String(f?.status??'')})));
+        deletions:Number(f?.deletions)||0,status:String(f?.status??''),
+        ...(f?.previous_filename?{previousFilename:String(f.previous_filename)}:{})})));
       if(data.length<100)return out;
     }
     return Object.assign(out,{truncated:true});

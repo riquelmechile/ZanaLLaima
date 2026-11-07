@@ -5,7 +5,8 @@
 
 // Token shapes GitHub issues (classic, fine-grained, OAuth, app, refresh).
 const GITHUB_TOKEN=/\b(?:gh[pousr]_[A-Za-z0-9]{20,255}|github_pat_[A-Za-z0-9_]{20,255})\b/g;
-const BEARER=/\b(Bearer)\s+[A-Za-z0-9._~+/=-]{16,}/gi;
+// [ \t]+ y no \s+: un token en la línea siguiente no debe fundir dos líneas del diff.
+const BEARER=/\b(Bearer)[ \t]+[A-Za-z0-9._~+/=-]{16,}/gi;
 
 // Known secret values from the environment, in every form they can appear.
 export function secretForms(values=[]){

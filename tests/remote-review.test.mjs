@@ -5,7 +5,7 @@ import {ticketCode,validateLens,reviewBody} from '../src/remote-review.mjs';
 import {remoteWrite} from '../src/store.mjs';
 
 const clean=lens=>({lens,findings:[],evidence:['Read the full diff of src/sum.mjs and its test']});
-const finding=(severity,extra={})=>({severity,location:'src/sum.mjs:3',evidence:'returns a-b instead of a+b',...extra});
+const finding=(severity,extra={})=>({severity,location:'src/sum.mjs:3',evidence:'returns a-b instead of a+b',origin:'INTRODUCED',...extra});
 async function claimed(f){
   const ready=await f.authorReady();
   const req=await f.call('zana_review_request',{missionId:ready.missionId},ready.author);
@@ -151,9 +151,9 @@ test('lens submit validation and finalize preconditions',async()=>{
   try{
     const {ticket,reviewer,author}=await claimed(f);
     const sub=args=>f.call('zana_review_lens_submit',{ticket,...args},reviewer);
-    assert.match((await sub({lens:'risk',findings:[{severity:'CRITICAL',location:'src/a.mjs',evidence:'x'}],evidence:['e']})).error,/MISSING_LOCATION/);
-    assert.match((await sub({lens:'risk',findings:[{severity:'CRITICAL',location:'src/a.mjs:3',evidence:' '}],evidence:['e']})).error,/MISSING_EVIDENCE/);
-    assert.ok((await sub({lens:'risk',findings:[{location:'src/a.mjs:3',evidence:'x'}],evidence:['e']})).error);
+    assert.match((await sub({lens:'risk',findings:[{severity:'CRITICAL',location:'src/a.mjs',evidence:'x',origin:'INTRODUCED'}],evidence:['e']})).error,/MISSING_LOCATION/);
+    assert.match((await sub({lens:'risk',findings:[{severity:'CRITICAL',location:'src/a.mjs:3',evidence:' ',origin:'INTRODUCED'}],evidence:['e']})).error,/MISSING_EVIDENCE/);
+    assert.match((await sub({lens:'risk',findings:[{location:'src/a.mjs:3',evidence:'x',origin:'INTRODUCED'}],evidence:['e']})).error,/MISSING_SEVERITY/);
     assert.ok((await sub({lens:'risk',findings:[],evidence:[]})).error);
     assert.match((await f.call('zana_review_lens_submit',{ticket,...clean('risk')},author)).error,/NOT_REVIEWER/);
     const first=await sub(clean('risk'));

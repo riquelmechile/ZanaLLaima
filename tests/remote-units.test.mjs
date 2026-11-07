@@ -277,6 +277,10 @@ test('redaction removes known secrets in all encodings and GitHub token shapes',
   assert.equal(clean('x\n  y',[]),'x y');
   assert.equal(clean(new Error('e '+secret),[secret]),'e [redacted]');
   assert.deepEqual(secretForms([null,'short']),[]);
+  // Un token en la línea siguiente no funde dos líneas del diff (\s+ las fundía).
+  const diff='+// auth: Bearer\n+'+'A'.repeat(22)+'==\n';
+  assert.equal(redactText(diff),diff);
+  assert.equal(redactText('Bearer\t'+'q'.repeat(20)),'Bearer [redacted]');
 });
 
 test('ticketView distingue tickets con el mismo state (issue #3, punto 4)',()=>{

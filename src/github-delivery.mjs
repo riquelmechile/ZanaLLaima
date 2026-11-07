@@ -86,7 +86,7 @@ export async function deliveryStatus({github,config,ctx,openBlockingTickets=[],c
   if(ci.state!=='SUCCESS')blockers.push('CI on '+head+': '+ci.state);
   if(fourR!=='success')blockers.push('zana/4r on '+head+': '+fourR);
   if(!mergeable)blockers.push('Pull request not mergeable ('+(pull.draft===true?'draft':pull.mergeable_state??String(pull.mergeable))+')');
-  if(openBlockingTickets.length)blockers.push('Open review tickets with BLOCKER or CRITICAL: '+openBlockingTickets.join(', '));
+  if(openBlockingTickets.length)blockers.push('Open review tickets with BLOCKER or CRITICAL not PREEXISTING: '+openBlockingTickets.join(', '));
   const authority=ticketAuthority(currentTicket,head,review);
   if(!authority.ok)blockers.push('Current review ticket: '+authority.reason);
   return {missionId:ctx.missionId,repo:ctx.repo,pullNumber:pull.number,pullUrl:pull.html_url??null,headSha:head,

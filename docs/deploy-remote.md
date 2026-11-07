@@ -217,7 +217,8 @@ Cada `remote-*` exige solo la DB que usa, con ruta absoluta y ya existente, así
 - **Salud con detalle:** `node src/cli.mjs remote-health`.
 - **Tickets:** `node src/cli.mjs remote-tickets [missionId]` y `node src/cli.mjs remote-ticket-abandon <ticketId>`, que queda auditado con categoría `operator`.
   - Un ticket reclamado y no finalizado pasa solo a `ABANDONED` tras `ZANA_TICKET_CLAIM_TTL_MINUTES`.
-  - Si un ticket pidió cambios sobre un SHA (veredicto `REQUEST_CHANGES`, o un lente con BLOCKER o CRITICAL), el autor no puede pedir otro ticket sobre ese SHA (`CHANGES_REQUESTED_SAME_SHA`), y esperar el TTL no lo libera.
+  - Si un ticket pidió cambios sobre un SHA (veredicto `REQUEST_CHANGES`, o un lente con BLOCKER o CRITICAL que no sea `PREEXISTING`), el autor no puede pedir otro ticket sobre ese SHA (`CHANGES_REQUESTED_SAME_SHA`), y esperar el TTL no lo libera.
+  - Al desplegar la versión con `origin`, un ticket `CLAIMED` cuya conversación tenga cacheado el esquema viejo de `zana_review_lens_submit` falla la validación: despliega sin tickets `CLAIMED` o abandónalos con `remote-ticket-abandon`.
   - Solo `remote-ticket-abandon` lo libera, y solo para un ticket no finalizado y sin review publicada. Úsalo solo si el bloqueo fue un error de la revisora.
 - **Reinicios:** las sesiones MCP viven en memoria, así que un reinicio del servicio, o una sesión ociosa más de 2 h, corta los flujos y ChatGPT abre una sesión nueva.
   - La autora completa su unidad **antes** de pedir el ticket, así que la espera de la review no depende de ningún lease.

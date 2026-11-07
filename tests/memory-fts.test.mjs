@@ -28,8 +28,9 @@ test('W-FTS: una tabla FTS recreada vacía se reconstruye al reconectar',async()
   try{
     await s.save('Sin punto y coma');
     await s.write(db=>db.exec('DROP TABLE project_memory_fts;'+CREATE));
-    // La lectura no reconecta en escritura: el índice sigue vacío.
-    assert.deepEqual(await s.bodies('punto'),[]);
+    // La lectura no reconecta en escritura: el índice sigue vacío y no cuadra, así que usa LIKE.
+    const stale=await s.search('punto');
+    assert.deepEqual([stale.mode,stale.fallbackReason,stale.entries.length],['like','INDEX_STALE',1]);
     await s.write(()=>{});
     const found=await s.search('punto');
     assert.deepEqual([found.mode,found.entries.map(e=>e.body)],['fts',['Sin punto y coma']]);
@@ -77,14 +78,18 @@ test('W-FTS: metadata.fts=1 sin tabla FTS, o un MATCH que falla, cae a LIKE con 
     await s.save('Sin punto y coma');
     await s.write(db=>db.exec('DROP TRIGGER project_memory_ai;DROP TRIGGER project_memory_ad;DROP TRIGGER project_memory_au;DROP TABLE project_memory_fts'));
     const missing=await s.search('punto coma');
-    assert.deepEqual([missing.mode,missing.fallback,missing.entries.map(e=>e.body)],['like',true,['Sin punto y coma']]);
+    assert.deepEqual([missing.mode,missing.fallback,missing.fallbackReason,missing.entries.map(e=>e.body)],['like',true,'SQLITE_1',['Sin punto y coma']]);
     // La siguiente conexión de escritura la recrea; un MATCH que igual falla cae a LIKE.
     await s.write(()=>{});
-    const broken=await s.read(db=>searchMemory({prepare:sql=>{
-      if(/MATCH/.test(sql))throw new Error('database disk image is malformed');
+    const failing=error=>s.read(db=>searchMemory({prepare:sql=>{
+      if(/MATCH/.test(sql))throw error;
       return db.prepare(sql);
     }},{query:'coma'}));
-    assert.deepEqual([broken.mode,broken.fallback,broken.entries.length],['like',true,1]);
+    const broken=await failing(Object.assign(new Error('database disk image is malformed: ghp_secreto'),{code:'ERR_SQLITE_ERROR',errcode:11}));
+    assert.deepEqual([broken.mode,broken.fallback,broken.fallbackReason,broken.entries.length],['like',true,'SQLITE_11',1]);
+    assert.equal((await failing(Object.assign(new Error('x'),{code:'ERR_SQLITE_ERROR'}))).fallbackReason,'SQLITE_ERROR');
+    // Un error que no es de SQLite es un bug: se relanza.
+    await assert.rejects(failing(new TypeError('boom')),TypeError);
     // Sin falla no hay fallback.
     assert.equal('fallback' in await s.search('coma'),false);
   }finally{await s.cleanup();}
@@ -93,13 +98,17 @@ test('W-FTS: metadata.fts=1 sin tabla FTS, o un MATCH que falla, cae a LIKE con 
 test('W-FTS: FTS y LIKE exigen cada palabra y separan en _',async()=>{
   const s=await store();
   try{
-    for(const body of ['Sin punto y coma','Usa punto final','Una coma sola','La var de mi módulo'])await s.save(body);
+    for(const body of ['Sin punto y coma','Usa punto final','Una coma sola','La var de mi módulo','Tasa 5%-10%','a-b','mi__x','50 pesos','Descuento 50% hoy'])await s.save(body);
     for(const fts of ['1','0']){
       await s.write(db=>db.prepare("UPDATE metadata SET value=? WHERE key='fts'").run(fts));
       const r=await s.search('punto coma');
       assert.deepEqual([r.mode,r.entries.map(e=>e.body)],[fts==='1'?'fts':'like',['Sin punto y coma']]);
       assert.deepEqual(await s.bodies('mi_var'),['La var de mi módulo'],fts);
-      assert.deepEqual(await s.bodies('%-'),[],fts);
+      // Sin letras ni dígitos se busca el texto tal cual, con %, _ y \\ escapados.
+      assert.deepEqual(await s.bodies('%-'),['Tasa 5%-10%'],fts);
+      assert.deepEqual(await s.bodies('__'),['mi__x'],fts);
+      // Con palabras, la puntuación separa en los dos modos: 50% busca la palabra 50.
+      assert.deepEqual((await s.bodies('50%')).sort(),['50 pesos','Descuento 50% hoy'],fts);
     }
   }finally{await s.cleanup();}
 });
@@ -138,6 +147,26 @@ test('W-FTS: un rebuild sin espacio relanza el error y no deja user_version escr
     raw.close();
     await s.write(()=>{});
     assert.deepEqual(await s.bodies('p420'),[body(7)]);
+  }finally{await s.cleanup();}
+});
+
+test('W-FTS: palabras en NFC, sin repetidas y hasta 16, en los dos modos',async()=>{
+  const s=await store();
+  try{
+    await s.save('La canción del punto');
+    const words=Array.from({length:20},(_,i)=>'w'+i);
+    await s.save(words.slice(0,16).join(' '));
+    for(const fts of ['1','0']){
+      await s.write(db=>db.prepare("UPDATE metadata SET value=? WHERE key='fts'").run(fts));
+      assert.deepEqual(await s.bodies('cancio\u0301n'),['La canción del punto'],fts);
+      const sql=[];
+      const r=await s.read(db=>searchMemory({prepare:q=>{sql.push(q);const st=db.prepare(q);
+        return {get:(...a)=>st.get(...a),all:(...a)=>{sql.push(a);return st.all(...a);}};}},{query:Array(100).fill('punto').join(' ')}));
+      assert.equal(r.entries.length,1);
+      assert.equal(JSON.stringify(sql).split(fts==='1'?'\\"punto\\"':'%punto%').length-1,fts==='1'?1:2,fts);
+      // Las palabras 17 a 20 no existen en el texto: se ignoran.
+      assert.deepEqual(await s.bodies(words.join(' ')),[words.slice(0,16).join(' ')],fts);
+    }
   }finally{await s.cleanup();}
 });
 

@@ -236,7 +236,7 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
     const touched=storedTouched(prev.line_budget);
     const limit=Number.isSafeInteger(prLines)?correctionLimit(prLines):null;
     let files=null,error=null;
-    try{files=await github.compareFiles(repo,prev.sha,sha);}catch(e){error='compare '+prev.sha+'...'+sha+': '+String(e?.message??e).slice(0,200);}
+    try{files=await github.compareFiles(repo,prev.sha,sha);}catch(e){error='compare: '+String(e?.message??e).slice(0,200);}
     const lines=files?files.reduce((n,f)=>n+(excluded(f.filename)?0:f.additions+f.deletions),0):null;
     // Exacta: GitHub da la misma ruta en los dos lados. canonPath solo cierra '..' y caracteres de control.
     const allowed=new Set(touched??[]);
@@ -291,14 +291,16 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
         if(!correction.authorized&&(pending.unmeasured||pending.outOfScope.length||n>correction.limit))await remoteWrite(db=>
           db.prepare('UPDATE remote_missions SET line_budget_extension=? WHERE mission_id=?')
             .run(JSON.stringify({...remoteMission(db,missionId).lineBudgetExtension,pendingCorrection:pending}),missionId));
-        const ask=what=>'; pregúntale al usuario si autoriza '+what+" y, solo con su sí, llama zana_budget_extend con scope 'correction'";
+        // SHA y total de rutas al principio: el texto del error se corta a 300 caracteres.
+        const at='en '+sha+' ('+correction.outOfScope.length+' rutas fuera)';
+        const ask=what=>'; pregúntale al usuario si autoriza '+what+" y, solo con su sí, llama zana_budget_extend con scope 'correction', forSha y outOfScopeCount";
         const paths=correction.outOfScope.slice(0,10).map(p=>p.slice(0,200)).join(', ')+
           (correction.outOfScope.length>10?' (y '+(correction.outOfScope.length-10)+' más)':'');
-        if(!correction.authorized&&correction.unmeasured)reject('CORRECTION_UNMEASURED','no se puede medir la corrección desde '+prev.sha+
+        if(!correction.authorized&&correction.unmeasured)reject('CORRECTION_UNMEASURED',at+' no se puede medir la corrección desde '+prev.sha+
           ' ('+correction.unmeasured+')'+ask(n===null?'la ronda sin medir':n+' líneas'));
-        if(!correction.authorized&&correction.outOfScope.length)reject('CORRECTION_OUT_OF_SCOPE',redactText(paths,[...envSecrets(),...github.secrets()])+
-          ': la corrección solo puede tocar los archivos del PR y tests; tiene '+n+' líneas'+ask(n+' líneas'));
-        if(!correction.authorized&&n>correction.limit)reject('OVER_CORRECTION_BUDGET','el cambio de corrección tiene '+n+
+        if(!correction.authorized&&correction.outOfScope.length)reject('CORRECTION_OUT_OF_SCOPE',at+', '+n+' líneas: '+
+          redactText(paths,[...envSecrets(),...github.secrets()])+'; solo se permiten los archivos del PR y tests'+ask(n+' líneas'));
+        if(!correction.authorized&&n>correction.limit)reject('OVER_CORRECTION_BUDGET',at+' el cambio de corrección tiene '+n+
           ' líneas y el tope de esta ronda es '+correction.limit+ask(n+' líneas'));
       }
       const code=ticketCode(),ticketId=randomUUID();

@@ -66,7 +66,8 @@ const NEW_TOOLS={
     z.object({missionId:missionId()}).strict()],
   zana_budget_extend:["Author session, ONLY after the user said yes to the exact number: raise the mission line budget (additions + deletions without lockfiles) after OVER_LINE_BUDGET (scope 'pr'), or authorize this correction round after OVER_CORRECTION_BUDGET, CORRECTION_OUT_OF_SCOPE or CORRECTION_UNMEASURED (scope 'correction'). Never call it without asking the user",false,
     z.object({missionId:missionId(),lines:z.number().int().min(1).max(EXTEND_MAX),reason:z.string().min(3).max(300),
-      scope:z.enum(['pr','correction']).default('pr')}).strict()],
+      scope:z.enum(['pr','correction']).default('pr'),forSha:z.string().regex(/^[0-9a-f]{40}$/).optional(),
+      outOfScopeCount:z.number().int().min(0).max(100000).optional()}).strict()],
   zana_review_claim:['Reviewer session (new conversation): claim a ticket; this session becomes read-only on the mission',false,
     z.object({ticket:ticket()}).strict()],
   zana_review_lens_submit:['Reviewer session: submit one 4R lens with located, evidenced findings; each finding has its causal origin (PREEXISTING needs a proof citing file:line of the base, or it is stored as UNKNOWN)',false,
@@ -389,7 +390,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     zana_review_request:({missionId:id},session)=>review.request(id,session),
     // The server cannot verify the user's consent: the tool is a write (ChatGPT
     // asks for confirmation), needs a reason and is audited as 'write'.
-    async zana_budget_extend({missionId:id,lines,reason,scope='pr'},session){
+    async zana_budget_extend({missionId:id,lines,reason,scope='pr',forSha,outOfScopeCount},session){
       if(!['pr','correction'].includes(scope))throw new Error("INVALID_ARGUMENTS: scope must be 'pr' or 'correction'");
       let previous,forTicket,pick;
       await transact((existing,txc)=>{
@@ -407,6 +408,9 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
           if(kept.pendingCorrection?.forTicket!==forTicket)throw new Error('NO_CORRECTION_PENDING: zana_review_request has not refused this correction round; there is nothing to authorize');
           previous=kept.correction?.forTicket===forTicket?kept.correction.limit:null;
           Object.assign(grant,pick=kept.pendingCorrection);
+          // El sí del usuario fue a un SHA y a un total de rutas: otro rechazo posterior no lo reapunta.
+          if(pick.forSha!==forSha||pick.outOfScope.length!==outOfScopeCount)throw new Error('CORRECTION_MISMATCH: el último rechazo midió '+
+            pick.forSha+' con '+pick.outOfScope.length+' rutas fuera del PR; pregúntale de nuevo al usuario con esas cifras');
         }else previous=lineLimit(rm,config);
         txc.db.prepare('UPDATE remote_missions SET line_budget_extension=? WHERE mission_id=?')
           .run(JSON.stringify(scope==='correction'?{...kept,correction:grant}:{...kept,...grant}),id);

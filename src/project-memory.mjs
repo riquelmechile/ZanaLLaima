@@ -6,6 +6,7 @@
 import {randomBytes} from 'node:crypto';
 import {redactStored} from './redact.mjs';
 import {nowIso} from './remote-state.mjs';
+import {memoryFtsStale} from './store.mjs';
 
 export const POINTER_PATH='.zanallaima.json';
 export const MEMORY_KINDS=Object.freeze(['summary','decision','convention','issue','pending']);
@@ -116,22 +117,39 @@ export function saveSummary(db,{projectId,missionId,summary,sha=null,sessionId=n
   return {projectId,saved:saved.length,superseded:saved.reduce((n,s)=>n+s.superseded.length,0)};
 }
 
-// Búsqueda (§6.6): FTS5 MATCH por palabras (o LIKE si metadata fts='0'), en el
-// proyecto o en todos (all); vivas primero y las supersedidas marcadas.
+// Búsqueda (§6.6): FTS5 MATCH por palabras, en el proyecto o en todos (all);
+// vivas primero y las supersedidas marcadas. Con metadata fts='0', sin palabras,
+// si el MATCH falla con un error de SQLite (índice ausente o dañado) o si no
+// encuentra nada y el índice no cuadra, usa LIKE: un LIKE por palabra, todas
+// obligatorias como en FTS. `_` separa palabras, igual que unicode61. Las
+// palabras se normalizan a NFC, sin repetidas y hasta MAX_WORDS.
+const MAX_WORDS=16;
 export function searchMemory(db,{query,projectId=null,limit=10}){
   const fts=db.prepare("SELECT value FROM metadata WHERE key='fts'").get()?.value!=='0';
-  const words=String(query).match(/[\p{L}\p{N}_]+/gu)??[];
+  const text=String(query).normalize('NFC');
+  const words=[...new Set(text.match(/[\p{L}\p{N}]+/gu))].slice(0,MAX_WORDS);
   const scope=projectId?' AND m.project_id=?':'',args=projectId?[projectId]:[];
   const order=' ORDER BY m.superseded_by IS NOT NULL,';
-  let rows;
+  let rows=null,mode='like',fallbackReason=null;
   if(fts&&words.length){
-    rows=db.prepare('SELECT m.* FROM project_memory_fts JOIN project_memory m ON m.seq=project_memory_fts.rowid WHERE project_memory_fts MATCH ?'+
-      scope+order+' bm25(project_memory_fts) LIMIT ?').all(words.map(w=>'"'+w+'"').join(' '),...args,limit);
-  }else{
-    const like='%'+String(query).replace(/[\\%_]/g,c=>'\\'+c)+'%';
-    rows=db.prepare("SELECT m.* FROM project_memory m WHERE (m.topic LIKE ? ESCAPE '\\' OR m.body LIKE ? ESCAPE '\\')"+
-      scope+order+' m.seq DESC LIMIT ?').all(like,like,...args,limit);
+    try{
+      rows=db.prepare('SELECT m.* FROM project_memory_fts JOIN project_memory m ON m.seq=project_memory_fts.rowid WHERE project_memory_fts MATCH ?'+
+        scope+order+' bm25(project_memory_fts) LIMIT ?').all(words.map(w=>'"'+w+'"').join(' '),...args,limit);
+      mode='fts';
+      if(!rows.length&&memoryFtsStale(db)){rows=null;mode='like';fallbackReason='INDEX_STALE';}
+    }catch(error){
+      // Solo un error de SQLite; el código, nunca el mensaje (puede traer datos).
+      if(error?.code!=='ERR_SQLITE_ERROR')throw error;
+      rows=null;mode='like';fallbackReason='SQLITE_'+(Number.isInteger(error.errcode)?error.errcode:'ERROR');
+    }
   }
-  return {mode:fts&&words.length?'fts':'like',untrusted:true,note:UNTRUSTED_NOTE,entries:rows.map(r=>({...view(r),projectId:r.project_id,
+  if(!rows){
+    const likes=(words.length?words:[text]).map(w=>'%'+w.replace(/[\\%_]/g,c=>'\\'+c)+'%');
+    const where=likes.map(()=>"(m.topic LIKE ? ESCAPE '\\' OR m.body LIKE ? ESCAPE '\\')").join(' AND ');
+    rows=db.prepare('SELECT m.* FROM project_memory m WHERE '+where+scope+order+' m.seq DESC LIMIT ?')
+      .all(...likes.flatMap(l=>[l,l]),...args,limit);
+  }
+  return {mode,...(fallbackReason?{fallback:true,fallbackReason}:{}),untrusted:true,note:UNTRUSTED_NOTE,
+    entries:rows.map(r=>({...view(r),projectId:r.project_id,
     ...(r.superseded_by?{superseded:true,supersededBy:r.superseded_by}:{}),...(r.resolved_at?{resolvedAt:r.resolved_at}:{})}))};
 }

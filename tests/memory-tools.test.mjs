@@ -44,7 +44,7 @@ test('memory tools: save redacta y supersede, resolve, contexto por misión, pro
     // A mission without a project resolves it on the first save.
     const other=await next(f,s);
     await remoteWrite(db=>db.prepare('UPDATE remote_missions SET project_id=NULL WHERE mission_id=?').run(other.id));
-    assert.match((await f.call('zana_memory_context',{},s)).error,/NO_PROJECT: that mission has no project yet/);
+    assert.match((await f.call('zana_memory_context',{},s)).error,/NO_PROJECT: that mission has no project yet \(it is resolved at the first zana_memory_save or at zana_mission_close\)/);
     const late=await save('issue','bug','falla','');
     assert.match(late.error,/MISSION_NOT_ACTIVE/);
     const saved=await save('issue','bug','falla al compilar',other.id);
@@ -74,6 +74,10 @@ test('memory search: proyecto actual, all:true, supersedidas al final y LIKE con
     assert.deepEqual([all.scope,all.entries.length,all.entries.every(e=>!e.superseded)],['all',2,true]);
     assert.equal((await f.call('zana_memory_search',{query:'punto',all:true},s)).entries.length,3);
     assert.match((await f.call('zana_memory_search',{query:' x'},s)).error,/INVALID_QUERY/);
+    // Como zana_memory_context: projectId y all:true no van juntos, y un projectId desconocido es NO_PROJECT.
+    assert.match((await f.call('zana_memory_search',{query:'punto',projectId:a.memory.projectId,all:true},s)).error,/^INVALID_ARGUMENTS: /);
+    assert.equal((await f.call('zana_memory_search',{query:'punto',projectId:a.memory.projectId,all:false},s)).entries.length,2);
+    assert.match((await f.call('zana_memory_search',{query:'punto',projectId:'zp_'+'0'.repeat(16)},s)).error,/^NO_PROJECT: unknown project zp_0{16}/);
     // Only symbols: no FTS words, LIKE on the raw text.
     assert.deepEqual((await f.call('zana_memory_search',{query:'%-',all:true},s)).mode,'like');
     // A manual delete keeps the FTS index consistent (AFTER DELETE trigger).
@@ -90,7 +94,7 @@ test('memory search: proyecto actual, all:true, supersedidas al final y LIKE con
     // A SQLite without FTS5 records fts='0' instead of failing the migration.
     const raw=new DatabaseSync(':memory:');
     raw.exec("CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)");
-    setupMemoryFts({prepare:sql=>raw.prepare(sql),exec:sql=>{if(/VIRTUAL/.test(sql))throw new Error('no such module: fts5');return raw.exec(sql);}});
+    setupMemoryFts({prepare:sql=>raw.prepare(sql),get isTransaction(){return raw.isTransaction;},exec:sql=>{if(/VIRTUAL/.test(sql))throw new Error('no such module: fts5');return raw.exec(sql);}});
     assert.equal(raw.prepare("SELECT value FROM metadata WHERE key='fts'").get().value,'0');
     raw.close();
   }finally{await f.cleanup();}

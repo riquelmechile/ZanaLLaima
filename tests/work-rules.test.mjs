@@ -20,7 +20,9 @@ test('zana-pr: aparece en el catálogo MCP y se carga',async()=>{
     assert.match(pr.text,/Ninguna casilla marcada sin evidencia/);
     for(const cat of ['none','irreversible-data','security','public-contract','concurrency','ci-or-deps','untestable'])
       assert.match(pr.text,new RegExp('`(Risk: )?'+cat+'`'),cat);
-    assert.match(pr.text,/400 líneas[\s\S]*`zana-odd`[\s\S]*`zana_budget_extend`/);
+    assert.match(pr.text,/`lineBudget` de la misión \(400 por defecto[\s\S]*`zana-odd`[\s\S]*`zana_budget_extend`/);
+    assert.match(pr.text,/`state` \(`SUCCESS` o `FAILURE`\)[^\n]*`conclusion` tal como llega \(`success`, `failure`/);
+    assert.match(pr.text,/La excepción es el commit del test negativo de un CRITICAL: va antes del fix y falla a propósito/);
   }finally{await f.cleanup();}
 });
 
@@ -30,17 +32,27 @@ test('reglas del verificador en zana-4r, review-reliability y review-discipline;
     assert.match(text,/Que los tests pasen no prueba un requisito que ningún test ejecuta/);
     assert.match(text,/"0 tests corridos" con (el|su) error/);
   }
-  for(const text of [rel,disc])assert.match(text,/[Uu]na corrección por check fallido y como máximo un reintento; después se reporta/);
+  // El límite de reintentos es por job y lo verifica la revisora con lecturas que sí tiene (W5/W6).
   assert.match(r4,/Por job \(`runs\[\]\.name`\) y dentro de la unidad, la autora tiene un commit de corrección de CI y una corrida nueva; si el mismo job vuelve a fallar, para y lo reporta/);
   assert.match(r4,/`pull_request_read` \(`method: "get_commits"`\) y `actions_list` \(`method: "list_workflow_runs"`/);
-  assert.match(disc,/`Risk:`[\s\S]*hallazgo de R2, y de R1 si esconde un riesgo/);
+  assert.doesNotMatch(rel,/como máximo un reintento|corrección por check/);
+  assert.match(disc,/commits de corrección de CI por job los verifica la conversación revisora/);
+  // Severidad y location de un hallazgo sobre la línea Risk (W4).
   assert.match(r4,/no tiene `Risk:` \(ver `zana-pr`\), es WARNING de R2;[^\n]*esconde un riesgo que el diff trae, CRITICAL de R1/);
   assert.match(r4,/la línea del diff que trae el riesgo escondido o no declarado; si no hay, el primer archivo del diff, línea 1/);
-  assert.match(read('skills/review-readability/SKILL.md'),/sin línea `Risk:`/);
-  assert.match(read('skills/review-risk/SKILL.md'),/línea `Risk:` del cuerpo del PR que esconde un riesgo/);
+  assert.match(disc,/es WARNING de R2; si esconde un riesgo, CRITICAL de R1/);
+  // R1 y R2 reciben la lista cerrada de categorías (W3).
+  const cats='`none`, `irreversible-data`, `security`, `public-contract`, `concurrency`, `ci-or-deps`, `untestable`';
+  const r2=read('skills/review-readability/SKILL.md'),r1=read('skills/review-risk/SKILL.md');
+  for(const text of [r1,r2])assert.ok(text.includes('lista cerrada: '+cats),'categorías de Risk');
+  assert.match(r2,/Sin línea `Risk:`[^\n]*WARNING, con `location` en la línea del diff no declarada \(si no hay, el primer archivo del diff, línea 1\)/);
+  assert.match(r1,/esconde un riesgo que el diff sí trae[^\n]*es CRITICAL con `location` en la línea del diff que trae el riesgo/);
   const odd=read('skills/zana-odd/SKILL.md');
   assert.match(odd,/Antes de abrir el PR, carga `zana-pr` con `zana_skill_load` y síguela/);
   assert.ok(odd.indexOf('`zana-pr`')<odd.indexOf('`create_pull_request` con `head'),'zana-pr va antes de abrir el PR');
+  assert.match(odd,/`zana_checks_status\(checkId\)` hasta `SUCCESS`, con el límite del paso 4\.3/);
+  assert.match(odd,/se cuenta por job \(`runs\[\]\.name`\) dentro de la unidad: un commit de corrección de CI y una corrida nueva\. Si el mismo job vuelve a fallar, para/);
+  assert.match(odd,/checks hasta verde con el límite del paso 4\.3, actualiza el plan de pruebas del cuerpo con `update_pull_request`/);
   const rdd=read('docs/solo-rdd.md').split('**No prueba:**')[1];
   assert.match(rdd,/vuelve alcanzable \(`ACTIVATED`\), no se etiquete `PREEXISTING`/);
   assert.match(rdd,/el servidor no la busca en el árbol de `baseSha`/);

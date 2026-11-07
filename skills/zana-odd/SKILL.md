@@ -56,8 +56,8 @@ Eres la conversación **autora**. Escribes en GitHub solo con `zana_ds_github`, 
 ## 4. Checks hasta verde
 
 1. `zana_checks_start(missionId)`: no bloquea, devuelve `checkId` y `sha`.
-2. `zana_checks_status(checkId)` hasta `SUCCESS`. Con `FAILURE` lee las líneas finales del log de cada job fallido (`failures[].logTail`), corrige con otro commit y vuelve a `zana_checks_start`. Si responde `partial`, vuelve a consultar.
-3. Una corrección por check fallido y como máximo un reintento; si sigue fallando, para y repórtalo al usuario con el `logTail`. Si falló el setup o la instalación, son "0 tests corridos" con el error: no inventes resultados.
+2. `zana_checks_status(checkId)` hasta `SUCCESS`, con el límite del paso 4.3. Con `FAILURE` lee las líneas finales del log de cada job fallido (`failures[].logTail`), corrige con un commit de corrección de CI y vuelve a `zana_checks_start`. Si responde `partial`, vuelve a consultar.
+3. **Límite por job.** Cada `zana_checks_start` da un `checkId` nuevo, así que el límite se cuenta por job (`runs[].name`) dentro de la unidad: un commit de corrección de CI y una corrida nueva. Si el mismo job vuelve a fallar, para y repórtalo al usuario con el `logTail`. Si falló el setup o la instalación, son "0 tests corridos" con el error: no inventes resultados. (Un commit de corrección de CI no es `zana_correction_start`, que abre una unidad tras la review.)
 
 ## 5. PR, completar la unidad y ticket
 
@@ -70,7 +70,7 @@ Eres la conversación **autora**. Escribes en GitHub solo con `zana_ds_github`, 
 ## 6. Review, corrección y entrega
 
 1. `zana_delivery_status(missionId)` muestra el ticket vigente (`currentTicket`), la review sobre el SHA exacto, CI, `zana/4r` y si el PR es mergeable.
-2. Si pidió cambios: `zana_correction_start(missionId)` agrega una unidad de corrección `PENDING`; `zana_start_batch`, corrige en la rama, checks hasta verde, `zana_complete_unit` y un **ticket nuevo**. Sobre el mismo SHA se rechaza con `CHANGES_REQUESTED_SAME_SHA`, aunque el ticket anterior haya vencido.
+2. Si pidió cambios: `zana_correction_start(missionId)` agrega una unidad de corrección `PENDING`; `zana_start_batch`, corrige en la rama, checks hasta verde con el límite del paso 4.3, actualiza el plan de pruebas del cuerpo con `update_pull_request`, `zana_complete_unit` y un **ticket nuevo**. Sobre el mismo SHA se rechaza con `CHANGES_REQUESTED_SAME_SHA`, aunque el ticket anterior haya vencido.
 3. Con la review aprobada: `zana_merge(missionId)` solo si el usuario lo pide. Nunca `merge_pull_request` por el downstream.
 4. Después del merge: `zana_mission_close` con el **resumen obligatorio** y luego `zana_mission_archive`, para poder iniciar otra misión. Ejemplo:
 

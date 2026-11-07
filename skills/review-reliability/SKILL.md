@@ -15,7 +15,6 @@ description: Lente R3 Reliability — regresiones, contratos, tests débiles o r
 - Marca escapes de CI: `test.only`, tests saltados, umbrales bajados o checks que pueden pasar sin correr lo importante.
 - Que los tests pasen no prueba un requisito que ningún test ejecuta: busca el test que lo cubre (`archivo:línea`) o repórtalo.
 - Si el setup o la instalación fallaron, reporta "0 tests corridos" con el error; no lo cuentes como verde, no entres en loop ni inventes resultados.
-- Una corrección por check fallido y como máximo un reintento; después se reporta. Más reintentos sobre el mismo check sin reportarlo es un hallazgo.
 - **Origen** (`origin`): `INTRODUCED` si el diff agrega o cambia la línea; `ACTIVATED` si hace alcanzable un defecto previo; `WORSENED` si lo agrava; `PREEXISTING` solo si ya estaba igual en la base, con `proof` que cite `archivo:línea` de la base (`get_file_contents` con `ref=<baseSha>` del claim o el contexto del diff); con duda, `UNKNOWN`. `PREEXISTING` solo sirve en archivos que el PR no toca: en un archivo que el PR modifica el servidor lo rebaja a `UNKNOWN` y bloquea.
 
 Salida: hallazgos con `severity`, `location` (`archivo:línea`), `evidence` y `origin` (`proof` si es `PREEXISTING`). Si está limpio, `findings: []` con evidencia concreta.

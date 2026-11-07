@@ -196,6 +196,9 @@ test('M6: deliveryStatus with no time left is never green',async()=>{
   assert.deepEqual(r.partial,['ci','zana/4r','review']);
   const currentTicket={ticket_id:'t',state:'FINALIZED',verdict:'APPROVE',sha:'h',github_review_id:1};
   assert.equal((await deliveryStatus({github:gh,config:{reviewerLogin:'rev',requiredChecks:[]},ctx,currentTicket})).ready,true);
+  // Sobre una base lista, un presupuesto de líneas excedido es informativo: no cambia ready ni blockers.
+  const over=await deliveryStatus({github:gh,config:{reviewerLogin:'rev',requiredChecks:[]},ctx,currentTicket,lineBudgetOf:async()=>({lines:900,limit:400,over:true})});
+  assert.deepEqual([over.ready,over.blockers,over.lineBudget.over],[true,[],true]);
   // Without ZANA_REVIEWER_LOGIN delivery is never ready, and GitHub is not even read.
   const unset=await deliveryStatus({github:{},config:{reviewerLogin:null,requiredChecks:[]},ctx,currentTicket});
   assert.deepEqual({state:unset.state,ready:unset.ready},{state:'NOT_CONFIGURED',ready:false});

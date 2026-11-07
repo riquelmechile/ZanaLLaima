@@ -209,3 +209,22 @@ test('correction: a review finalized while measuring changes the round and the r
     assert.equal(await tickets(),before);
   }finally{await f.cleanup();}
 });
+
+test('correction: the grant covers only the measured SHA, files and lines of the refusal it answers',async()=>{
+  const f=await remoteFixture();
+  try{
+    const r=await rejected(f);
+    assert.match((await ext(f,r,30,'correction')).error,/^NO_CORRECTION_PENDING:/);
+    assert.match((await r.request([file('lib/x.mjs',5)])).error,/^CORRECTION_OUT_OF_SCOPE: lib\/x\.mjs:/);
+    assert.deepEqual((await ext(f,r,30,'correction')).correctionBudget,{forTicket:r.ticketId,forSha:sha('b'),outOfScope:['lib/x.mjs'],
+      lines:5,unmeasured:false,limit:30,previous:null,reason:'el usuario dijo que sí'});
+    assert.match((await r.request([file('lib/x.mjs',5),file('lib/y.mjs',1)])).error,/^CORRECTION_OUT_OF_SCOPE: lib\/x\.mjs, lib\/y\.mjs:/);
+    assert.equal((await r.request([file('lib/x.mjs',5)])).error,undefined);
+    // A measured grant does not cover the same SHA unmeasured, nor another SHA.
+    f.api.state.compareFilesError={status:502,message:'transient'};
+    assert.match((await r.request()).error,/^CORRECTION_UNMEASURED:/);
+    f.api.state.compareFilesError=null;
+    f.api.state.push(r.branch,sha('c'));f.api.state.green(sha('c'));
+    assert.match((await r.request([file('lib/x.mjs',5)])).error,/^CORRECTION_OUT_OF_SCOPE: lib\/x\.mjs:/);
+  }finally{await f.cleanup();}
+});

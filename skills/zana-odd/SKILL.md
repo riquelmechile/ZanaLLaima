@@ -57,10 +57,11 @@ Eres la conversación **autora**. Escribes en GitHub solo con `zana_ds_github`, 
 
 1. `zana_checks_start(missionId)`: no bloquea, devuelve `checkId` y `sha`.
 2. `zana_checks_status(checkId)` hasta `SUCCESS`. Con `FAILURE` lee las líneas finales del log de cada job fallido (`failures[].logTail`), corrige con otro commit y vuelve a `zana_checks_start`. Si responde `partial`, vuelve a consultar.
+3. Una corrección por check fallido y como máximo un reintento; si sigue fallando, para y repórtalo al usuario con el `logTail`. Si falló el setup o la instalación, son "0 tests corridos" con el error: no inventes resultados.
 
 ## 5. PR, completar la unidad y ticket
 
-1. `create_pull_request` con `head: zana/<missionId>` exacto y `base` = base de la misión. Solo puedes editar título y cuerpo.
+1. Antes de abrir el PR, carga `zana-pr` con `zana_skill_load` y síguela: commits, cuerpo con plan de pruebas y línea `Risk:`. Luego `create_pull_request` con `head: zana/<missionId>` exacto y `base` = base de la misión. Solo puedes editar título y cuerpo.
 2. Con checks verdes sobre el head del PR, **completa la unidad**: `zana_complete_unit` con evidencia real (SHA, checkId, checks). Exige check verde sobre el head actual de la rama. Así no hay que mantener el lease vivo mientras el usuario revisa en otra conversación.
 3. Si `zana_review_request` responde `DIFF_TOO_LARGE`, no hay excepción: divide el trabajo en misiones secuenciales (hay una sola misión activa). Si responde `OVER_LINE_BUDGET`, **pregunta al usuario con el número exacto** ("el PR tiene N líneas y el presupuesto es L, ¿autorizas N?"). Si el mensaje dice que no hay extensión posible (más de 3000 archivos o más de 5000 líneas), divide sin preguntar. Solo con su sí llamas `zana_budget_extend(missionId, lines, reason)`. Nunca la llames sin preguntar. Si dice no, divide. Los lockfiles no cuentan.
 4. `zana_review_request(missionId)`: con una unidad de código todavía RUNNING responde `UNIT_STILL_RUNNING` (completa primero). Cada ticket consume una ronda (`maxReviewRounds`); un ticket nuevo reemplaza al anterior y pasa a ser la autoridad del merge.

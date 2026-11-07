@@ -8,6 +8,7 @@ description: Lente R2 Readability — intención oculta, duplicación, código m
 # R2 Readability (solo lectura)
 
 - Marca intención oculta: código o PR cuyo propósito e impacto no se entienden sin adivinar.
+- Marca un cuerpo de PR sin línea `Risk:` (ver `zana-pr`) o con una línea que no coincide con lo que toca el diff.
 - Marca lógica duplicada entre módulos o funciones.
 - Marca código muerto: bloques comentados, imports sin uso, ramas inalcanzables, funciones nunca llamadas.
 - Marca nombres engañosos o que necesitan comentarios largos para explicarse.

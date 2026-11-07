@@ -243,7 +243,7 @@ test('remote state: session identity binding and bounded audit reads',async()=>{
 
 test('skills: list, load, frontmatter and path traversal',async()=>{
   const names=listSkills().map(s=>s.name);
-  assert.deepEqual(names,['review-discipline','review-readability','review-reliability','review-resilience','review-risk','zana-4r','zana-odd']);
+  assert.deepEqual(names,['review-discipline','review-readability','review-reliability','review-resilience','review-risk','zana-4r','zana-odd','zana-pr']);
   for(const name of names){
     const s=loadSkill(name);
     assert.equal(s.name,name);

@@ -24,6 +24,14 @@ Eres la conversación **revisora**, abierta por el usuario con un mensaje como "
 2. Carga con `zana_skill_load` cada `review-<lente>` (`review-risk`, `review-readability`, `review-reliability`, `review-resilience`). Si el anfitrión permite subagentes, lanza **4 en paralelo**, uno por lente; cada uno recibe **solo** la spec, el diff completo, los checks y el texto de su skill (pégaselo: el subagente puede no tener el conector).
 3. Los subagentes **devuelven sus hallazgos** a esta conversación; no envían nada a ZanaLLaima.
 4. Sin subagentes, corre los 4 lentes **en secuencia** aquí, cada uno desde cero con solo esos insumos, y decláralo.
+5. Lee también el cuerpo del PR (`pull_request_read` por `zana_ds_github`) y pásalo a cada lente.
+
+### Reglas del verificador
+
+- **Verde no es cobertura.** Que los tests pasen no prueba un requisito que ningún test ejecuta. Para cada requisito de la spec busca el test que lo cubre (`archivo:línea`) o repórtalo como hallazgo.
+- **Setup fallido.** Si la instalación o el setup de los checks falló, el resultado es "0 tests corridos" con el error, no un verde ni un rojo de tests. No entres en loop ni inventes resultados.
+- **Una corrección por check fallido.** La autora tiene una corrección por check fallido y como máximo un reintento; después se reporta. Más intentos sobre el mismo check sin reportarlo es un hallazgo.
+- **Línea `Risk:`.** Si el cuerpo del PR no tiene `Risk:` (ver `zana-pr`) o la línea no coincide con lo que toca el diff, es un hallazgo de R2, y también de R1 si esconde un riesgo.
 
 ## 4. Enviar los lentes desde esta conversación
 

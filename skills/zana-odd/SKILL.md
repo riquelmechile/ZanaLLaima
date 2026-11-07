@@ -56,11 +56,12 @@ Eres la conversación **autora**. Escribes en GitHub solo con `zana_ds_github`, 
 ## 4. Checks hasta verde
 
 1. `zana_checks_start(missionId)`: no bloquea, devuelve `checkId` y `sha`.
-2. `zana_checks_status(checkId)` hasta `SUCCESS`. Con `FAILURE` lee las líneas finales del log de cada job fallido (`failures[].logTail`), corrige con otro commit y vuelve a `zana_checks_start`. Si responde `partial`, vuelve a consultar.
+2. `zana_checks_status(checkId)` hasta `SUCCESS`, con el límite del paso 4.3. Con `FAILURE` lee las líneas finales del log de cada job fallido (`failures[].logTail`), corrige con un commit de corrección de CI y vuelve a `zana_checks_start`. Si responde `partial`, vuelve a consultar.
+3. **Límite por job.** Cada `zana_checks_start` da un `checkId` nuevo, así que el límite se cuenta por job (`runs[].name`) dentro de la unidad: un commit de corrección de CI y una corrida nueva. Si el mismo job vuelve a fallar, para y repórtalo al usuario con el `logTail`. Si falló el setup o la instalación, son "0 tests corridos" con el error: no inventes resultados. (Un commit de corrección de CI no es `zana_correction_start`, que abre una unidad tras la review.)
 
 ## 5. PR, completar la unidad y ticket
 
-1. `create_pull_request` con `head: zana/<missionId>` exacto y `base` = base de la misión. Solo puedes editar título y cuerpo.
+1. Antes de abrir el PR, carga `zana-pr` con `zana_skill_load` y síguela: commits, cuerpo con plan de pruebas y línea `Risk:`. Luego `create_pull_request` con `head: zana/<missionId>` exacto y `base` = base de la misión. Solo puedes editar título y cuerpo.
 2. Con checks verdes sobre el head del PR, **completa la unidad**: `zana_complete_unit` con evidencia real (SHA, checkId, checks). Exige check verde sobre el head actual de la rama. Así no hay que mantener el lease vivo mientras el usuario revisa en otra conversación.
 3. Si `zana_review_request` responde `DIFF_TOO_LARGE`, no hay excepción: divide el trabajo en misiones secuenciales (hay una sola misión activa). Si responde `OVER_LINE_BUDGET`, **pregunta al usuario con el número exacto** ("el PR tiene N líneas y el presupuesto es L, ¿autorizas N?"). Si el mensaje dice que no hay extensión posible (más de 3000 archivos o más de 5000 líneas), divide sin preguntar. Solo con su sí llamas `zana_budget_extend(missionId, lines, reason)`. Nunca la llames sin preguntar. Si dice no, divide. Los lockfiles no cuentan.
 4. `zana_review_request(missionId)`: con una unidad de código todavía RUNNING responde `UNIT_STILL_RUNNING` (completa primero). Cada ticket consume una ronda (`maxReviewRounds`); un ticket nuevo reemplaza al anterior y pasa a ser la autoridad del merge.
@@ -69,7 +70,7 @@ Eres la conversación **autora**. Escribes en GitHub solo con `zana_ds_github`, 
 ## 6. Review, corrección y entrega
 
 1. `zana_delivery_status(missionId)` muestra el ticket vigente (`currentTicket`), la review sobre el SHA exacto, CI, `zana/4r` y si el PR es mergeable.
-2. Si pidió cambios: `zana_correction_start(missionId)` agrega una unidad de corrección `PENDING`; `zana_start_batch`, corrige en la rama, checks hasta verde, `zana_complete_unit` y un **ticket nuevo**. Sobre el mismo SHA se rechaza con `CHANGES_REQUESTED_SAME_SHA`, aunque el ticket anterior haya vencido.
+2. Si pidió cambios: `zana_correction_start(missionId)` agrega una unidad de corrección `PENDING`; `zana_start_batch`, corrige en la rama, checks hasta verde con el límite del paso 4.3, actualiza el plan de pruebas del cuerpo con `update_pull_request`, `zana_complete_unit` y un **ticket nuevo**. Sobre el mismo SHA se rechaza con `CHANGES_REQUESTED_SAME_SHA`, aunque el ticket anterior haya vencido: si la review pidió corregir solo el cuerpo del PR (por ejemplo la línea `Risk:`), igual hace falta un commit con sentido, como documentar ese riesgo en el CHANGELOG o en docs; nunca un commit vacío.
 3. Con la review aprobada: `zana_merge(missionId)` solo si el usuario lo pide. Nunca `merge_pull_request` por el downstream.
 4. Después del merge: `zana_mission_close` con el **resumen obligatorio** y luego `zana_mission_archive`, para poder iniciar otra misión. Ejemplo:
 

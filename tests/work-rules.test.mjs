@@ -29,9 +29,13 @@ test('reglas del verificador en zana-4r, review-reliability y review-discipline;
   for(const text of [r4,rel,disc]){
     assert.match(text,/Que los tests pasen no prueba un requisito que ningún test ejecuta/);
     assert.match(text,/"0 tests corridos" con (el|su) error/);
-    assert.match(text,/[Uu]na corrección por check fallido y como máximo un reintento; después se reporta/);
   }
-  for(const text of [r4,disc])assert.match(text,/`Risk:`[\s\S]*hallazgo de R2, y (también )?de R1 si esconde un riesgo/);
+  for(const text of [rel,disc])assert.match(text,/[Uu]na corrección por check fallido y como máximo un reintento; después se reporta/);
+  assert.match(r4,/Por job \(`runs\[\]\.name`\) y dentro de la unidad, la autora tiene un commit de corrección de CI y una corrida nueva; si el mismo job vuelve a fallar, para y lo reporta/);
+  assert.match(r4,/`pull_request_read` \(`method: "get_commits"`\) y `actions_list` \(`method: "list_workflow_runs"`/);
+  assert.match(disc,/`Risk:`[\s\S]*hallazgo de R2, y de R1 si esconde un riesgo/);
+  assert.match(r4,/no tiene `Risk:` \(ver `zana-pr`\), es WARNING de R2;[^\n]*esconde un riesgo que el diff trae, CRITICAL de R1/);
+  assert.match(r4,/la línea del diff que trae el riesgo escondido o no declarado; si no hay, el primer archivo del diff, línea 1/);
   assert.match(read('skills/review-readability/SKILL.md'),/sin línea `Risk:`/);
   assert.match(read('skills/review-risk/SKILL.md'),/línea `Risk:` del cuerpo del PR que esconde un riesgo/);
   const odd=read('skills/zana-odd/SKILL.md');

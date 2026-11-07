@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {remoteFixture,readDiff} from './helpers/remote-fixture.mjs';
-import {validateLens,validProof,lensDigest,reviewBody} from '../src/remote-review.mjs';
+import {validateLens,validProof,lensDigest,reviewBody,addedLines,onAddedLine} from '../src/remote-review.mjs';
 import {remoteWrite} from '../src/store.mjs';
 
 const clean=lens=>({lens,findings:[],evidence:['read every page']});
@@ -57,18 +57,18 @@ test('a PREEXISTING without a valid proof is stored as UNKNOWN and requests chan
       finding('PREEXISTING',{proof:'ya estaba así en main'}),finding('PREEXISTING',{proof:'src/sum.mjs sin línea'}),
       finding('PREEXISTING',{location:'src/sum.mjs:2',proof:'src/sum.mjs:2'}),// the PR adds line 2
       finding('PREEXISTING',{location:'src/sum.mjs:1-3',proof:PROOF}),// range crosses line 2
-      finding('PREEXISTING',{location:'src/sum.mjs:1',proof:'src/sum.mjs:2'}),// proof cites an added line
+      finding('PREEXISTING',{location:'src/sum.mjs:1',proof:'src/sum.mjs:2'}),// S7: the proof cites base lines, not compared with the head
       finding('PREEXISTING',{location:'src/sum.mjs:1',proof:'a las 16:30, ratio 1:2, Node:22'}),
       finding('PREEXISTING',{proof:PROOF,severity:'WARNING'}))},reviewer);
-    assert.deepEqual(r.originDowngraded,[0,1,2,3,4,5,6]);
+    assert.deepEqual(r.originDowngraded,[0,1,2,3,4,6]);
     assert.equal(r.blocking,true);
     const stored=await remoteWrite(db=>JSON.parse(db.prepare("SELECT result FROM review_receipts WHERE lens_id='risk'").get().result));
-    assert.deepEqual(stored.findings.map(x=>x.origin),[...Array(7).fill('UNKNOWN'),'PREEXISTING']);
+    assert.deepEqual(stored.findings.map(x=>x.origin),[...Array(5).fill('UNKNOWN'),'PREEXISTING','UNKNOWN','PREEXISTING']);
     assert.equal(stored.findings[1].proof,'ya estaba así en main');
     await rest(f,ticket,reviewer);
     assert.equal((await finalize(f,ticket,reviewer)).event,'REQUEST_CHANGES');
     const {body}=sentBody(f);
-    assert.match(body,/\| risk \| 7 \| 0 \| 0 \| 0 \| 1 \|/);
+    assert.match(body,/\| risk \| 6 \| 0 \| 0 \| 0 \| 2 \|/);
     assert.match(body,/- \*\*BLOCKER\*\* `src\/sum.mjs:3`\. Origen: `UNKNOWN`\./);
   }finally{await f.cleanup();}
 });
@@ -165,4 +165,42 @@ test('review body: the verdict survives the size cut; pending items go last',()=
   const body=reviewBody({code:'ZR-AAAA-AAAA-AAAA-AAAA',ticket:{pr_number:1,sha:'a'.repeat(40)},lenses,execution:'PARALLEL_SUBAGENTS',event:'APPROVE'});
   assert.match(body,/cuerpo recortado/);
   assert.match(body,/Veredicto: \*\*APPROVE\*\*\.\n\nPrueba: sesión revisora[^]*### Pendientes preexistentes/);
+});
+
+const H=(p,body,q=p)=>'diff --git a/'+p+' b/'+p+'\n--- a/'+q+'\n+++ b/'+q+'\n'+body;
+const lines=d=>{const r=addedLines(d);return {files:Object.fromEntries([...r.files].map(([k,v])=>[k,[...v]])),unparsed:r.unparsed};};
+test('hunk parser: head numbering, - lines, no newline at EOF, deleted file and path reset',()=>{
+  const deleted='diff --git a/gone.mjs b/gone.mjs\ndeleted file mode 100644\n--- a/gone.mjs\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-a\n-b\n';
+  const d=H('a.mjs','@@ -10,3 +12,5 @@\n c\n-gone\n+n13\n+n14\n c\n+n16\n@@ -40,1 +50,2 @@\n-old\n\\ No newline at end of file\n+new\n+tail\n')+
+    deleted+H('b.mjs','@@ -1 +1,2 @@\n b\n+c\n');
+  assert.deepEqual(lines(d),{files:{'a.mjs':[13,14,16,50,51],'b.mjs':[2]},unparsed:false});
+  // A block without "+++" (binary, rename, malformed) resets the path and fails closed.
+  assert.deepEqual(lines(d+'diff --git a/c b/c\n@@ -1 +1,2 @@\n x\n+y\n'),{files:{'a.mjs':[13,14,16,50,51],'b.mjs':[2]},unparsed:true});
+});
+test('hunk parser closes the W1b escapes: spaces, quoted paths, injected headers, prefixes and ranges',()=>{
+  const on=(d,loc)=>onAddedLine(addedLines(d),loc);
+  const space='diff --git a/src/my file.mjs b/src/my file.mjs\n--- a/src/my file.mjs\t\n+++ b/src/my file.mjs\t\n@@ -1 +1,2 @@\n a\n+e\n';
+  assert.deepEqual([on(space,'src/my file.mjs:2'),on(space,'src/my file.mjs:1')],[true,false]);
+  const q='"b/src/a\\303\\261o.mjs"';
+  assert.equal(on('diff --git x\n--- '+q+'\n+++ '+q+'\n@@ -1 +1,2 @@\n a\n+e\n','src/año.mjs:2'),true);
+  assert.equal(addedLines('diff --git x\n+++ "b/\\377.mjs"\n').unparsed,true);
+  const injected=H('src/s.mjs','@@ -1 +1,3 @@\n a\n+++ b/src/decoy.mjs\n+e\n');
+  assert.deepEqual(lines(injected).files,{'src/s.mjs':[2,3]});
+  const plain=H('src/s.mjs','@@ -1 +1,2 @@\n a\n+e\n');
+  for(const loc of ['b/src/s.mjs:2','./src/s.mjs:2','src/s.mjs:3-1','src/s.mjs:2-2'])assert.equal(on(plain,loc),true,loc);
+  for(const loc of ['a/src/s.mjs:1','src/s.mjs:3-9','src/other.mjs:2'])assert.equal(on(plain,loc),false,loc);
+  assert.equal(on(H('s.mjs','@@ -1,0 +15000,1 @@\n+e\n'),'s.mjs:1-20000'),true);
+  assert.equal(on('diff --git a/i.png b/i.png\nBinary files a/i.png and b/i.png differ\n','i.png:1'),true);
+});
+
+test('claim: baseSha is null when the compare JSON fails; mergeBase refuses an invalid base',async()=>{
+  const f=await remoteFixture();
+  try{
+    const ready=await f.authorReady();
+    const req=await f.call('zana_review_request',{missionId:ready.missionId},ready.author);
+    f.api.state.compareJsonError=true;
+    const claim=await f.call('zana_review_claim',{ticket:req.ticket},await f.session());
+    assert.deepEqual([claim.state,claim.baseSha],['CLAIMED',null]);
+    await assert.rejects(f.runtime.github.mergeBase('o/r','bad..ref','a'.repeat(40)),/Invalid base/);
+  }finally{await f.cleanup();}
 });

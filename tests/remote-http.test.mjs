@@ -122,6 +122,7 @@ test('Streamable HTTP sessions: two conversations get two sessions; the reviewer
     const init=await a.call('zana_mission_init',{spec:f.spec,github:{repo:'o/r',base:'main'}});
     assert.equal(init.github.branch,'zana/'+init.id);
     const p=(await a.call('zana_start_batch',{})).packets[0];
+    f.api.state.diffText='diff --git a/src/a.mjs b/src/a.mjs\n--- a/src/a.mjs\n+++ b/src/a.mjs\n@@ -1 +1,2 @@\n a\n+b\n';
     f.api.state.push(init.github.branch,'a'.repeat(40));f.api.state.green('a'.repeat(40));f.api.state.openPull(init.github.branch);
     // W3 order: complete the code unit, then ask for the ticket.
     assert.equal((await a.call('zana_complete_unit',{unitId:p.unitId,token:p.token,leaseGeneration:p.leaseGeneration,

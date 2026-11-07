@@ -26,3 +26,7 @@ export function lineBudget(files,{limit,changedFiles,truncated=files.truncated==
 }
 // Límite vigente de la misión: su extensión (zana_budget_extend) o el del servidor.
 export const lineLimit=(rm,config)=>rm?.lineBudgetExtension?.limit??config.prLineBudget;
+// Ronda de corrección: además de los archivos del PR puede tocar tests, y como
+// máximo la mitad de las líneas del PR, con tope 200.
+export const isTestPath=p=>/(^|\/)(tests?|__tests__)\/|\.(test|spec)\./.test(p);
+export const correctionLimit=prLines=>Math.min(200,Math.ceil(prLines/2));

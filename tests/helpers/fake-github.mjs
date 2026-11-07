@@ -48,6 +48,12 @@ export async function fakeGitHubApi(){
       return send(200,state.pulls.filter(x=>x.state==='open'&&(!head||'o:'+x.head.ref===head)));
     }
     // compareError: {status, body} as GitHub answers a diff it will not render (406/422).
+    // compareFiles: files of a SHA...SHA compare (correction rounds); compareFilesError: {status, message}.
+    if((m=/^\/compare\/([0-9a-f]{40})\.\.\.([0-9a-f]{40})$/.exec(p))&&!String(req.headers.accept).includes('diff')){
+      await state.onCompareFiles?.();
+      return state.compareFilesError?send(state.compareFilesError.status,{message:state.compareFilesError.message}):
+        send(200,{merge_base_commit:{sha:m[1]},files:state.compareFiles??[{filename:'x',additions:1,deletions:0,status:'modified'}]});
+    }
     if((m=/^\/compare\/(.+)\.\.\.([0-9a-f]{40})$/.exec(p))&&!String(req.headers.accept).includes('diff'))
       return state.compareJsonError?send(404,{message:'nf'}):send(200,{merge_base_commit:{sha:state.mergeBase??'b'.repeat(40)}});
     if((m=/^\/compare\/(.+)\.\.\.([0-9a-f]{40})$/.exec(p)))

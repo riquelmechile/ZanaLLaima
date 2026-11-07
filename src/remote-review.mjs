@@ -10,7 +10,7 @@ import {missionPull} from './github-delivery.mjs';
 import {recordActivity,sessionRow,sessionWrote,nowIso,writeAudit,missionClients,remoteMission} from './remote-state.mjs';
 import {budgetOf} from './budget.mjs';
 import {redactText,envSecrets} from './redact.mjs';
-import {lineBudget,lineLimit,EXTEND_MAX} from './line-budget.mjs';
+import {lineBudget,lineLimit,EXTEND_MAX,excluded,isTestPath,correctionLimit} from './line-budget.mjs';
 
 export const LENSES=Object.freeze(['risk','readability','reliability','resilience']);
 export const SEVERITIES=Object.freeze(['BLOCKER','CRITICAL','WARNING','SUGGESTION']);
@@ -151,6 +151,11 @@ export function makeExclusive(){
   }
   return {exclusive,pending:()=>locks.size};
 }
+// Ronda de corrección: el último ticket FINALIZED de la misión, si pidió cambios.
+export const correctionPrev=(db,missionId)=>{
+  const t=db?.prepare("SELECT * FROM review_tickets WHERE mission_id=? AND state='FINALIZED' ORDER BY created_at DESC, rowid DESC LIMIT 1").get(missionId);
+  return t?.verdict==='REQUEST_CHANGES'?t:null;
+};
 export const latestIn=(db,missionId)=>db?.prepare('SELECT * FROM review_tickets WHERE mission_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(missionId)??null;
 export function createReview({github,reviewerGithub,config,checks,remoteWrite,remoteRead,transact,missionContext}){
   const {exclusive}=makeExclusive();
@@ -223,6 +228,23 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
       return entry;
     });
   }
+  // Diff prevSha...sha de una ronda de corrección: líneas sin lockfiles, archivos fuera del PR
+  // que no son tests (ambos nombres de un rename) y por qué no se pudo medir.
+  async function measureCorrection(repo,prev,sha){
+    let prLines=null;
+    try{prLines=JSON.parse(prev.line_budget).lines;}catch{prLines=null;}
+    const touched=storedTouched(prev.line_budget);
+    const limit=Number.isSafeInteger(prLines)?correctionLimit(prLines):null;
+    let files=null,error=null;
+    try{files=await github.compareFiles(repo,prev.sha,sha);}catch(e){error='compare '+prev.sha+'...'+sha+': '+String(e?.message??e).slice(0,200);}
+    const lines=files?files.reduce((n,f)=>n+(excluded(f.filename)?0:f.additions+f.deletions),0):null;
+    const allowed=new Set((touched??[]).map(canonPath));
+    const outOfScope=files&&touched?[...new Set(files.flatMap(f=>[f.filename,...(f.previousFilename?[f.previousFilename]:[])]))]
+      .filter(p=>{const c=canonPath(p);return c===null||(!allowed.has(c)&&!isTestPath(c));}):[];
+    const unmeasured=error??(files.truncated?'el compare lista 300 archivos o más':null)??
+      (touched===null||limit===null?'el ticket '+prev.ticket_id+' no guardó los archivos y líneas del PR':null);
+    return {forTicket:prev.ticket_id,fromSha:prev.sha,lines,limit,outOfScope,...(unmeasured?{unmeasured}:{})};
+  }
   return {
     expire:()=>remoteWrite(db=>expire(db)),
     async request(missionId,session){
@@ -254,6 +276,23 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
         reject('OVER_LINE_BUDGET','el PR cambia '+budget.lines+' líneas (sin lockfiles) y la extensión máxima es '+EXTEND_MAX+'; divide el cambio en misiones secuenciales');
       if(budget.over)reject('OVER_LINE_BUDGET','el PR cambia '+budget.lines+' líneas (sin lockfiles) y el presupuesto es '+budget.limit+
         '; pregúntale al usuario si autoriza '+budget.lines+' líneas y, solo con su sí, llama zana_budget_extend');
+      // Ronda de corrección: sin medida falla cerrado; solo la extensión 'correction' de
+      // esta ronda (el sí del usuario a N líneas) levanta los tres rechazos.
+      const prev=await remoteRead(db=>correctionPrev(db,missionId));
+      const correction=prev?await measureCorrection(ctx.repo,prev,sha):null;
+      if(correction){
+        const ext=ctx.lineBudgetExtension?.correction,n=correction.lines;
+        correction.authorized=ext?.forTicket===prev.ticket_id&&(n===null||n<=ext.limit);
+        const ask=what=>'; pregúntale al usuario si autoriza '+what+" y, solo con su sí, llama zana_budget_extend con scope 'correction'";
+        const paths=correction.outOfScope.slice(0,10).map(p=>p.slice(0,200)).join(', ')+
+          (correction.outOfScope.length>10?' (y '+(correction.outOfScope.length-10)+' más)':'');
+        if(!correction.authorized&&correction.unmeasured)reject('CORRECTION_UNMEASURED','no se puede medir la corrección desde '+prev.sha+
+          ' ('+correction.unmeasured+')'+ask(n===null?'la ronda sin medir':n+' líneas'));
+        if(!correction.authorized&&correction.outOfScope.length)reject('CORRECTION_OUT_OF_SCOPE',redactText(paths,[...envSecrets(),...github.secrets()])+
+          ': la corrección solo puede tocar los archivos del PR y tests; tiene '+n+' líneas'+ask(n+' líneas'));
+        if(!correction.authorized&&n>correction.limit)reject('OVER_CORRECTION_BUDGET','el cambio de corrección tiene '+n+
+          ' líneas y el tope de esta ronda es '+correction.limit+ask(n+' líneas'));
+      }
       const code=ticketCode(),ticketId=randomUUID();
       let expiresAt;
       let superseded=[];
@@ -267,6 +306,8 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
         const running=mission.units.filter(u=>codeUnits.includes(u.id)&&u.status==='RUNNING').map(u=>u.id);
         if(running.length)fail('UNIT_STILL_RUNNING','complete '+running.join(', ')+' with zana_complete_unit (green checks on the head) before asking for a ticket; if its lease expired: zana_recover_expired → zana_unit_retry → zana_start_batch');
         expire(db);
+        if((correctionPrev(db,missionId)?.ticket_id??null)!==(prev?.ticket_id??null))
+          fail('CORRECTION_UNMEASURED','la ronda de revisión cambió mientras se medía; vuelve a pedir el ticket');
         // Timestamps once the mission lock is held: tickets are ordered by creation.
         const at=Date.now();
         expiresAt=new Date(at+config.ticketTtlMinutes*60_000).toISOString();
@@ -292,6 +333,7 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
         return mission;
       }));
       return {ticket:code,missionId,repo:ctx.repo,pullNumber:pull.number,sha,expiresAt,lineBudget:budget,diffBytes,
+        ...(correction?{correction}:{}),
         superseded:superseded.map(x=>x.ticket_id),
         message:'Revisa el ticket '+code+' con ZanaLLaima',
         instructions:'Entrega este mensaje exacto al usuario para que lo pegue en una conversación NUEVA. Esta sesión no puede reclamarlo.'};

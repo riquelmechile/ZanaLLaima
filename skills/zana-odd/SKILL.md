@@ -70,7 +70,7 @@ Eres la conversación **autora**. Escribes en GitHub solo con `zana_ds_github`, 
 ## 6. Review, corrección y entrega
 
 1. `zana_delivery_status(missionId)` muestra el ticket vigente (`currentTicket`), la review sobre el SHA exacto, CI, `zana/4r` y si el PR es mergeable.
-2. Si pidió cambios: `zana_correction_start(missionId)` agrega una unidad de corrección `PENDING`; `zana_start_batch`, corrige en la rama, checks hasta verde con el límite del paso 4.3, actualiza el plan de pruebas del cuerpo con `update_pull_request`, `zana_complete_unit` y un **ticket nuevo**. Sobre el mismo SHA se rechaza con `CHANGES_REQUESTED_SAME_SHA`, aunque el ticket anterior haya vencido.
+2. Si pidió cambios: `zana_correction_start(missionId)` agrega una unidad de corrección `PENDING`; `zana_start_batch`, corrige en la rama, checks hasta verde con el límite del paso 4.3, actualiza el plan de pruebas del cuerpo con `update_pull_request`, `zana_complete_unit` y un **ticket nuevo**. Sobre el mismo SHA se rechaza con `CHANGES_REQUESTED_SAME_SHA`, aunque el ticket anterior haya vencido: si la review pidió corregir solo el cuerpo del PR (por ejemplo la línea `Risk:`), igual hace falta un commit con sentido, como documentar ese riesgo en el CHANGELOG o en docs; nunca un commit vacío.
 3. Con la review aprobada: `zana_merge(missionId)` solo si el usuario lo pide. Nunca `merge_pull_request` por el downstream.
 4. Después del merge: `zana_mission_close` con el **resumen obligatorio** y luego `zana_mission_archive`, para poder iniciar otra misión. Ejemplo:
 

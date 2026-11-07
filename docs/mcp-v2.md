@@ -75,7 +75,7 @@ No existe todavía una prueba de una cuenta ChatGPT real, ni evidencia de modelo
 | `zana_memory_context`, `zana_memory_search` | no | sí | Lectura de la memoria por proyecto, también para la revisora |
 | `zana_memory_save`, `zana_memory_resolve` | no | sí | Escritura de cualquier sesión de la misión que no sea la revisora, con la misión activa; la revisora recibe `REVIEWER_READ_ONLY` |
 | `zana_session_status` | no | sí | Sesión, host, `createdAt` y rol en la misión activa |
-| `zana_skill_list`, `zana_skill_load` | no | sí | Skills de `skills/` |
+| `zana_skill_list`, `zana_skill_load` | no | sí | Skills de `skills/`: `zana-odd` y `zana-pr` (autora), `zana-4r` (revisora), `review-discipline` y los cuatro `review-*` (lentes) |
 | `zana_checks_start`, `zana_checks_status` | no | sí | Checks en GitHub Actions por SHA exacto |
 | `zana_review_request`, `zana_review_claim`, `zana_review_diff`, `zana_review_lens_submit`, `zana_review_finalize` | no | sí | Ticket, conversación nueva, diff paginado completo y cuenta revisora |
 | `zana_budget_extend` | no | sí | Escritura de la sesión autora, solo con el sí del usuario: `{missionId, lines, reason, scope}`. Con `scope: 'pr'` (por defecto) sube el presupuesto de líneas de la misión tras `OVER_LINE_BUDGET` (máximo 5000); con `scope: 'correction'` autoriza, para el SHA, los archivos y las N líneas que midió el último rechazo de la ronda (`NO_CORRECTION_PENDING` si no hubo), hasta `lines`, tras `OVER_CORRECTION_BUDGET`, `CORRECTION_OUT_OF_SCOPE` o `CORRECTION_UNMEASURED`, sin tocar la extensión `pr` (`NO_CHANGES_REQUESTED` si no hay ronda). Auditada como `write`; la revisora recibe `REVIEWER_READ_ONLY` |

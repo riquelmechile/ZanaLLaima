@@ -122,6 +122,16 @@ export class GitHubApi{
     if(!validRefName(base))throw new GitHubApiError(400,'Invalid base');
     return sha((await this.request('GET',repoPath(repo)+'/compare/'+refPath(base)+'...'+sha(commit)+'?per_page=1'))?.merge_base_commit?.sha);
   }
+  // Archivos cambiados entre dos commits (compare JSON; per_page=1 recorta los commits,
+  // no los archivos). GitHub entrega a lo más 300: con 300 o más la lista queda truncated.
+  async compareFiles(repo,from,commit){
+    const data=await this.request('GET',repoPath(repo)+'/compare/'+sha(from)+'...'+sha(commit)+'?per_page=1');
+    if(!Array.isArray(data?.files))throw new GitHubApiError(502,'Unreadable compare file list');
+    const files=data.files.map(f=>({filename:String(f?.filename??''),additions:Number(f?.additions)||0,
+      deletions:Number(f?.deletions)||0,status:String(f?.status??''),
+      ...(f?.previous_filename?{previousFilename:String(f.previous_filename)}:{})}));
+    return Object.assign(files,{status:String(data.status??''),...(files.length>=300?{truncated:true}:{})});
+  }
   async openPullsFor(repo,branch){
     const owner=repo.split('/')[0];
     const list=await this.request('GET',repoPath(repo)+'/pulls?state=open&per_page=100&head='+

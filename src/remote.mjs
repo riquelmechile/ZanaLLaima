@@ -17,12 +17,12 @@ import {remoteConfig,repoAllowed} from './remote-config.mjs';
 import {DownstreamGateway} from './downstream.mjs';
 import {createGitHubPolicy,CATALOG,liveProblems,missionBranch} from './github-policy.mjs';
 import {createChecks} from './checks.mjs';
-import {createReview,LENSES,SEVERITIES,EXECUTIONS,ORIGINS} from './remote-review.mjs';
+import {createReview,correctionPrev,LENSES,SEVERITIES,EXECUTIONS,ORIGINS} from './remote-review.mjs';
 import {compactWrite} from './downstream-compact.mjs';
 import {deliveryStatus,mergeMission,ticketView} from './github-delivery.mjs';
 import {listSkills,loadSkill} from './skills.mjs';
 import {ActorSigner} from './actor-assertion.mjs';
-import {lineBudget,lineLimit,EXTEND_MAX} from './line-budget.mjs';
+import {lineBudget,lineLimit,EXTEND_MAX,correctionLimit} from './line-budget.mjs';
 import {nowIso,recordActivity,remoteMission,sessionReviews,sessionWrote,sessionIsMissionAuthor,writeAudit,readAudit} from './remote-state.mjs';
 import {budgetOf,remainingStarts} from './budget.mjs';
 import {within,DeadlineError} from './deadline.mjs';
@@ -64,8 +64,10 @@ const NEW_TOOLS={
     z.object({checkId:z.string().min(8).max(64)}).strict()],
   zana_review_request:['Author session: create a one-time review ticket for the open mission PR with green checks, after zana_complete_unit (refused while a code unit is RUNNING)',false,
     z.object({missionId:missionId()}).strict()],
-  zana_budget_extend:['Author session, ONLY after the user said yes to the exact number: raise the mission line budget (additions + deletions without lockfiles) after OVER_LINE_BUDGET. Never call it without asking the user',false,
-    z.object({missionId:missionId(),lines:z.number().int().min(1).max(EXTEND_MAX),reason:z.string().min(3).max(300)}).strict()],
+  zana_budget_extend:["Author session, ONLY after the user said yes to the exact number: raise the mission line budget (additions + deletions without lockfiles) after OVER_LINE_BUDGET (scope 'pr'), or authorize this correction round after OVER_CORRECTION_BUDGET, CORRECTION_OUT_OF_SCOPE or CORRECTION_UNMEASURED (scope 'correction'). Never call it without asking the user",false,
+    z.object({missionId:missionId(),lines:z.number().int().min(1).max(EXTEND_MAX),reason:z.string().min(3).max(300),
+      scope:z.enum(['pr','correction']).default('pr'),forSha:z.string().regex(/^[0-9a-f]{40}$/).optional(),
+      outOfScopeCount:z.number().int().min(0).max(100000).optional()}).strict()],
   zana_review_claim:['Reviewer session (new conversation): claim a ticket; this session becomes read-only on the mission',false,
     z.object({ticket:ticket()}).strict()],
   zana_review_lens_submit:['Reviewer session: submit one 4R lens with located, evidenced findings; each finding has its causal origin (PREEXISTING needs a proof citing file:line of the base, or it is stored as UNKNOWN)',false,
@@ -76,7 +78,7 @@ const NEW_TOOLS={
       evidence:z.array(z.string().min(1).max(2000)).min(1).max(20)}).strict()],
   zana_review_diff:['Reviewer session: read one page of the ticket diff (per file, paged); finalize requires every page read',true,
     z.object({ticket:ticket(),page:z.number().int().min(0).max(100000)}).strict()],
-  zana_correction_start:['Author session: after a REQUEST_CHANGES review, add one PENDING code unit to correct it (normal budget and review rounds)',false,
+  zana_correction_start:['Author session: after a REQUEST_CHANGES review, add one PENDING code unit to correct it (normal budget and review rounds; the round may only touch the PR files and tests, at most half the PR lines, cap 200)',false,
     z.object({missionId:missionId()}).strict()],
   zana_session_rebind:['After a server restart or a new MCP session: move a RUNNING unit with a live lease to this session without consuming an attempt (expired: zana_recover_expired, zana_unit_retry, zana_start_batch)',false,
     z.object({missionId:missionId(),unitId:z.string().min(1).max(64),token:uuid(),leaseGeneration:z.number().int().positive()}).strict()],
@@ -348,8 +350,13 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         added=existing;
         return existing;
       });
+      let measured=null;
+      try{measured=JSON.parse(last.line_budget);}catch{measured=null;}
+      const maxLines=Number.isSafeInteger(measured?.lines)&&Array.isArray(measured.touched)&&!measured.truncated?correctionLimit(measured.lines):null;
       return {missionId:id,unitId,correctsTicket:last.ticket_id,sha:last.sha,mission:publicStatus(added),
-        next:'zana_start_batch → write on the mission branch → zana_checks_start/zana_checks_status until green → zana_complete_unit → zana_review_request'};
+        correctionBudget:{files:'los archivos del PR y tests',prFiles:maxLines===null?null:measured.touched.slice(0,100),maxLines,
+          ...(maxLines===null?{unmeasured:'el ticket no guardó la medida del PR: zana_review_request responde CORRECTION_UNMEASURED'}:{})},
+        next:'zana_start_batch → write on the mission branch (only the PR files and tests, at most correctionBudget.maxLines lines) → zana_checks_start/zana_checks_status until green → zana_complete_unit → zana_review_request'};
     },
     // Move a RUNNING unit to this session (after a restart or a new MCP
     // session) without consuming an attempt. The new session counts as a
@@ -383,8 +390,9 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     zana_review_request:({missionId:id},session)=>review.request(id,session),
     // The server cannot verify the user's consent: the tool is a write (ChatGPT
     // asks for confirmation), needs a reason and is audited as 'write'.
-    async zana_budget_extend({missionId:id,lines,reason},session){
-      let previous;
+    async zana_budget_extend({missionId:id,lines,reason,scope='pr',forSha,outOfScopeCount},session){
+      if(!['pr','correction'].includes(scope))throw new Error("INVALID_ARGUMENTS: scope must be 'pr' or 'correction'");
+      let previous,forTicket,pick;
       await transact((existing,txc)=>{
         if(existing?.id!==id)throw new Error('MISSION_NOT_ACTIVE: mission '+id+' is not the active mission');
         const rm=guard(txc.db,existing,session,'zana_budget_extend');
@@ -392,13 +400,24 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         if(!sessionIsMissionAuthor(txc.db,session.sessionId,id))
           throw new Error('NOT_AUTHOR: only the session that created the mission or held one of its units may extend its line budget');
         if((existing.status||'ACTIVE')!=='ACTIVE')throw new Error('MISSION_NOT_ACTIVE: mission '+id+' is '+existing.status);
-        previous=lineLimit(rm,config);
+        // 'correction' copia la medición del último rechazo de esta ronda (SHA, archivos, N); cada scope conserva el otro.
+        const grant={limit:lines,reason,sessionId:session.sessionId,at:nowIso()},kept=rm.lineBudgetExtension??{};
+        if(scope==='correction'){
+          forTicket=correctionPrev(txc.db,id)?.ticket_id;
+          if(!forTicket)throw new Error('NO_CHANGES_REQUESTED: the last finalized review of mission '+id+' did not request changes; there is no correction round');
+          if(kept.pendingCorrection?.forTicket!==forTicket)throw new Error('NO_CORRECTION_PENDING: zana_review_request has not refused this correction round; there is nothing to authorize');
+          previous=kept.correction?.forTicket===forTicket?kept.correction.limit:null;
+          Object.assign(grant,pick=kept.pendingCorrection);
+          // El sí del usuario fue a un SHA y a un total de rutas: otro rechazo posterior no lo reapunta.
+          if(pick.forSha!==forSha||pick.outOfScope.length!==outOfScopeCount)throw new Error('CORRECTION_MISMATCH: el último rechazo midió '+
+            pick.forSha+' con '+pick.outOfScope.length+' rutas fuera del PR; pregúntale de nuevo al usuario con esas cifras');
+        }else previous=lineLimit(rm,config);
         txc.db.prepare('UPDATE remote_missions SET line_budget_extension=? WHERE mission_id=?')
-          .run(JSON.stringify({limit:lines,reason,sessionId:session.sessionId,at:nowIso()}),id);
+          .run(JSON.stringify(scope==='correction'?{...kept,correction:grant}:{...kept,...grant}),id);
         existing.revision++;
         return existing;
       });
-      return {missionId:id,lineBudget:{limit:lines,previous,reason}};
+      return scope==='correction'?{missionId:id,correctionBudget:{...pick,limit:lines,previous,reason}}:{missionId:id,lineBudget:{limit:lines,previous,reason}};
     },
     zana_review_claim:({ticket:code},session)=>review.claim(code,session),
     zana_review_lens_submit:(args,session)=>review.lensSubmit(args,session),

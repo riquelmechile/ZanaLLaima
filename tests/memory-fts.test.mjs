@@ -52,12 +52,13 @@ test('W-FTS: la última fila sin indexar se busca por LIKE (INDEX_STALE al final
 test('W-FTS: si el chequeo del índice falla tras un MATCH vacío, la búsqueda es LIKE',async()=>{
   const s=await store();
   try{
-    await s.save('Algo distinto');
+    // Solo LIKE la encuentra ('punto' dentro de 'puntos'): prueba que el LIKE corrió de verdad.
+    await s.save('Faltan puntos finales');
     const res=await s.read(db=>{
       const prepare=db.prepare.bind(db);
       db.prepare=sql=>/MIN\(id\)/.test(sql)?{get(){throw Object.assign(new Error('x'),{code:'ERR_SQLITE_ERROR',errcode:11});}}:prepare(sql);
-      return searchMemory(db,{query:'inexistente'});});
-    assert.deepEqual([res.mode,res.fallback,res.fallbackReason,res.entries.length],['like',true,'SQLITE_11',0]);
+      return searchMemory(db,{query:'punto'});});
+    assert.deepEqual([res.mode,res.fallback,res.fallbackReason,res.entries.map(e=>e.body)],['like',true,'SQLITE_11',['Faltan puntos finales']]);
   }finally{await s.cleanup();}
 });
 
@@ -209,4 +210,24 @@ test('redacción: valores tras paréntesis, con _ o $ inicial, y palabras cortas
   for(const [input,output] of [['password=a.b(c)d fin','password=[redacted] fin'],['token=_abc123','token=[redacted]'],
     ['api_key=$abc123','api_key=[redacted]'],['secret: nunca','secret: nunca']])
     assert.equal(redactStored(input),output,input);
+});
+
+test('W-FTS: si el ROLLBACK TO falla, se relanza con el error original como cause',async()=>{
+  const s=await store();
+  try{
+    const db=new DatabaseSync(databasePath(s.file));
+    try{
+      db.exec('BEGIN IMMEDIATE');
+      const original=Object.assign(new Error('rebuild roto'),{code:'ERR_SQLITE_ERROR',errcode:1});
+      const exec=db.exec.bind(db);
+      db.exec=sql=>{
+        if(/'rebuild'/.test(sql))throw original;
+        if(/^ROLLBACK TO/.test(sql))throw new Error('rollback roto');
+        return exec(sql);
+      };
+      // Fuerza el rebuild: sin la tabla FTS.
+      exec('DROP TABLE IF EXISTS project_memory_fts');
+      assert.throws(()=>setupMemoryFts(db),e=>e.message==='rollback roto'&&e.cause===original);
+    }finally{try{db.exec('ROLLBACK');}catch{}db.close();}
+  }finally{await s.cleanup();}
 });

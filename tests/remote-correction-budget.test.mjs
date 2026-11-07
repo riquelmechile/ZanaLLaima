@@ -32,7 +32,9 @@ async function rejected(f,pr=PR,extend=null){
   const ticketId=await remoteRead(db=>db.prepare('SELECT ticket_id FROM review_tickets WHERE code_hash IS NOT NULL ORDER BY created_at LIMIT 1').get().ticket_id);
   return {...ready,t1,request,ticketId};
 }
-const ext=(f,r,lines,scope,s=r.author)=>f.call('zana_budget_extend',{missionId:r.missionId,lines,reason:'el usuario dijo que sí',...(scope?{scope}:{})},s);
+// The user's yes names the SHA and the count of paths of the last refusal (CORRECTION_MISMATCH otherwise).
+const ext=async(f,r,lines,scope,s=r.author)=>{const p=await remoteRead(db=>JSON.parse(db.prepare('SELECT line_budget_extension e FROM remote_missions').get().e??'{}').pendingCorrection);
+  return f.call('zana_budget_extend',{missionId:r.missionId,lines,reason:'el usuario dijo que sí',...(scope?{scope,forSha:p?.forSha,outOfScopeCount:p?.outOfScope.length}:{})},s);};
 const tickets=()=>remoteRead(db=>db.prepare('SELECT COUNT(*) n FROM review_tickets').get().n);
 const compareCalls=f=>f.api.state.requests.filter(x=>/\/compare\/[0-9a-f]{40}\.\.\./.test(x.path)).length;
 
@@ -248,5 +250,21 @@ test('correction: the grant covers only the measured SHA, files and lines of the
     assert.equal((await review(f,(await r.request([file('src/sum.mjs',1)])).ticket)).event,'REQUEST_CHANGES');
     f.api.state.push(r.branch,sha('c'));
     assert.match((await r.request([file('lib/x.mjs',5)])).error,/^CORRECTION_OUT_OF_SCOPE: lib\/x\.mjs:/);
+  }finally{await f.cleanup();}
+});
+
+test('correction: a later refusal cannot re-point the yes to another SHA (CORRECTION_MISMATCH)',async()=>{
+  const f=await remoteFixture();
+  try{
+    const r=await rejected(f);
+    assert.match((await r.request([file('docs/notes.md',5)])).error,new RegExp('^CORRECTION_OUT_OF_SCOPE: docs/notes\\.md: .* en '+sha('b')+' \\(1 rutas fuera del PR\\)'));
+    f.api.state.push(r.branch,sha('c'));f.api.state.green(sha('c'));
+    assert.match((await r.request([file('src/auth.mjs',5)])).error,/^CORRECTION_OUT_OF_SCOPE: src\/auth\.mjs:/);
+    const yes=(forSha,outOfScopeCount)=>f.call('zana_budget_extend',{missionId:r.missionId,lines:5,reason:'sí a docs/notes.md',scope:'correction',forSha,outOfScopeCount},r.author);
+    assert.match((await yes(sha('b'),1)).error,/^CORRECTION_MISMATCH:/);
+    assert.match((await yes(sha('c'),2)).error,/^CORRECTION_MISMATCH:/);
+    assert.match((await r.request()).error,/^CORRECTION_OUT_OF_SCOPE: src\/auth\.mjs:/);
+    assert.equal((await yes(sha('c'),1)).error,undefined);
+    assert.equal((await r.request()).correction.authorized,true);
   }finally{await f.cleanup();}
 });

@@ -80,11 +80,33 @@ export function diffManifest(pages){
   }
   return {totalPages:pages.length,pageBytes:DIFF_PAGE_BYTES,files};
 }
-// A proof is valid when it cites at least one file:line (same format as location).
-export const validProof=proof=>typeof proof==='string'&&
-  proof.split(/[\s`'"()[\],;]+/).some(t=>LOCATION.test(t.replace(/[.:]+$/,'')));
-// Stored lenses without origin count as UNKNOWN: they keep blocking.
-const preexisting=f=>f.origin==='PREEXISTING';
+// file:line citations of a proof: LOCATION format and a path with / or . (not "16:30").
+export const proofLocations=proof=>typeof proof!=='string'?[]:proof.split(/[\s`'"()[\],;]+/)
+  .map(t=>t.replace(/[.:]+$/,'')).filter(t=>LOCATION.test(t)&&/[/.]/.test(t.slice(0,t.lastIndexOf(':'))));
+export const validProof=proof=>proofLocations(proof).length>0;
+// Head lines that a unified diff adds, per path.
+export function addedLines(text){
+  const added=new Map();let path=null,n=0;
+  for(const line of String(text).split('\n')){
+    let m;
+    if(line.startsWith('diff --git')){path=null;continue;}
+    if((m=/^\+\+\+ b\/(.+)$/.exec(line))){path=m[1];added.set(path,added.get(path)??new Set());continue;}
+    if((m=/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line))){n=Number(m[1]);continue;}
+    if(!path||line.startsWith('---')||line.startsWith('-')||line.startsWith('\\'))continue;
+    if(line.startsWith('+'))added.get(path).add(n);
+    n++;
+  }
+  return added;
+}
+// Does file:from[-to] touch a line the diff adds? (ranges checked up to 10000 lines)
+export function onAddedLine(added,location){
+  const m=/^(.+):(\d+)(?:-(\d+))?$/.exec(location),lines=m&&added.get(m[1]);
+  if(!lines)return false;
+  for(let i=Number(m[2]);i<=Math.min(Number(m[3]??m[2]),Number(m[2])+10000);i++)if(lines.has(i))return true;
+  return false;
+}
+// Stored lenses without origin count as UNKNOWN; a PREEXISTING without a valid proof also blocks.
+const preexisting=f=>f.origin==='PREEXISTING'&&validProof(f.proof);
 const blocking=findings=>findings.some(f=>(f.severity==='BLOCKER'||f.severity==='CRITICAL')&&!preexisting(f));
 export const lensDigest=({ticketId,sha,lens,findings,evidence})=>hash(canonicalJson({ticket:ticketId,sha,lens,findings,evidence}));
 
@@ -106,11 +128,12 @@ export function reviewBody({code,ticket,lenses,execution,event}){
     for(const f of own)lines.push(item(f)+origin(f)+' Evidencia: '+f.evidence);
     lines.push('');
   }
-  const old=lenses.flatMap(l=>l.findings.filter(preexisting).map(f=>({...f,lens:l.lens})));
-  if(old.length)lines.push('### Pendientes preexistentes (no bloquean)',
-    ...old.map(f=>item(f)+' Lente: '+f.lens+'. Evidencia: '+f.evidence+'. Prueba en la base: '+f.proof),'');
   lines.push('Veredicto: **'+event+'**.','',
     'Prueba: sesión revisora distinta de la autora, sin escrituras en la misión, creada después del ticket, sobre este SHA exacto con CI verde y 4 lentes con evidencia. No prueba el modelo ni el contexto fresco de los subagentes (palabra del anfitrión).');
+  // Pending items go last: a size cut never removes the verdict.
+  const old=lenses.flatMap(l=>l.findings.filter(preexisting).map(f=>({...f,lens:l.lens})));
+  if(old.length)lines.push('','### Pendientes preexistentes (no bloquean)',
+    ...old.map(f=>item(f)+' Lente: '+f.lens+'. Evidencia: '+f.evidence+'. Prueba en la base: '+f.proof));
   const body=redactText(lines.join('\n'),envSecrets());
   return body.length>MAX_BODY?body.slice(0,MAX_BODY-40)+'\n\n[cuerpo recortado por tamaño]':body;
 }
@@ -307,7 +330,9 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
       let budget=null;
       try{budget=t.line_budget?JSON.parse(t.line_budget):null;}catch{budget={error:'UNREADABLE'};}
       const verdict=await checks.verdict(t.repo,t.sha);
-      return {ticket:code,state:'CLAIMED',missionId:t.mission_id,repo:t.repo,pullNumber:t.pr_number,sha:t.sha,base:ctx.base,
+      // The merge-base is a reading aid for PREEXISTING proofs; without it the claim still works.
+      const baseSha=await github.mergeBase(t.repo,ctx.base,t.sha).catch(()=>null);
+      return {ticket:code,state:'CLAIMED',missionId:t.mission_id,repo:t.repo,pullNumber:t.pr_number,sha:t.sha,base:ctx.base,baseSha,
         spec:{objective:ctx.objective,units:ctx.units},diffManifest:manifest,diffBytes,lineBudget:budget,
         ...(manifestError?{diffManifestError:manifestError+'; zana_review_diff retries'}:{}),checks:verdict,
         lenses:LENSES,skills:['review-discipline',...LENSES.map(l=>'review-'+l)],
@@ -330,6 +355,14 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
     },
     async lensSubmit({ticket:code,lens,findings,evidence},session){
       validateLens(lens,findings,evidence);
+      // A PREEXISTING needs the diff: it must not sit on (or cite) a line the PR adds.
+      // Without the diff (fetch error, changed manifest) it fails closed to UNKNOWN.
+      let added=null;
+      if(findings.some(f=>f.origin==='PREEXISTING')){
+        const t=await remoteWrite(db=>{expire(db);return ticketBy(db,code);});
+        if(t.state==='CLAIMED'&&t.reviewer_session===session.sessionId)
+          try{added=addedLines((await ensureManifest(t)).pages.map(p=>p.text).join(''));}catch{added=null;}
+      }
       return remoteWrite(db=>{
         expire(db);
         const t=ticketBy(db,code);
@@ -337,10 +370,11 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
         if(t.reviewer_session!==session.sessionId)fail('NOT_REVIEWER','only the session that claimed the ticket may submit lenses');
         if(db.prepare('SELECT 1 FROM review_receipts WHERE review_id=? AND lens_id=?').get(t.ticket_id,lens))
           fail('LENS_ALREADY_SUBMITTED','lens '+lens+' was already submitted');
-        // A PREEXISTING without a file:line proof is stored as UNKNOWN (it blocks).
+        // A PREEXISTING without a valid proof, or on a line the diff adds, is stored as UNKNOWN (it blocks).
         const originDowngraded=[];
         const clean=findings.map((f,i)=>{
-          const keep=f.origin!=='PREEXISTING'||validProof(f.proof);
+          const keep=f.origin!=='PREEXISTING'||(added!==null&&validProof(f.proof)&&
+            ![f.location,...proofLocations(f.proof)].some(l=>onAddedLine(added,l)));
           if(!keep)originDowngraded.push(i);
           return {severity:f.severity,location:f.location,evidence:f.evidence,...(f.title?{title:f.title}:{}),
             origin:keep?f.origin:'UNKNOWN',...(f.proof!==undefined?{proof:f.proof}:{})};

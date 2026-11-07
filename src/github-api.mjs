@@ -117,6 +117,11 @@ export class GitHubApi{
     return this.request('GET',repoPath(repo)+'/compare/'+refPath(base)+'...'+sha(commit),
       {accept:'application/vnd.github.diff',raw:'measured'});
   }
+  // Merge-base SHA of base...commit: the base the diff is computed against.
+  async mergeBase(repo,base,commit){
+    if(!validRefName(base))throw new GitHubApiError(400,'Invalid base');
+    return sha((await this.request('GET',repoPath(repo)+'/compare/'+refPath(base)+'...'+sha(commit)+'?per_page=1'))?.merge_base_commit?.sha);
+  }
   async openPullsFor(repo,branch){
     const owner=repo.split('/')[0];
     const list=await this.request('GET',repoPath(repo)+'/pulls?state=open&per_page=100&head='+

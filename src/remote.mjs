@@ -339,7 +339,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
           throw new Error('REVIEW_ROUNDS_EXHAUSTED: no review round left for a corrected candidate');
         if(remainingStarts(existing)<=0)throw new Error('Mission work-start budget exhausted');
         if(existing.units.length>=100)throw new Error('Mission already has 100 units');
-        existing.units.push({id:unitId,instruction:'Corregir los hallazgos BLOCKER/CRITICAL de la review del ticket '+last.ticket_id+
+        existing.units.push({id:unitId,instruction:'Corregir los hallazgos BLOCKER/CRITICAL que no sean PREEXISTING de la review del ticket '+last.ticket_id+
           ' (SHA '+last.sha+') en la rama de la misión: zana_start_batch → escribir → zana_checks_* hasta verde → zana_complete_unit → zana_review_request (ticket nuevo).',
           effect:'READ',dependsOn:[],paths:[],status:'PENDING',attempts:0,run:null,result:null});
         existing.revision++;

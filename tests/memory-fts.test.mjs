@@ -37,6 +37,30 @@ test('W-FTS: una tabla FTS recreada vacía se reconstruye al reconectar',async()
   }finally{await s.cleanup();}
 });
 
+test('W-FTS: la última fila sin indexar se busca por LIKE (INDEX_STALE al final)',async()=>{
+  const s=await store();
+  try{
+    await s.save('Primera entrada comun');
+    // Escrita sin el trigger de insert, en una sola conexión que no reconstruye después.
+    await s.write(db=>{db.exec('DROP TRIGGER project_memory_ai');
+      db.prepare("INSERT INTO project_memory(project_id,kind,topic,body,created_at) SELECT project_id,'issue','tz','Ultima palabra9',created_at FROM project_memory LIMIT 1").run();});
+    const tail=await s.search('palabra9');
+    assert.deepEqual([tail.mode,tail.fallbackReason,tail.entries.map(e=>e.body)],['like','INDEX_STALE',['Ultima palabra9']]);
+  }finally{await s.cleanup();}
+});
+
+test('W-FTS: si el chequeo del índice falla tras un MATCH vacío, la búsqueda es LIKE',async()=>{
+  const s=await store();
+  try{
+    await s.save('Algo distinto');
+    const res=await s.read(db=>{
+      const prepare=db.prepare.bind(db);
+      db.prepare=sql=>/MIN\(id\)/.test(sql)?{get(){throw Object.assign(new Error('x'),{code:'ERR_SQLITE_ERROR',errcode:11});}}:prepare(sql);
+      return searchMemory(db,{query:'inexistente'});});
+    assert.deepEqual([res.mode,res.fallback,res.fallbackReason,res.entries.length],['like',true,'SQLITE_11',0]);
+  }finally{await s.cleanup();}
+});
+
 test('W-FTS: una fila escrita sin su trigger queda indexada al reconectar',async()=>{
   const s=await store();
   try{

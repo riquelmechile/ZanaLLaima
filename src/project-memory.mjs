@@ -140,7 +140,7 @@ export function searchMemory(db,{query,projectId=null,limit=10}){
     }catch(error){
       // Solo un error de SQLite; el código, nunca el mensaje (puede traer datos).
       if(error?.code!=='ERR_SQLITE_ERROR')throw error;
-      fallbackReason='SQLITE_'+(Number.isInteger(error.errcode)?error.errcode:'ERROR');
+      rows=null;mode='like';fallbackReason='SQLITE_'+(Number.isInteger(error.errcode)?error.errcode:'ERROR');
     }
   }
   if(!rows){

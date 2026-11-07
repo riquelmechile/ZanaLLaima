@@ -176,7 +176,7 @@ export function setupMemoryFts(db){
     // SQLITE_FULL, IOERR or NOMEM roll back the whole schema transaction:
     // never go on in autocommit, the original error aborts the connection.
     if(!db.isTransaction)throw error;
-    db.exec('ROLLBACK TO fts_setup');db.exec('RELEASE fts_setup');
+    try{db.exec('ROLLBACK TO fts_setup');db.exec('RELEASE fts_setup');}catch(rollback){throw new Error(rollback.message,{cause:error});}
     fts='0';
   }
   db.prepare("INSERT INTO metadata(key,value) VALUES('fts',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(fts);

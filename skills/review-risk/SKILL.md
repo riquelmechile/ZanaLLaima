@@ -16,6 +16,6 @@ Encuentra riesgos de seguridad; no los corrijas.
 - Marca escalamiento: una identidad o sesión que obtiene más permisos de los que su rol permite, o un camino que salta un gate documentado.
 - Hallazgos de dependencias solo con evidencia (el paquete vulnerable, el aviso o el scan), no "se ve riesgoso".
 - No reportes como hallazgo la mera capacidad del orquestador de confianza; reporta bypass concretos.
-- **Origen** (`origin`): `INTRODUCED` si el diff agrega o cambia la línea; `ACTIVATED` si hace alcanzable un defecto previo; `WORSENED` si lo agrava; `PREEXISTING` solo si ya estaba igual en la base, con `proof` que cite `archivo:línea` de la base (`get_file_contents` con `ref=<base>` o el contexto del diff); con duda, `UNKNOWN`. Nunca `PREEXISTING` para no bloquear algo que el PR toca.
+- **Origen** (`origin`): `INTRODUCED` si el diff agrega o cambia la línea; `ACTIVATED` si hace alcanzable un defecto previo; `WORSENED` si lo agrava; `PREEXISTING` solo si ya estaba igual en la base, con `proof` que cite `archivo:línea` de la base (`get_file_contents` con `ref=<baseSha>` del claim o el contexto del diff); con duda, `UNKNOWN`. Nunca `PREEXISTING` para no bloquear algo que el PR toca.
 
 Salida: lista de hallazgos con `severity`, `location` (`archivo:línea`), `evidence` y `origin` (`proof` si es `PREEXISTING`), más evidencia del lente de lo revisado. Si está limpio, `findings: []` con evidencia concreta.

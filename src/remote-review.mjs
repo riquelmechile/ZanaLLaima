@@ -84,26 +84,44 @@ export function diffManifest(pages){
 export const proofLocations=proof=>typeof proof!=='string'?[]:proof.split(/[\s`'"()[\],;]+/)
   .map(t=>t.replace(/[.:]+$/,'')).filter(t=>LOCATION.test(t)&&/[/.]/.test(t.slice(0,t.lastIndexOf(':'))));
 export const validProof=proof=>proofLocations(proof).length>0;
-// Head lines that a unified diff adds, per path.
-export function addedLines(text){
-  const added=new Map();let path=null,n=0;
-  for(const line of String(text).split('\n')){
-    let m;
-    if(line.startsWith('diff --git')){path=null;continue;}
-    if((m=/^\+\+\+ b\/(.+)$/.exec(line))){path=m[1];added.set(path,added.get(path)??new Set());continue;}
-    if((m=/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line))){n=Number(m[1]);continue;}
-    if(!path||line.startsWith('---')||line.startsWith('-')||line.startsWith('\\'))continue;
-    if(line.startsWith('+'))added.get(path).add(n);
-    n++;
-  }
-  return added;
+// Path of a "+++ " header: drops git's trailing TAB and decodes C quotes (octal bytes to UTF-8).
+// null for /dev/null (deleted file), undefined when it cannot be read.
+function headerPath(raw){
+  let p=raw.replace(/\t$/,'');
+  if(/^".*"$/.test(p))p=Buffer.from(p.slice(1,-1).replace(/\\([0-7]{3}|.)/g,(_,e)=>
+    e.length===3?String.fromCharCode(parseInt(e,8)):({n:'\n',t:'\t'}[e]??e)),'latin1').toString('utf8');
+  return p==='/dev/null'?null:p.startsWith('b/')&&!p.includes('\uFFFD')?p.slice(2):undefined;
 }
-// Does file:from[-to] touch a line the diff adds? (ranges checked up to 10000 lines)
-export function onAddedLine(added,location){
-  const m=/^(.+):(\d+)(?:-(\d+))?$/.exec(location),lines=m&&added.get(m[1]);
-  if(!lines)return false;
-  for(let i=Number(m[2]);i<=Math.min(Number(m[3]??m[2]),Number(m[2])+10000);i++)if(lines.has(i))return true;
-  return false;
+// Head lines that a unified diff adds, per path. Inside a hunk (-a,b +c,d) every line is
+// content until its counts run out, even one that looks like "+++ b/x" or "diff --git".
+// unparsed: some header could not be read, or a file block had no "+++" (binary, rename).
+export function addedLines(text){
+  const files=new Map();let path=null,n=0,left=0,right=0,unparsed=false,header=true;
+  for(const line of String(text).split('\n')){
+    if(left>0||right>0){
+      const c=line[0];
+      if(c==='\\')continue;
+      if(c!=='+')left--;
+      if(c!=='-'){if(c==='+'&&path)files.get(path).add(n);n++;right--;}
+      continue;
+    }
+    let m;
+    if(line.startsWith('diff --git ')){unparsed||=!header;header=false;path=null;}
+    else if(line.startsWith('+++ ')){
+      header=true;path=headerPath(line.slice(4));unparsed||=path===undefined;
+      if(path)files.set(path,files.get(path)??new Set());
+    }else if((m=/^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line))){left=Number(m[1]??1);n=Number(m[2]);right=Number(m[3]??1);}
+  }
+  return {files,unparsed:unparsed||!header};
+}
+// Does file:from[-to] (either order, ./ or a/ b/ prefix) touch a line the diff adds?
+// A path that matches no file of the diff fails closed when some header was unreadable.
+export function onAddedLine({files,unparsed},location){
+  const [,raw,from,to=from]=/^(.+):(\d+)(?:-(\d+))?$/.exec(location);
+  const p=raw.replace(/^\.\//,''),path=files.has(p)?p:/^[ab]\//.test(p)&&files.has(p.slice(2))?p.slice(2):null;
+  if(path===null)return unparsed;
+  const min=Math.min(from,to),max=Math.max(from,to);
+  return [...files.get(path)].some(x=>x>=min&&x<=max);
 }
 // Stored lenses without origin count as UNKNOWN; a PREEXISTING without a valid proof also blocks.
 const preexisting=f=>f.origin==='PREEXISTING'&&validProof(f.proof);
@@ -355,7 +373,8 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
     },
     async lensSubmit({ticket:code,lens,findings,evidence},session){
       validateLens(lens,findings,evidence);
-      // A PREEXISTING needs the diff: it must not sit on (or cite) a line the PR adds.
+      // A PREEXISTING needs the diff: its location must not sit on a line the PR adds
+      // (the proof cites base lines, so it is not compared with head numbers).
       // Without the diff (fetch error, changed manifest) it fails closed to UNKNOWN.
       let added=null;
       if(findings.some(f=>f.origin==='PREEXISTING')){
@@ -370,11 +389,11 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
         if(t.reviewer_session!==session.sessionId)fail('NOT_REVIEWER','only the session that claimed the ticket may submit lenses');
         if(db.prepare('SELECT 1 FROM review_receipts WHERE review_id=? AND lens_id=?').get(t.ticket_id,lens))
           fail('LENS_ALREADY_SUBMITTED','lens '+lens+' was already submitted');
-        // A PREEXISTING without a valid proof, or on a line the diff adds, is stored as UNKNOWN (it blocks).
+        // A PREEXISTING without a valid proof, or located on a line the diff adds, is stored as UNKNOWN (it blocks).
         const originDowngraded=[];
         const clean=findings.map((f,i)=>{
           const keep=f.origin!=='PREEXISTING'||(added!==null&&validProof(f.proof)&&
-            ![f.location,...proofLocations(f.proof)].some(l=>onAddedLine(added,l)));
+            !onAddedLine(added,f.location));
           if(!keep)originDowngraded.push(i);
           return {severity:f.severity,location:f.location,evidence:f.evidence,...(f.title?{title:f.title}:{}),
             origin:keep?f.origin:'UNKNOWN',...(f.proof!==undefined?{proof:f.proof}:{})};

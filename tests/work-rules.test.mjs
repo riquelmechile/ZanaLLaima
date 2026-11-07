@@ -1,9 +1,10 @@
 // PR5: reglas de trabajo. La skill zana-pr se sirve por MCP y las reglas del verificador
-// están en las skills.
+// están en las skills; además, inTouchedFile calza rutas en NFD y fullwidth (S14).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {remoteFixture} from './helpers/remote-fixture.mjs';
+import {inTouchedFile} from '../src/remote-review.mjs';
 
 const read=path=>readFileSync(new URL('../'+path,import.meta.url),'utf8');
 
@@ -41,3 +42,14 @@ test('reglas del verificador en zana-4r, review-reliability y review-discipline;
   assert.match(rdd,/el servidor no la busca en el árbol de `baseSha`/);
 });
 
+test('S14: inTouchedFile normaliza con NFKC (NFD y fullwidth calzan con la ruta tocada)',()=>{
+  const nfc='docs/año.md',nfd='docs/año.md';
+  assert.notEqual(nfc,nfd);
+  assert.equal(inTouchedFile([nfc],nfd+':3'),true);
+  assert.equal(inTouchedFile([nfd],nfc+':3'),true);
+  assert.equal(inTouchedFile(['src/s.mjs'],'ｓrc/s.mjs:1'),true);
+  assert.equal(inTouchedFile(['src/s.mjs'],'ｓrc/Ｓ.mjs:1'),true);
+  // Las mismas formas con otra ruta no calzan: el true de arriba viene de normalizar.
+  assert.equal(inTouchedFile([nfc],'docs/ano.md:3'),false);
+  assert.equal(inTouchedFile(['src/s.mjs'],'ｓrc/t.mjs:1'),false);
+});

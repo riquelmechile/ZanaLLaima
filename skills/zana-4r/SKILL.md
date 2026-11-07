@@ -32,10 +32,10 @@ Esta conversación hace los cuatro `zana_review_lens_submit(ticket, lens, findin
 - `INTRODUCED`: el diff agrega o cambia la línea.
 - `ACTIVATED`: el diff hace alcanzable un defecto que ya existía.
 - `WORSENED`: el diff agrava un defecto existente.
-- `PREEXISTING`: ya estaba igual en la base. Exige `proof` con al menos un `archivo:línea` de la base, leído con `get_file_contents` y `ref=<baseSha>` (el claim trae `baseSha`, el merge-base, y `base`) o del contexto del diff. Sin esa prueba, si la `location` cae en una línea que el diff agrega o si el diff no se puede leer, se guarda como `UNKNOWN` (`originDowngraded`). El servidor comprueba que la `location` del hallazgo no caiga en una línea que el diff agrega y que `proof` cite un `archivo:línea`; que la prueba sea cierta es tu responsabilidad.
+- `PREEXISTING`: ya estaba igual en la base. Exige `proof` con al menos un `archivo:línea` de la base, leído con `get_file_contents` y `ref=<baseSha>` (el claim trae `baseSha`, el merge-base, y `base`) o del contexto del diff. Sin esa prueba, o si la lista de archivos del PR falta o está truncada, se guarda como `UNKNOWN` (`originDowngraded`). **El servidor rebaja a `UNKNOWN` cualquier `PREEXISTING` ubicado en un archivo que el PR modifica** (o renombra, con cualquiera de los dos nombres; la ruta se compara sin `./`, `a/`, `b/`, `/` inicial ni mayúsculas, y `s.mjs` calza con `src/s.mjs`): `PREEXISTING` solo sirve para defectos en archivos que el PR no toca. La prueba sigue siendo palabra de la revisora: que sea cierta es tu responsabilidad.
 - `UNKNOWN`: si hay duda.
 
-Solo bloquean los BLOCKER/CRITICAL que no son `PREEXISTING`; los preexistentes salen en "Pendientes preexistentes (no bloquean)". **Nunca uses `PREEXISTING` para no bloquear algo que el PR toca.** Un lente limpio envía `findings: []` con evidencia concreta. **Los lentes no corrigen código.** Reporta los hallazgos con `archivo:línea`; no copies el diff en el chat.
+Solo bloquean los BLOCKER/CRITICAL que no son `PREEXISTING`; los preexistentes salen en "Pendientes preexistentes (no bloquean)". **Nunca uses `PREEXISTING` para no bloquear algo que el PR toca**: un defecto previo en un archivo que el PR modifica bloquea igual (clasifícalo `ACTIVATED`, `WORSENED` o `UNKNOWN`). Un lente limpio envía `findings: []` con evidencia concreta. **Los lentes no corrigen código.** Reporta los hallazgos con `archivo:línea`; no copies el diff en el chat.
 
 ## 5. Finalizar una vez
 

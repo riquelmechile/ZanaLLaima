@@ -351,7 +351,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       });
       let measured=null;
       try{measured=JSON.parse(last.line_budget);}catch{measured=null;}
-      const maxLines=Number.isSafeInteger(measured?.lines)&&Array.isArray(measured.touched)?correctionLimit(measured.lines):null;
+      const maxLines=Number.isSafeInteger(measured?.lines)&&Array.isArray(measured.touched)&&!measured.truncated?correctionLimit(measured.lines):null;
       return {missionId:id,unitId,correctsTicket:last.ticket_id,sha:last.sha,mission:publicStatus(added),
         correctionBudget:{files:'los archivos del PR y tests',prFiles:maxLines===null?null:measured.touched.slice(0,100),maxLines,
           ...(maxLines===null?{unmeasured:'el ticket no guardó la medida del PR: zana_review_request responde CORRECTION_UNMEASURED'}:{})},
@@ -391,7 +391,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     // asks for confirmation), needs a reason and is audited as 'write'.
     async zana_budget_extend({missionId:id,lines,reason,scope='pr'},session){
       if(!['pr','correction'].includes(scope))throw new Error("INVALID_ARGUMENTS: scope must be 'pr' or 'correction'");
-      let previous,forTicket;
+      let previous,forTicket,pick;
       await transact((existing,txc)=>{
         if(existing?.id!==id)throw new Error('MISSION_NOT_ACTIVE: mission '+id+' is not the active mission');
         const rm=guard(txc.db,existing,session,'zana_budget_extend');
@@ -399,19 +399,21 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         if(!sessionIsMissionAuthor(txc.db,session.sessionId,id))
           throw new Error('NOT_AUTHOR: only the session that created the mission or held one of its units may extend its line budget');
         if((existing.status||'ACTIVE')!=='ACTIVE')throw new Error('MISSION_NOT_ACTIVE: mission '+id+' is '+existing.status);
-        // 'correction' vale solo para la ronda que corrige el ticket actual; cada scope conserva el otro.
+        // 'correction' copia la medición del último rechazo de esta ronda (SHA, archivos, N); cada scope conserva el otro.
         const grant={limit:lines,reason,sessionId:session.sessionId,at:nowIso()},kept=rm.lineBudgetExtension??{};
         if(scope==='correction'){
           forTicket=correctionPrev(txc.db,id)?.ticket_id;
           if(!forTicket)throw new Error('NO_CHANGES_REQUESTED: the last finalized review of mission '+id+' did not request changes; there is no correction round');
+          if(kept.pendingCorrection?.forTicket!==forTicket)throw new Error('NO_CORRECTION_PENDING: zana_review_request has not refused this correction round; there is nothing to authorize');
           previous=kept.correction?.forTicket===forTicket?kept.correction.limit:null;
+          Object.assign(grant,pick=kept.pendingCorrection);
         }else previous=lineLimit(rm,config);
         txc.db.prepare('UPDATE remote_missions SET line_budget_extension=? WHERE mission_id=?')
-          .run(JSON.stringify(scope==='correction'?{...kept,correction:{forTicket,...grant}}:{...kept,...grant}),id);
+          .run(JSON.stringify(scope==='correction'?{...kept,correction:grant}:{...kept,...grant}),id);
         existing.revision++;
         return existing;
       });
-      return scope==='correction'?{missionId:id,correctionBudget:{forTicket,limit:lines,previous,reason}}:{missionId:id,lineBudget:{limit:lines,previous,reason}};
+      return scope==='correction'?{missionId:id,correctionBudget:{...pick,limit:lines,previous,reason}}:{missionId:id,lineBudget:{limit:lines,previous,reason}};
     },
     zana_review_claim:({ticket:code},session)=>review.claim(code,session),
     zana_review_lens_submit:(args,session)=>review.lensSubmit(args,session),

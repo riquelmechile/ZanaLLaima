@@ -28,5 +28,6 @@ export function lineBudget(files,{limit,changedFiles,truncated=files.truncated==
 export const lineLimit=(rm,config)=>rm?.lineBudgetExtension?.limit??config.prLineBudget;
 // Ronda de corrección: además de los archivos del PR puede tocar tests, y como
 // máximo la mitad de las líneas del PR, con tope 200.
-export const isTestPath=p=>/(^|\/)(tests?|__tests__)\/|\.(test|spec)\./.test(p);
+// Tests: bajo tests/, test/ o __tests__/ de la raíz, o *.test.<ext> y *.spec.<ext> (también src/x.spec.mjs).
+export const isTestPath=p=>/^(tests?|__tests__)\/|\.(test|spec)\.[^./]+$/.test(p);
 export const correctionLimit=prLines=>Math.min(200,Math.ceil(prLines/2));

@@ -52,7 +52,7 @@ export async function fakeGitHubApi(){
     if((m=/^\/compare\/([0-9a-f]{40})\.\.\.([0-9a-f]{40})$/.exec(p))&&!String(req.headers.accept).includes('diff')){
       await state.onCompareFiles?.();
       return state.compareFilesError?send(state.compareFilesError.status,{message:state.compareFilesError.message}):
-        send(200,{merge_base_commit:{sha:m[1]},files:state.compareFiles??[{filename:'x',additions:1,deletions:0,status:'modified'}]});
+        send(200,{merge_base_commit:{sha:m[1]},status:state.compareStatus??'ahead',files:state.compareFiles??[{filename:'x',additions:1,deletions:0,status:'modified'}]});
     }
     if((m=/^\/compare\/(.+)\.\.\.([0-9a-f]{40})$/.exec(p))&&!String(req.headers.accept).includes('diff'))
       return state.compareJsonError?send(404,{message:'nf'}):send(200,{merge_base_commit:{sha:state.mergeBase??'b'.repeat(40)}});

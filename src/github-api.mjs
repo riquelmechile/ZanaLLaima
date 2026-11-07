@@ -130,7 +130,7 @@ export class GitHubApi{
     const files=data.files.map(f=>({filename:String(f?.filename??''),additions:Number(f?.additions)||0,
       deletions:Number(f?.deletions)||0,status:String(f?.status??''),
       ...(f?.previous_filename?{previousFilename:String(f.previous_filename)}:{})}));
-    return files.length>=300?Object.assign(files,{truncated:true}):files;
+    return Object.assign(files,{status:String(data.status??''),...(files.length>=300?{truncated:true}:{})});
   }
   async openPullsFor(repo,branch){
     const owner=repo.split('/')[0];

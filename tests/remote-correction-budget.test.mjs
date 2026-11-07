@@ -37,8 +37,9 @@ const tickets=()=>remoteRead(db=>db.prepare('SELECT COUNT(*) n FROM review_ticke
 const compareCalls=f=>f.api.state.requests.filter(x=>/\/compare\/[0-9a-f]{40}\.\.\./.test(x.path)).length;
 
 test('correction helpers: test paths and min(200, ceil(lines/2))',()=>{
-  for(const p of ['tests/a.mjs','src/test/a.mjs','x/__tests__/a.js','src/a.test.mjs','src/a.spec.ts'])assert.equal(isTestPath(p),true,p);
-  for(const p of ['src/a.mjs','src/latest/a.mjs','contests/a.mjs','src/testing.mjs','mytests/a.mjs'])assert.equal(isTestPath(p),false,p);
+  for(const p of ['tests/a.mjs','test/a.mjs','__tests__/a.js','src/a.test.mjs','x.spec.ts','src/x.spec.mjs'])assert.equal(isTestPath(p),true,p);
+  for(const p of ['src/tests/evil.mjs','lib/test/prod.mjs','foo.test.mjs.js','src/__tests__/prod.mjs','src/a.mjs','contests/a.mjs','src/testing.mjs','mytests/a.mjs'])
+    assert.equal(isTestPath(p),false,p);
   assert.deepEqual([1,2,41,399,400,401,5000].map(correctionLimit),[1,1,21,200,200,200,200]);
 });
 
@@ -50,14 +51,14 @@ test('correction: only PR files and tests within the cap gives a ticket; correct
     assert.equal(corr.error,undefined,corr.error);
     assert.deepEqual(corr.correctionBudget,{files:'los archivos del PR y tests',prFiles:['src/sum.mjs','src/new.mjs','src/old.mjs','package-lock.json'],maxLines:21});
     assert.match(corr.next,/only the PR files and tests, at most correctionBudget.maxLines lines/);
-    // PR files (also the old name of the PR's rename, written in another case) and a test, 21 lines: exactly the cap.
-    const ok=await r.request([file('src/sum.mjs',10,5),file('./SRC/Old.mjs',2),file('tests/sum.test.mjs',4)]);
+    // PR files (also the old name of the PR's rename) and a test, 21 lines: exactly the cap.
+    const ok=await r.request([file('src/sum.mjs',10,5),file('src/old.mjs',2),file('tests/sum.test.mjs',4)]);
     assert.equal(ok.error,undefined,ok.error);
     assert.deepEqual(ok.correction,{forTicket:r.ticketId,fromSha:sha('a'),lines:21,limit:21,outOfScope:[],authorized:false});
     // The compare is prevSha...sha.
     assert.ok(f.api.state.requests.some(x=>x.path==='/repos/o/r/compare/'+sha('a')+'...'+sha('b')&&x.search==='?per_page=1'));
     // New test files of every kind are allowed.
-    const tests=await r.request(['test/a.mjs','src/__tests__/b.js','src/c.test.mjs','lib/d.spec.ts'].map(p=>file(p,1)));
+    const tests=await r.request(['test/a.mjs','__tests__/b.js','src/c.test.mjs','lib/d.spec.ts'].map(p=>file(p,1)));
     assert.equal(tests.error,undefined,tests.error);
     // The whole PR still has its normal 400-line budget.
     f.api.state.pullFiles['7']=[file('src/sum.mjs',401)];
@@ -78,6 +79,11 @@ test('correction: a new file that is not a test is CORRECTION_OUT_OF_SCOPE (up t
     // A rename out of a PR file into a new path, and from an outside file into a PR path: both names count.
     assert.match((await r.request([file('src/total.mjs',0,0,{previous_filename:'src/sum.mjs',status:'renamed'})])).error,/^CORRECTION_OUT_OF_SCOPE: src\/total\.mjs:/);
     assert.match((await r.request([file('src/sum.mjs',0,0,{previous_filename:'lib/outside.mjs',status:'renamed'})])).error,/^CORRECTION_OUT_OF_SCOPE: lib\/outside\.mjs:/);
+    // Exact paths (no case, NFKC, space or a/ folding); '..' and control characters fail closed; paths are redacted.
+    for(const p of ['src/SUM.mjs','a/src/sum.mjs','src/s um.mjs','tests/../src/x.mjs','tests/\u0007.mjs'])
+      assert.match((await r.request([file(p,1)])).error,/^CORRECTION_OUT_OF_SCOPE: /,p);
+    f.api.state.compareFiles=[file('lib/ghp_'+'A'.repeat(36)+'.mjs',1)];
+    assert.match(await f.runtime.review.request(r.missionId,r.author).catch(e=>e.message),/^CORRECTION_OUT_OF_SCOPE: (?!.*ghp_A)/);
     // A lockfile outside the PR is out of scope too.
     assert.match((await r.request([file('sub/yarn.lock',1)])).error,/^CORRECTION_OUT_OF_SCOPE: sub\/yarn\.lock:/);
     assert.equal(await tickets(),before);
@@ -113,6 +119,9 @@ test('correction: without the stored measure, a failing or a truncated compare i
     const setPrev=v=>remoteWrite(db=>db.prepare('UPDATE review_tickets SET line_budget=? WHERE ticket_id=?').run(v,r.ticketId));
     const {touched,...noTouched}=JSON.parse(stored);void touched;
     const {lines,...noLines}=JSON.parse(stored);void lines;
+    await setPrev(JSON.stringify({...JSON.parse(stored),truncated:true}));
+    assert.deepEqual((await f.call('zana_correction_start',{missionId:r.missionId},r.author)).correctionBudget,{files:'los archivos del PR y tests',
+      prFiles:null,maxLines:null,unmeasured:'el ticket no guardó la medida del PR: zana_review_request responde CORRECTION_UNMEASURED'});
     for(const v of [null,'{nope',JSON.stringify(noTouched),JSON.stringify(noLines)]){
       await setPrev(v);
       assert.match((await r.request([file('src/sum.mjs',1)])).error,new RegExp(unmeasured.source+'el ticket '+r.ticketId+' no guardó los archivos y líneas del PR\\); pregúntale al usuario si autoriza 1 líneas'),String(v));
@@ -121,12 +130,17 @@ test('correction: without the stored measure, a failing or a truncated compare i
     f.api.state.compareFilesError={status:500,message:'boom'};
     assert.match((await r.request()).error,/^CORRECTION_UNMEASURED: .*\(compare a{40}\.\.\.b{40}: GitHub HTTP 500: boom\); pregúntale al usuario si autoriza la ronda sin medir/);
     f.api.state.compareFilesError=null;
+    assert.match((await r.request('nope')).error,/^CORRECTION_UNMEASURED: .*Unreadable compare file list/);
+    f.api.state.compareStatus='diverged';
+    assert.match((await r.request([])).error,/^CORRECTION_UNMEASURED: .*a{40} no es ancestro del head \(compare diverged\)/);
+    f.api.state.compareStatus=undefined;
     // 300 files is GitHub's compare maximum: the list may be incomplete.
     assert.match((await r.request(Array.from({length:300},(_,i)=>file('tests/t'+i+'.mjs',0)))).error,/^CORRECTION_UNMEASURED: .*el compare lista 300 archivos o más/);
     assert.equal((await r.request(Array.from({length:299},(_,i)=>file('tests/t'+i+'.mjs',0)))).error,undefined);
     // Only the correction authorization of this round lets an unmeasured round through.
     f.api.state.compareFilesError={status:500,message:'boom'};
-    assert.equal((await ext(f,r,5,'correction')).error,undefined);
+    assert.match((await r.request()).error,/^CORRECTION_UNMEASURED:/);
+    assert.equal((await ext(f,r,5,'correction')).correctionBudget.unmeasured,true);
     const lifted=await r.request();
     assert.equal(lifted.error,undefined,lifted.error);
     assert.equal(lifted.correction.authorized,true);
@@ -142,8 +156,10 @@ test("correction: scope 'correction' lifts the three refusals of that round only
     assert.equal((await ext(f,r,1000)).lineBudget.limit,1000);
     assert.match((await r.request(over)).error,/^CORRECTION_OUT_OF_SCOPE: lib\/x\.mjs:/);
     assert.match((await r.request([file('src/sum.mjs',30)])).error,/^OVER_CORRECTION_BUDGET: .* 30 líneas y el tope de esta ronda es 21/);
-    assert.deepEqual((await ext(f,r,29,'correction')).correctionBudget,{forTicket:r.ticketId,limit:29,previous:null,reason:'el usuario dijo que sí'});
+    assert.deepEqual((await ext(f,r,29,'correction')).correctionBudget,{forTicket:r.ticketId,forSha:sha('b'),
+      outOfScope:[],lines:30,unmeasured:false,limit:29,previous:null,reason:'el usuario dijo que sí'});
     // Authorized for fewer lines than the change: still refused.
+    assert.match((await r.request([file('src/sum.mjs',30)])).error,/^OVER_CORRECTION_BUDGET: .* 30 líneas/);
     assert.match((await r.request(over)).error,/^CORRECTION_OUT_OF_SCOPE: lib\/x\.mjs:.*tiene 30 líneas/);
     assert.equal((await ext(f,r,30,'correction')).correctionBudget.previous,29);
     const ok=await r.request(over);
@@ -225,6 +241,12 @@ test('correction: the grant covers only the measured SHA, files and lines of the
     assert.match((await r.request()).error,/^CORRECTION_UNMEASURED:/);
     f.api.state.compareFilesError=null;
     f.api.state.push(r.branch,sha('c'));f.api.state.green(sha('c'));
+    assert.match((await r.request([file('lib/x.mjs',5)])).error,/^CORRECTION_OUT_OF_SCOPE: lib\/x\.mjs:/);
+    // A grant of round 1 for c…c (never used) does not cover round 2, even back on c…c.
+    assert.equal((await ext(f,r,30,'correction')).error,undefined);
+    f.api.state.push(r.branch,sha('d'));f.api.state.green(sha('d'));
+    assert.equal((await review(f,(await r.request([file('src/sum.mjs',1)])).ticket)).event,'REQUEST_CHANGES');
+    f.api.state.push(r.branch,sha('c'));
     assert.match((await r.request([file('lib/x.mjs',5)])).error,/^CORRECTION_OUT_OF_SCOPE: lib\/x\.mjs:/);
   }finally{await f.cleanup();}
 });

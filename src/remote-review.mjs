@@ -238,10 +238,12 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
     let files=null,error=null;
     try{files=await github.compareFiles(repo,prev.sha,sha);}catch(e){error='compare '+prev.sha+'...'+sha+': '+String(e?.message??e).slice(0,200);}
     const lines=files?files.reduce((n,f)=>n+(excluded(f.filename)?0:f.additions+f.deletions),0):null;
-    const allowed=new Set((touched??[]).map(canonPath));
+    // Exacta: GitHub da la misma ruta en los dos lados. canonPath solo cierra '..' y caracteres de control.
+    const allowed=new Set(touched??[]);
     const outOfScope=files&&touched?[...new Set(files.flatMap(f=>[f.filename,...(f.previousFilename?[f.previousFilename]:[])]))]
-      .filter(p=>{const c=canonPath(p);return c===null||(!allowed.has(c)&&!isTestPath(c));}):[];
+      .filter(p=>canonPath(p)===null||(!allowed.has(p)&&!isTestPath(p))):[];
     const unmeasured=error??(files.truncated?'el compare lista 300 archivos o más':null)??
+      (['ahead','identical'].includes(files.status)?null:prev.sha+' no es ancestro del head (compare '+files.status+')')??
       (touched===null||limit===null?'el ticket '+prev.ticket_id+' no guardó los archivos y líneas del PR':null);
     return {forTicket:prev.ticket_id,fromSha:prev.sha,lines,limit,outOfScope,...(unmeasured?{unmeasured}:{})};
   }
@@ -281,8 +283,14 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
       const prev=await remoteRead(db=>correctionPrev(db,missionId));
       const correction=prev?await measureCorrection(ctx.repo,prev,sha):null;
       if(correction){
-        const ext=ctx.lineBudgetExtension?.correction,n=correction.lines;
-        correction.authorized=ext?.forTicket===prev.ticket_id&&(n===null||n<=ext.limit);
+        // El permiso cubre solo la medición que el usuario aprobó: este SHA, esos archivos, N ≤ limit.
+        const g=ctx.lineBudgetExtension?.correction,n=correction.lines;
+        correction.authorized=g?.forTicket===prev.ticket_id&&g.forSha===sha&&correction.outOfScope.every(p=>g.outOfScope?.includes(p))&&
+          (!correction.unmeasured||g.unmeasured===true)&&(n===null||n<=g.limit);
+        const pending={forTicket:prev.ticket_id,forSha:sha,outOfScope:correction.outOfScope,lines:n,unmeasured:Boolean(correction.unmeasured)};
+        if(!correction.authorized&&(pending.unmeasured||pending.outOfScope.length||n>correction.limit))await remoteWrite(db=>
+          db.prepare('UPDATE remote_missions SET line_budget_extension=? WHERE mission_id=?')
+            .run(JSON.stringify({...remoteMission(db,missionId).lineBudgetExtension,pendingCorrection:pending}),missionId));
         const ask=what=>'; pregúntale al usuario si autoriza '+what+" y, solo con su sí, llama zana_budget_extend con scope 'correction'";
         const paths=correction.outOfScope.slice(0,10).map(p=>p.slice(0,200)).join(', ')+
           (correction.outOfScope.length>10?' (y '+(correction.outOfScope.length-10)+' más)':'');

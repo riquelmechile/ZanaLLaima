@@ -561,13 +561,14 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     const safe=auditFailed?{...result,auditFailed:true}:result;
     return {content:[{type:'text',text:JSON.stringify(safe)}],structuredContent:safe};
   }
-  // One McpServer per MCP session; getSession() returns the bound identity.
+  // One McpServer per MCP session. getSession(ctx) returns the identity of each
+  // call: the ChatGPT conversation when the request names one, else the transport.
   function createServer(getSession){
     const server=new McpServer({name:'zana-llaima',version:packageVersion},
       {maxToolInputElements:1000,instructions:REMOTE_INSTRUCTIONS});
     const register=(name,description,readOnly,inputSchema)=>server.registerTool(name,{description,inputSchema,
       annotations:{readOnlyHint:readOnly,destructiveHint:!readOnly,idempotentHint:readOnly}},
-      async args=>dispatch(name,args,getSession()));
+      async(args,ctx)=>dispatch(name,args,await getSession(ctx)));
     for(const name of REUSED){const [,description,readOnly]=TOOL_DESCRIPTIONS[name];register(name,description,readOnly,schemas[name]);}
     for(const [name,[description,readOnly,schema]] of Object.entries(NEW_TOOLS))register(name,description,readOnly,schema);
     return server;

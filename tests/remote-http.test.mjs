@@ -289,7 +289,7 @@ test('openai/session: la conversación conserva su sesión entre transportes MCP
       const c=await connect(s.base,token);
       const call=async(name,args={})=>{
         const r=await c.client.callTool({name,arguments:args,...(id===undefined?{}:{_meta:{'openai/session':id}})});
-        return r.isError?{error:r.content[0].text}:r.structuredContent;
+        return r.isError?{error:r.content[0].text}:(r.structuredContent??{content:r.content});
       };
       return {...c,call};
     };
@@ -305,7 +305,9 @@ test('openai/session: la conversación conserva su sesión entre transportes MCP
     const a2=await conv('v1/conv-autor');
     assert.notEqual(a2.transport.sessionId,a1.transport.sessionId);
     assert.equal((await a2.call('zana_session_status')).session.id,sid);
-    assert.doesNotMatch(String((await push(a2,init.github.branch,init.id)).error),/NO_RUNNING_UNIT/);
+    const pushed=await push(a2,init.github.branch,init.id);
+    assert.equal(pushed.error,undefined);
+    assert.match(pushed.content[0].text,/ok push_files/);
     // Otra conversación de la misma cuenta es otra sesión y no hereda la unidad.
     const b=await conv('v1/conv-otra');
     assert.notEqual((await b.call('zana_session_status')).session.id,sid);

@@ -220,7 +220,7 @@ Cada `remote-*` exige solo la DB que usa, con ruta absoluta y ya existente, así
   - Si un ticket pidió cambios sobre un SHA (veredicto `REQUEST_CHANGES`, o un lente con BLOCKER o CRITICAL que no sea `PREEXISTING`), el autor no puede pedir otro ticket sobre ese SHA (`CHANGES_REQUESTED_SAME_SHA`), y esperar el TTL no lo libera.
   - Al desplegar la versión con `origin`, un ticket `CLAIMED` cuya conversación tenga cacheado el esquema viejo de `zana_review_lens_submit` falla la validación: despliega sin tickets `CLAIMED` o abandónalos con `remote-ticket-abandon`.
   - Solo `remote-ticket-abandon` lo libera, y solo para un ticket no finalizado y sin review publicada. Úsalo solo si el bloqueo fue un error de la revisora.
-- **Reinicios:** las sesiones MCP viven en memoria, así que un reinicio del servicio, o una sesión ociosa más de 2 h, corta los flujos y ChatGPT abre una sesión nueva.
+- **Reinicios:** los transportes MCP viven en memoria, así que un reinicio del servicio, o un transporte ocioso más de 2 h, corta el flujo y ChatGPT abre uno nuevo. La sesión de ZanaLLaima sigue a la conversación de ChatGPT (`_meta["openai/session"]`), así que la misma conversación conserva su unidad `RUNNING` después de reconectar.
   - La autora completa su unidad **antes** de pedir el ticket, así que la espera de la review no depende de ningún lease.
   - Si se corta a mitad de una unidad con el lease vigente, `zana_session_rebind` la pasa a la sesión nueva sin consumir intento.
   - Si el lease venció: `zana_recover_expired` → `zana_unit_retry` → `zana_start_batch`.

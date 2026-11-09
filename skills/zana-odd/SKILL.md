@@ -28,7 +28,7 @@ Eres la conversación **autora**. Escribes en GitHub solo con `zana_ds_github`, 
 1. `zana_next_batch` y `zana_start_batch` con `leaseSeconds` igual a `maxLeaseSeconds` del presupuesto. Guarda `unitId`, `token`, `leaseGeneration` y `expiresAt`.
 2. Mientras escribes, abres el PR y corres checks, renueva con `zana_unit_heartbeat` (también con `leaseSeconds` = `maxLeaseSeconds`) antes de `expiresAt`.
 3. Si el lease venció (`EXPIRED`): `zana_recover_expired` → `zana_unit_retry` → `zana_start_batch` (token nuevo; consume un intento).
-4. Si el servidor se reinició o tu conversación tiene otra sesión MCP y el lease **sigue vigente**: `zana_session_rebind` (`missionId`, `unitId`, `token`, `leaseGeneration`), sin consumir intento. Con el lease vencido no sirve: usa el paso 3.
+4. Si `zana_session_status` muestra un `session.id` distinto al que tomó la unidad (por ejemplo una unidad tomada antes de que la sesión siguiera a la conversación) y el lease **sigue vigente**: `zana_session_rebind` (`missionId`, `unitId`, `token`, `leaseGeneration`), sin consumir intento. Con el lease vencido no sirve: usa el paso 3.
 
 ## 3. Rama y commits por el downstream
 

@@ -4,13 +4,14 @@
 // request needs an OAuth access token from the embedded authorization server
 // (closed registration, src/oauth.mjs). Each MCP session gets its own
 // transport and McpServer; its Mcp-Session-Id is bound to the OAuth identity
-// that opened it and its creation time is stored in SQLite (review separation
-// uses both). Requests carrying a 2026 per-request envelope are answered with
+// that opened it. La sesión de ZanaLLaima de cada tool call (dueña de unidades,
+// autora y revisora, con su creación guardada en SQLite) es la conversación de
+// ChatGPT cuando viene; si no, la del transporte (ver conversationSessionId). Requests carrying a 2026 per-request envelope are answered with
 // a protocol error, so negotiating clients fall back to the sessionful
 // handshake. Wiring adapted from panter-ai@1a99048 src/server.ts
 // (/health, Host/Origin allowlists, 401 challenge, no-store).
 import {createServer} from 'node:http';
-import {randomUUID} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {dirname,join,resolve,isAbsolute} from 'node:path';
 import {pathToFileURL} from 'node:url';
@@ -25,6 +26,22 @@ const packageVersion=JSON.parse(readFileSync(new URL('../package.json',import.me
 const MAX_BODY=4*1024*1024;
 const MAX_SESSIONS=200;
 const IDLE_MS=2*3600*1000;
+
+// ChatGPT abre una sesión MCP nueva en casi cada tool call, así que el
+// Mcp-Session-Id no sirve para reconocer una conversación. Cada tools/call trae
+// _meta["openai/session"], un id anonimizado de la conversación (Apps SDK,
+// "for correlating tool calls within the same ChatGPT session"). La sesión de
+// ZanaLLaima es su hash junto a la identidad OAuth: la misma conversación con
+// otra cuenta da otra sesión y el valor crudo no se guarda. Sin el campo, o con
+// un valor fuera de 1-128 ASCII imprimible, se usa la sesión del transporte.
+// No debilita la separación de la revisión: un cliente ya podía abrir una
+// sesión MCP nueva cuando quisiera, y este valor lo pone ChatGPT, no el modelo.
+const OPENAI_SESSION=/^[\x21-\x7e][\x20-\x7e]{0,127}$/;
+export function conversationSessionId(identity,meta){
+  const raw=meta?.['openai/session'];
+  if(typeof raw!=='string'||!OPENAI_SESSION.test(raw))return null;
+  return 'oai-'+createHash('sha256').update(identity.clientId+'\0'+identity.host+'\0'+raw).digest('hex').slice(0,32);
+}
 
 const hostname=h=>{try{return new URL('http://'+(h??'')).hostname.toLowerCase().replace(/^\[|\]$/g,'');}catch{return '';}};
 function jsonRpcError(res,status,code,message,headers={}){
@@ -78,7 +95,7 @@ export function httpSettings(env=process.env){
     password:env.ZANA_OAUTH_CONSENT_PASSWORD??''};
 }
 
-export function createHttpServer({runtime,oauth,settings,log=console}){
+export function createHttpServer({runtime,oauth,settings,log=console,maxSessions=MAX_SESSIONS}){
   const sessions=new Map();
   const secrets=()=>envSecrets();
   function evictIdle(){
@@ -87,7 +104,14 @@ export function createHttpServer({runtime,oauth,settings,log=console}){
   }
   async function openSession(identity,request,parsed){
     evictIdle();
-    if(sessions.size>=MAX_SESSIONS)throw Object.assign(new Error('Too many open MCP sessions'),{status:503});
+    // ChatGPT abre un transporte por llamada y no siempre lo cierra: con el tope
+    // lleno se cierra el más viejo en vez de rechazar. La sesión de ZanaLLaima no
+    // vive en el transporte, así que la conversación no pierde nada.
+    while(sessions.size>=maxSessions){
+      let oldest=null;
+      for(const [id,s] of sessions)if(!oldest||s.seen<oldest[1].seen)oldest=[id,s];
+      sessions.delete(oldest[0]);oldest[1].transport.close().catch(()=>{});
+    }
     const holder={identity,info:null,seen:Date.now(),transport:null};
     const transport=new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator:()=>randomUUID(),
@@ -98,7 +122,12 @@ export function createHttpServer({runtime,oauth,settings,log=console}){
       onsessionclosed:id=>{sessions.delete(id);},
     });
     holder.transport=transport;
-    const server=runtime.createServer(()=>holder.info);
+    // La conversación de ChatGPT, si viene, manda sobre la sesión del transporte.
+    const server=runtime.createServer(async ctx=>{
+      const id=conversationSessionId(identity,ctx?.mcpReq?._meta);
+      return id?{...await registerSession({sessionId:id,host:identity.host,clientId:identity.clientId}),source:'conversation'}
+        :{...holder.info,source:'transport'};
+    });
     await server.connect(transport);
     return transport.handleRequest(request,{parsedBody:parsed});
   }

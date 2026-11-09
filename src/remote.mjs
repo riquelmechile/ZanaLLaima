@@ -55,7 +55,7 @@ const NOTE_KINDS=['decision','convention','issue','pending'];
 const NEW_TOOLS={
   zana_mission_init:['Create one remote mission bound to a GitHub repository and base; code units declare code:true. Returns memory: the project context to read before planning and the .zanallaima.json pointer to write first when its status is not OK',false,
     z.object({spec:z.record(z.string(),z.unknown()),github:z.object({repo:z.string().min(3).max(201),base:z.string().min(1).max(200)}).strict()}).strict()],
-  zana_session_status:['Show this MCP session (id, host, creation time) and its role in the active mission',true,z.object({}).strict()],
+  zana_session_status:['Show this session (id, host, creation time, source: conversation = the ChatGPT conversation, transport = the MCP session) and its role in the active mission',true,z.object({}).strict()],
   zana_skill_list:['List the skills this server serves',true,z.object({}).strict()],
   zana_skill_load:['Load one skill by exact name',true,z.object({name:z.string().min(1).max(100)}).strict()],
   zana_checks_start:['Dispatch (or associate) the checks workflow on the mission branch head; returns checkId and SHA without blocking',false,
@@ -80,7 +80,7 @@ const NEW_TOOLS={
     z.object({ticket:ticket(),page:z.number().int().min(0).max(100000)}).strict()],
   zana_correction_start:['Author session: after a REQUEST_CHANGES review, add one PENDING code unit to correct it (normal budget and review rounds; the round may only touch the PR files and tests, at most half the PR lines, cap 200)',false,
     z.object({missionId:missionId()}).strict()],
-  zana_session_rebind:['After a server restart or a new MCP session: move a RUNNING unit with a live lease to this session without consuming an attempt (expired: zana_recover_expired, zana_unit_retry, zana_start_batch)',false,
+  zana_session_rebind:['Only when zana_session_status shows a different id from the one that started the unit (e.g. a unit started before the conversation id existed): move a RUNNING unit with a live lease to this session without consuming an attempt (expired: zana_recover_expired, zana_unit_retry, zana_start_batch)',false,
     z.object({missionId:missionId(),unitId:z.string().min(1).max(64),token:uuid(),leaseGeneration:z.number().int().positive()}).strict()],
   zana_mission_close:['Close the mission after every unit completed, with the mandatory summary (done, decisions, conventions, pending, keyFiles) saved to the project memory',false,
     CLOSE_SCHEMA],
@@ -379,7 +379,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       return {...packet,rebound:true,attempts:'unchanged'};
     },
     zana_session_status:(args,session)=>rr((db,mission)=>({
-      session:{id:session.sessionId,host:session.host,createdAt:session.createdAt},
+      session:{id:session.sessionId,host:session.host,createdAt:session.createdAt,source:session.source??'transport'},
       activeMission:mission&&db?{id:mission.id,remote:remoteMission(db,mission.id),
         wrote:sessionWrote(db,session.sessionId,mission.id),reviewer:sessionReviews(db,session.sessionId,mission.id)}:null,
       note:'Separate conversations must show different session ids; that is what review separation relies on.'})),
@@ -561,13 +561,20 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     const safe=auditFailed?{...result,auditFailed:true}:result;
     return {content:[{type:'text',text:JSON.stringify(safe)}],structuredContent:safe};
   }
-  // One McpServer per MCP session; getSession() returns the bound identity.
+  // Un McpServer por sesión MCP. getSession(ctx) da la identidad de cada llamada:
+  // la conversación de ChatGPT si la llamada la trae, si no la del transporte.
+  // Si no se puede resolver, la tool no corre (falla cerrado) y el error sale limpio.
   function createServer(getSession){
     const server=new McpServer({name:'zana-llaima',version:packageVersion},
       {maxToolInputElements:1000,instructions:REMOTE_INSTRUCTIONS});
     const register=(name,description,readOnly,inputSchema)=>server.registerTool(name,{description,inputSchema,
       annotations:{readOnlyHint:readOnly,destructiveHint:!readOnly,idempotentHint:readOnly}},
-      async args=>dispatch(name,args,getSession()));
+      async(args,ctx)=>{
+        let session;
+        try{session=await getSession(ctx);}
+        catch(error){return {isError:true,content:[{type:'text',text:'SESSION_UNAVAILABLE: '+clean(error,secrets())}]};}
+        return dispatch(name,args,session);
+      });
     for(const name of REUSED){const [,description,readOnly]=TOOL_DESCRIPTIONS[name];register(name,description,readOnly,schemas[name]);}
     for(const [name,[description,readOnly,schema]] of Object.entries(NEW_TOOLS))register(name,description,readOnly,schema);
     return server;

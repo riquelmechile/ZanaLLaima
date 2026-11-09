@@ -14,10 +14,10 @@ const PASSWORD='p'.repeat(40);
 const REDIRECT='https://chatgpt.com/connector_platform_oauth_redirect';
 const PUBLIC='https://zanallaima.test/mcp';
 
-async function server(f,{password=PASSWORD}={}){
+async function server(f,{password=PASSWORD,maxSessions,runtime=f.runtime}={}){
   const settings={...httpSettings({ZANA_PUBLIC_HOST:'zanallaima.test',ZANA_OAUTH_DB:join(f.dir,'oauth.sqlite')}),password};
   const oauth=new EmbeddedOAuth({path:settings.oauthDb,resource:PUBLIC,redirectUris:[REDIRECT],password});
-  const http=createHttpServer({runtime:f.runtime,oauth,settings,log:{error(){}}});
+  const http=createHttpServer({runtime,oauth,settings,log:{error(){}},...(maxSessions?{maxSessions}:{})});
   await new Promise(ok=>http.listen(0,'127.0.0.1',ok));
   const base='http://127.0.0.1:'+http.address().port;
   return {base,oauth,settings,http,close:async()=>{http.closeAllConnections();await new Promise(ok=>http.close(ok));oauth.close();}};
@@ -327,4 +327,82 @@ test('openai/session: la conversación conserva su sesión entre transportes MCP
     assert.equal(r.structuredContent.session.host,'otra-cuenta');
     for(const c of [a1,a2,b,o])await c.client.close();
   }finally{await s.close();await f.cleanup();}
+});
+
+test('openai/session: la revisión se separa por conversación aunque cada llamada abra un transporte',async()=>{
+  const f=await remoteFixture();
+  const s=await server(f);
+  const opened=[];
+  try{
+    setEnrollment(s.settings.oauthDb,5);
+    const {access_token:token}=await login(s.base);
+    // Un transporte nuevo por llamada, como ChatGPT.
+    const call=async(conv,name,args={})=>{
+      const c=await connect(s.base,token);opened.push(c);
+      const r=await c.client.callTool({name,arguments:args,...(conv===undefined?{}:{_meta:{'openai/session':conv}})});
+      return r.isError?{error:r.content[0].text}:(r.structuredContent??{content:r.content});
+    };
+    const A='v1/autor',B='v1/revisora';
+    const init=await call(A,'zana_mission_init',{spec:f.spec,github:{repo:'o/r',base:'main'}});
+    const st1=(await call(A,'zana_session_status')).session;
+    assert.equal(st1.source,'conversation');
+    const p=(await call(A,'zana_start_batch',{})).packets[0];
+    // Una llamada sin openai/session en medio no le quita la unidad a la autora.
+    assert.equal((await call(undefined,'zana_session_status')).session.source,'transport');
+    const pushed=await call(A,'zana_ds_github',{operation:'push_files',missionId:init.id,
+      arguments:{owner:'o',repo:'r',branch:init.github.branch,files:[{path:'src/a.mjs',content:'x'}],message:'m'}});
+    assert.equal(pushed.error,undefined);
+    // createdAt es el de la primera vez que se vio la conversación.
+    const st2=(await call(A,'zana_session_status')).session;
+    assert.deepEqual([st2.id,st2.createdAt],[st1.id,st1.createdAt]);
+    f.api.state.diffText='diff --git a/src/a.mjs b/src/a.mjs\n--- a/src/a.mjs\n+++ b/src/a.mjs\n@@ -1 +1,2 @@\n a\n+b\n';
+    f.api.state.push(init.github.branch,'a'.repeat(40));f.api.state.green('a'.repeat(40));f.api.state.openPull(init.github.branch);
+    assert.equal((await call(A,'zana_complete_unit',{unitId:p.unitId,token:p.token,leaseGeneration:p.leaseGeneration,
+      outcome:{success:true,summary:'code done',evidence:['green checks']}})).error,undefined);
+    const req=await call(A,'zana_review_request',{missionId:init.id});
+    assert.ok(req.ticket);
+    // La conversación autora, en un transporte nuevo, no reclama su propio ticket.
+    assert.match((await call(A,'zana_review_claim',{ticket:req.ticket})).error,/AUTHOR_SESSION/);
+    // La revisora sigue siéndolo de una llamada a otra.
+    assert.equal((await call(B,'zana_review_claim',{ticket:req.ticket})).state,'CLAIMED');
+    assert.equal((await call(B,'zana_review_diff',{ticket:req.ticket,page:0})).error,undefined);
+    assert.match((await call(B,'zana_ds_github',{operation:'push_files',missionId:init.id,
+      arguments:{owner:'o',repo:'r',branch:init.github.branch,files:[{path:'a',content:'x'}],message:'m'}})).error,/REVIEWER_READ_ONLY/);
+    const audit=await f.runtime.readAudit({limit:200});
+    assert.ok(audit.some(x=>x.tool==='zana_review_claim'&&x.outcome==='OK'&&/^oai-[0-9a-f]{32}$/.test(x.sessionId)));
+    assert.equal(JSON.stringify(audit).includes(B),false,'el valor crudo de openai/session no se guarda');
+    // Bordes: 128 caracteres vale; DEL (0x7f) no.
+    assert.equal((await call('x'.repeat(128),'zana_session_status')).session.source,'conversation');
+    assert.equal((await call('x\x7f','zana_session_status')).session.source,'transport');
+  }finally{for(const c of opened)await c.client.close().catch(()=>{});await s.close();await f.cleanup();}
+});
+
+test('transportes: con el tope lleno se cierra el más viejo; si la sesión no se resuelve la tool no corre',async()=>{
+  const f=await remoteFixture();
+  const s=await server(f,{maxSessions:2});
+  try{
+    setEnrollment(s.settings.oauthDb,5);
+    const {access_token:token}=await login(s.base);
+    const c1=await connect(s.base,token),c2=await connect(s.base,token),c3=await connect(s.base,token);
+    const listed=c=>fetch(s.base+'/mcp',{method:'POST',headers:{authorization:'Bearer '+token,'mcp-session-id':c.transport.sessionId,
+      'content-type':'application/json',accept:'application/json, text/event-stream','mcp-protocol-version':'2025-06-18'},
+      body:JSON.stringify({jsonrpc:'2.0',id:9,method:'tools/list'})});
+    assert.equal((await listed(c1)).status,404,'el más viejo se cerró');
+    assert.equal((await listed(c3)).status,200);
+    assert.equal((await c3.call('zana_session_status')).session.source,'transport');
+    for(const c of [c1,c2,c3])await c.client.close().catch(()=>{});
+  }finally{await s.close();await f.cleanup();}
+  const g=await remoteFixture();
+  const broken={...g.runtime,createServer:()=>g.runtime.createServer(async()=>{throw new Error('db rota '+AUTHOR_TOKEN);})};
+  const t=await server(g,{runtime:broken});
+  try{
+    setEnrollment(t.settings.oauthDb,5);
+    const {access_token:token}=await login(t.base);
+    const c=await connect(t.base,token);
+    const r=await c.client.callTool({name:'zana_session_status',arguments:{}});
+    assert.equal(r.isError,true);
+    assert.match(r.content[0].text,/^SESSION_UNAVAILABLE: db rota/);
+    assert.equal(r.content[0].text.includes(AUTHOR_TOKEN),false);
+    await c.client.close();
+  }finally{await t.close();await g.cleanup();}
 });

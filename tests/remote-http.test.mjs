@@ -275,3 +275,54 @@ test('R3: with the window closed, an already registered client can neither autho
     assert.equal(post.status,403,'consent submit refused');
   }finally{await s.close();await f.cleanup();}
 });
+
+// ChatGPT abre una sesión MCP nueva en casi cada tool call y manda la
+// conversación en _meta["openai/session"]: la identidad de sesión de ZanaLLaima
+// sigue a la conversación, no al transporte.
+test('openai/session: la conversación conserva su sesión entre transportes MCP',async()=>{
+  const f=await remoteFixture();
+  const s=await server(f);
+  try{
+    setEnrollment(s.settings.oauthDb,5);
+    const {access_token:token}=await login(s.base);
+    const conv=async(id)=>{
+      const c=await connect(s.base,token);
+      const call=async(name,args={})=>{
+        const r=await c.client.callTool({name,arguments:args,...(id===undefined?{}:{_meta:{'openai/session':id}})});
+        return r.isError?{error:r.content[0].text}:r.structuredContent;
+      };
+      return {...c,call};
+    };
+    const push=(c,branch,missionId)=>c.call('zana_ds_github',{operation:'push_files',missionId,
+      arguments:{owner:'o',repo:'r',branch,files:[{path:'src/a.mjs',content:'x'}],message:'m'}});
+    // Cada tool call en un transporte nuevo, como hace ChatGPT.
+    const a1=await conv('v1/conv-autor');
+    const init=await a1.call('zana_mission_init',{spec:f.spec,github:{repo:'o/r',base:'main'}});
+    await a1.call('zana_start_batch',{});
+    const sid=(await a1.call('zana_session_status')).session.id;
+    assert.match(sid,/^oai-[0-9a-f]{32}$/);
+    assert.notEqual(sid,a1.transport.sessionId);
+    const a2=await conv('v1/conv-autor');
+    assert.notEqual(a2.transport.sessionId,a1.transport.sessionId);
+    assert.equal((await a2.call('zana_session_status')).session.id,sid);
+    assert.doesNotMatch(String((await push(a2,init.github.branch,init.id)).error),/NO_RUNNING_UNIT/);
+    // Otra conversación de la misma cuenta es otra sesión y no hereda la unidad.
+    const b=await conv('v1/conv-otra');
+    assert.notEqual((await b.call('zana_session_status')).session.id,sid);
+    assert.match((await push(b,init.github.branch,init.id)).error,/NO_RUNNING_UNIT/);
+    // Sin openai/session, o con un valor inválido, manda el transporte.
+    for(const bad of [undefined,'',' x','x'.repeat(129),'convé',7]){
+      const c=await conv(bad);
+      assert.equal((await c.call('zana_session_status')).session.id,c.transport.sessionId,String(bad));
+      await c.client.close();
+    }
+    // El mismo valor con otra cuenta OAuth da otra sesión.
+    setEnrollment(s.settings.oauthDb,5);
+    const other=await login(s.base,{host:'otra-cuenta'});
+    const o=await connect(s.base,other.access_token);
+    const r=await o.client.callTool({name:'zana_session_status',arguments:{},_meta:{'openai/session':'v1/conv-autor'}});
+    assert.notEqual(r.structuredContent.session.id,sid);
+    assert.equal(r.structuredContent.session.host,'otra-cuenta');
+    for(const c of [a1,a2,b,o])await c.client.close();
+  }finally{await s.close();await f.cleanup();}
+});

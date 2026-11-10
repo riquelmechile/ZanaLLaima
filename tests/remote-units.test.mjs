@@ -169,7 +169,15 @@ test('delivery helpers: missing PR, unreadable evidence, dismissed review, merge
   assert.equal((await mergeMission({github:{...ready,merge:async()=>({merged:false,message:'nope'})},config,ctx,openBlockingTickets:[],currentTicket})).state,'MERGE_REFUSED');
   assert.equal((await mergeMission({github:{...ready,merge:async()=>{throw Object.assign(new Error('Head sha mismatch'),{status:422});}},config,ctx,openBlockingTickets:[],currentTicket})).state,'STALE_SHA');
   await assert.rejects(mergeMission({github:{...ready,merge:async()=>{throw Object.assign(new Error('Forbidden'),{status:403});}},config,ctx,openBlockingTickets:[],currentTicket}),/Forbidden/);
-  assert.equal(evaluateRuns([{name:'t',status:'completed',conclusion:'skipped'}],'h').state,'FAILURE');
+  // Un SHA que solo tiene checks saltados o neutros no fue probado: sigue PENDING
+  // (con nota) hasta que corra el workflow de checks; nunca es FAILURE ni SUCCESS.
+  const soloSaltado=evaluateRuns([{name:'t',status:'completed',conclusion:'skipped'}],'h');
+  assert.equal(soloSaltado.state,'PENDING');
+  assert.match(soloSaltado.note,/ninguno lo probó/);
+  assert.equal(evaluateRuns([{name:'t',status:'completed',conclusion:'neutral'}],'h',['t']).state,'PENDING');
+  const conExito=evaluateRuns([{name:'t',status:'completed',conclusion:'skipped'},{name:'t',status:'completed',conclusion:'success'}],'h');
+  assert.deepEqual([conExito.state,conExito.note],['SUCCESS',undefined]);
+  assert.equal(evaluateRuns([{name:'t',status:'completed',conclusion:'skipped'},{name:'u',status:'completed',conclusion:'cancelled'}],'h').state,'FAILURE');
   assert.equal(evaluateRuns([{name:'t',status:'completed',conclusion:'success',head_sha:'other'}],'h').state,'PENDING');
 });
 

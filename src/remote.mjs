@@ -16,7 +16,7 @@ import {GitHubApi,validRefName} from './github-api.mjs';
 import {remoteConfig,repoAllowed} from './remote-config.mjs';
 import {DownstreamGateway} from './downstream.mjs';
 import {createGitHubPolicy,CATALOG,liveProblems,missionBranch} from './github-policy.mjs';
-import {createChecks} from './checks.mjs';
+import {createChecks,UNTESTED_REASON} from './checks.mjs';
 import {createReview,correctionPrev,LENSES,SEVERITIES,EXECUTIONS,ORIGINS} from './remote-review.mjs';
 import {compactWrite} from './downstream-compact.mjs';
 import {deliveryStatus,mergeMission,ticketView} from './github-delivery.mjs';
@@ -271,7 +271,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         checkedSha=await github.branchHead(ctx.repo,ctx.branch);
         const verdict=await checks.verdict(ctx.repo,checkedSha);
         if(verdict.state!=='SUCCESS')
-          throw new Error('CHECKS_NOT_GREEN: code unit '+unitId+' needs a green check on its final SHA '+checkedSha+' (now '+verdict.state+'); run zana_checks_start');
+          throw new Error('CHECKS_NOT_GREEN: code unit '+unitId+' needs a green check on its final SHA '+checkedSha+' (now '+verdict.state+(verdict.untested?': '+UNTESTED_REASON:'')+'); run zana_checks_start');
         // A write that landed while the checks were read would leave the final
         // commit unverified: the head must still be the checked SHA.
         const after=await github.branchHead(ctx.repo,ctx.branch);
@@ -530,7 +530,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
   async function dispatch(name,args,session){
     const fn=ops[name];
     if(!fn)return {isError:true,content:[{type:'text',text:'Unknown tool'}]};
-    let outcome='OK',data=null,result;
+    let outcome='OK',data=null,result,failure=null;
     try{
       data=await within(Promise.resolve().then(()=>fn(args??{},session)),config.toolDeadlineMs,name);
       result=data?.passthrough?redactDeep(data.passthrough,secrets()):redactDeep(data,secrets());
@@ -539,6 +539,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       const text=error instanceof DeadlineError
         ?'TOOL_DEADLINE: '+name+' exceeded '+config.toolDeadlineMs+' ms; the operation may still complete, read state before retrying'
         :clean(error,secrets());
+      failure=String(text).slice(0,300);
       result={isError:true,content:[{type:'text',text}]};
     }
     let auditFailed=false;
@@ -547,7 +548,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       try{
         // The mission the call belongs to: named, returned, or the active one.
         const missionId=args?.missionId??data?.missionId??(await readState().catch(()=>null))?.id??null;
-        await audit({caller:session,tool:name,missionId,outcome,args,category:categoryOf(name)});
+        await audit({caller:session,tool:name,missionId,outcome,args,category:categoryOf(name),...(failure?{detail:{error:failure}}:{})});
       }catch(error){
         auditFailed=true;
         console.error('ZanaLLaima audit write failed:',clean(error,secrets()));

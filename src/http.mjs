@@ -26,6 +26,12 @@ const packageVersion=JSON.parse(readFileSync(new URL('../package.json',import.me
 const MAX_BODY=4*1024*1024;
 const MAX_SESSIONS=200;
 const IDLE_MS=2*3600*1000;
+// ChatGPT abre un transporte por tool call y no lo cierra: el que solo sirvió a
+// una conversación (o no hizo ninguna llamada) no guarda nada y se suelta rápido.
+// El que es la identidad de su sesión (sin openai/session) conserva las 2 h.
+const CONVERSATION_IDLE_MS=5*60*1000;
+// Margen sobre el plazo de una tool durante el que una llamada en vuelo protege a su transporte.
+const BUSY_MARGIN_MS=15_000;
 
 // ChatGPT abre una sesión MCP nueva en casi cada tool call, así que el
 // Mcp-Session-Id no sirve para reconocer una conversación. Cada tools/call trae
@@ -95,24 +101,43 @@ export function httpSettings(env=process.env){
     password:env.ZANA_OAUTH_CONSENT_PASSWORD??''};
 }
 
-export function createHttpServer({runtime,oauth,settings,log=console,maxSessions=MAX_SESSIONS}){
+export function createHttpServer({runtime,oauth,settings,log=console,maxSessions=MAX_SESSIONS,
+  idleMs=IDLE_MS,conversationIdleMs=CONVERSATION_IDLE_MS,busyMs=(runtime?.config?.toolDeadlineMs??45_000)+BUSY_MARGIN_MS}){
+  if(!Number.isInteger(maxSessions)||maxSessions<1)throw new Error('INVALID_MAX_SESSIONS: maxSessions debe ser un entero de al menos 1');
   const sessions=new Map();
+  // En vuelo, pero con tope: si el cliente cancela y deja la conexión abierta el
+  // SDK no cierra ese stream, y sin tope el transporte quedaría fijo para siempre.
+  const busy=(s,now)=>s.inflight>0&&now-s.busyAt<busyMs;
   const secrets=()=>envSecrets();
   function evictIdle(){
     const now=Date.now();
-    for(const [id,s] of sessions)if(now-s.seen>IDLE_MS){sessions.delete(id);s.transport.close().catch(()=>{});}
+    for(const [id,s] of sessions)
+      if(!busy(s,now)&&now-s.seen>(s.own?idleMs:conversationIdleMs)){sessions.delete(id);s.transport.close().catch(()=>{});}
+  }
+  // Una llamada en vuelo protege a su transporte: cerrarlo cortaría la respuesta
+  // de una tool que igual termina en el servidor.
+  async function serve(holder,res,respond){
+    holder.inflight++;holder.busyAt=Date.now();
+    try{await sendWeb(res,await respond());}
+    finally{holder.inflight--;holder.seen=Date.now();}
   }
   async function openSession(identity,request,parsed){
     evictIdle();
     // ChatGPT abre un transporte por llamada y no siempre lo cierra: con el tope
-    // lleno se cierra el más viejo en vez de rechazar. La sesión de ZanaLLaima no
-    // vive en el transporte, así que la conversación no pierde nada.
+    // lleno se cierra el más viejo que no tenga una llamada en vuelo, y antes uno
+    // que no sea la identidad de su sesión (ese no pierde nada: la sesión de una
+    // conversación no vive en el transporte). Solo si todos están ocupados se rechaza.
     while(sessions.size>=maxSessions){
+      const now=Date.now();
       let oldest=null;
-      for(const [id,s] of sessions)if(!oldest||s.seen<oldest[1].seen)oldest=[id,s];
+      for(const [id,s] of sessions){
+        if(busy(s,now))continue;
+        if(!oldest||(s.own!==oldest[1].own?!s.own:s.seen<oldest[1].seen))oldest=[id,s];
+      }
+      if(!oldest)throw Object.assign(new Error('Too many open MCP sessions'),{status:503});
       sessions.delete(oldest[0]);oldest[1].transport.close().catch(()=>{});
     }
-    const holder={identity,info:null,seen:Date.now(),transport:null};
+    const holder={identity,info:null,seen:Date.now(),transport:null,inflight:0,busyAt:0,own:false};
     const transport=new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator:()=>randomUUID(),
       onsessioninitialized:async id=>{
@@ -125,11 +150,13 @@ export function createHttpServer({runtime,oauth,settings,log=console,maxSessions
     // La conversación de ChatGPT, si viene, manda sobre la sesión del transporte.
     const server=runtime.createServer(async ctx=>{
       const id=conversationSessionId(identity,ctx?.mcpReq?._meta);
-      return id?{...await registerSession({sessionId:id,host:identity.host,clientId:identity.clientId}),source:'conversation'}
-        :{...holder.info,source:'transport'};
+      if(id)return {...await registerSession({sessionId:id,host:identity.host,clientId:identity.clientId}),source:'conversation'};
+      if(!holder.info)throw new Error('transport session is not registered');
+      holder.own=true;
+      return {...holder.info,source:'transport'};
     });
     await server.connect(transport);
-    return transport.handleRequest(request,{parsedBody:parsed});
+    return {holder,respond:()=>transport.handleRequest(request,{parsedBody:parsed})};
   }
   async function handleMcp(req,res,identity){
     const url='http://127.0.0.1'+req.url;
@@ -148,10 +175,15 @@ export function createHttpServer({runtime,oauth,settings,log=console,maxSessions
       if(s.identity.host!==identity.host||s.identity.clientId!==identity.clientId)
         return jsonRpcError(res,403,-32002,'Session belongs to another identity');
       s.seen=Date.now();
-      return sendWeb(res,await s.transport.handleRequest(request,{parsedBody:parsed}));
+      // Solo los POST cuentan como llamada en vuelo: un GET de streaming puede
+      // quedar abierto horas y no debe fijar el transporte.
+      if(req.method!=='POST')return sendWeb(res,await s.transport.handleRequest(request,{parsedBody:parsed}));
+      return serve(s,res,()=>s.transport.handleRequest(request,{parsedBody:parsed}));
     }
-    if(req.method==='POST'&&parsed&&!Array.isArray(parsed)&&isInitializeRequest(parsed))
-      return sendWeb(res,await openSession(identity,request,parsed));
+    if(req.method==='POST'&&parsed&&!Array.isArray(parsed)&&isInitializeRequest(parsed)){
+      const {holder,respond}=await openSession(identity,request,parsed);
+      return serve(holder,res,respond);
+    }
     const envelope=parsed&&!Array.isArray(parsed)&&parsed.params?._meta&&
       Object.keys(parsed.params._meta).some(k=>k.startsWith('io.modelcontextprotocol/'));
     if(envelope)return jsonRpcError(res,400,-32602,'Unsupported protocol version: this endpoint serves the sessionful 2025 Streamable HTTP transport; send initialize');

@@ -43,6 +43,13 @@ test('checks: start dispatches or associates on the exact head SHA; status repor
     const outcome={success:true,summary:'implemented',evidence:['x']};
     const blocked=await f.call('zana_complete_unit',{unitId:'code',token:packet.token,leaseGeneration:packet.leaseGeneration,outcome},author);
     assert.match(blocked.error,/CHECKS_NOT_GREEN/);
+    // Con solo checks saltados el error dice el motivo y cabe entero (clean corta en 300).
+    const rojo=f.api.state.checkRuns[sha('a')];
+    f.api.state.checkRuns[sha('a')]=[{name:'check',status:'completed',conclusion:'skipped',head_sha:sha('a')}];
+    const saltado=await f.call('zana_complete_unit',{unitId:'code',token:packet.token,leaseGeneration:packet.leaseGeneration,outcome},author);
+    assert.match(saltado.error,/^CHECKS_NOT_GREEN: .*PENDING.*ninguno lo probó.*run zana_checks_start$/);
+    assert.ok(saltado.error.length<300);
+    f.api.state.checkRuns[sha('a')]=rojo;
     // New push: the runs of that SHA are associated, not re-dispatched.
     f.api.state.push(branch,sha('b'));
     f.api.state.workflowRuns[sha('b')]=[{id:3,head_sha:sha('b'),path:'.github/workflows/zana-checks.yml',status:'in_progress'}];
@@ -83,6 +90,14 @@ test('review request needs an open mission PR with green checks; claim rules',as
     const noPr=await f.authorReady({pull:false});
     assert.match((await f.call('zana_review_request',{missionId:noPr.missionId},noPr.author)).error,/NO_PULL_REQUEST/);
     f.api.state.openPull(noPr.branch);
+    // Un PR en borrador no se puede mergear y la autora no puede sacarlo de ahí.
+    f.api.state.pulls.at(-1).draft=true;
+    assert.match((await f.call('zana_review_request',{missionId:noPr.missionId},noPr.author)).error,/PULL_REQUEST_DRAFT/);
+    f.api.state.pulls.at(-1).draft=false;
+    f.api.state.checkRuns={};
+    // Solo checks saltados: el motivo viaja en el error.
+    f.api.state.checkRuns[sha('a')]=[{name:'check',status:'completed',conclusion:'skipped',head_sha:sha('a')}];
+    assert.match((await f.call('zana_review_request',{missionId:noPr.missionId},noPr.author)).error,/CHECKS_NOT_GREEN.*PENDING.*ninguno lo probó/);
     f.api.state.checkRuns={};
     assert.match((await f.call('zana_review_request',{missionId:noPr.missionId},noPr.author)).error,/CHECKS_NOT_GREEN/);
     f.api.state.green(sha('a'));

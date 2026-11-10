@@ -14,10 +14,11 @@ const PASSWORD='p'.repeat(40);
 const REDIRECT='https://chatgpt.com/connector_platform_oauth_redirect';
 const PUBLIC='https://zanallaima.test/mcp';
 
-async function server(f,{password=PASSWORD,maxSessions,runtime=f.runtime}={}){
+async function server(f,{password=PASSWORD,maxSessions,runtime=f.runtime,idleMs,conversationIdleMs}={}){
   const settings={...httpSettings({ZANA_PUBLIC_HOST:'zanallaima.test',ZANA_OAUTH_DB:join(f.dir,'oauth.sqlite')}),password};
   const oauth=new EmbeddedOAuth({path:settings.oauthDb,resource:PUBLIC,redirectUris:[REDIRECT],password});
-  const http=createHttpServer({runtime,oauth,settings,log:{error(){}},...(maxSessions?{maxSessions}:{})});
+  const http=createHttpServer({runtime,oauth,settings,log:{error(){}},...(maxSessions===undefined?{}:{maxSessions}),
+    ...(idleMs?{idleMs}:{}),...(conversationIdleMs?{conversationIdleMs}:{})});
   await new Promise(ok=>http.listen(0,'127.0.0.1',ok));
   const base='http://127.0.0.1:'+http.address().port;
   return {base,oauth,settings,http,close:async()=>{http.closeAllConnections();await new Promise(ok=>http.close(ok));oauth.close();}};
@@ -371,6 +372,8 @@ test('openai/session: la revisión se separa por conversación aunque cada llama
     const audit=await f.runtime.readAudit({limit:200});
     assert.ok(audit.some(x=>x.tool==='zana_review_claim'&&x.outcome==='OK'&&/^oai-[0-9a-f]{32}$/.test(x.sessionId)));
     assert.equal(JSON.stringify(audit).includes(B),false,'el valor crudo de openai/session no se guarda');
+    // Un error deja su texto (redactado y corto) en el audit.
+    assert.ok(audit.some(x=>x.tool==='zana_review_claim'&&x.outcome==='ERROR'&&/^AUTHOR_SESSION/.test(x.detail?.error??'')));
     // Bordes: 128 caracteres vale; DEL (0x7f) no.
     assert.equal((await call('x'.repeat(128),'zana_session_status')).session.source,'conversation');
     assert.equal((await call('x\x7f','zana_session_status')).session.source,'transport');
@@ -405,4 +408,76 @@ test('transportes: con el tope lleno se cierra el más viejo; si la sesión no s
     assert.equal(r.content[0].text.includes(AUTHOR_TOKEN),false);
     await c.client.close();
   }finally{await t.close();await g.cleanup();}
+});
+
+test('transportes: los de conversación se sueltan a los minutos; uno con una llamada en vuelo no se desaloja',async()=>{
+  const f=await remoteFixture();
+  let s=null,token,release=()=>{};
+  // Sin relojes: se envejece el transporte a mano y se sondea el contador.
+  const holder=c=>s.http.sessions.get(c.transport.sessionId);
+  const until=async cond=>{for(let i=0;i<1000&&!cond();i++)await new Promise(ok=>setTimeout(ok,5));assert.ok(cond(),'condición no alcanzada');};
+  const tools=c=>fetch(s.base+'/mcp',{method:'POST',headers:{authorization:'Bearer '+token,'mcp-session-id':c.transport.sessionId,
+    'content-type':'application/json',accept:'application/json, text/event-stream','mcp-protocol-version':'2025-06-18'},
+    body:JSON.stringify({jsonrpc:'2.0',id:9,method:'tools/list'})});
+  const init=()=>fetch(s.base+'/mcp',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json',
+    accept:'application/json, text/event-stream'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'initialize',
+    params:{protocolVersion:'2025-06-18',capabilities:{},clientInfo:{name:'x',version:'1'}}})});
+  const start=async opts=>{s=await server(f,opts);setEnrollment(s.settings.oauthDb,5);({access_token:token}=await login(s.base));};
+  try{
+    assert.throws(()=>createHttpServer({runtime:f.runtime,oauth:{},settings:{},maxSessions:0}),/maxSessions/);
+    // 1. Ociosos: 5 min si solo sirvió a una conversación o no hizo llamadas; 2 h si es identidad.
+    await start();
+    const conv=await connect(s.base,token),propio=await connect(s.base,token),sinUso=await connect(s.base,token);
+    await conv.client.callTool({name:'zana_session_status',arguments:{},_meta:{'openai/session':'v1/c'}});
+    assert.equal((await propio.call('zana_session_status')).session.source,'transport');
+    for(const c of [conv,propio,sinUso])holder(c).seen-=6*60_000;
+    const otro=await connect(s.base,token);   // abrir uno nuevo barre los ociosos
+    assert.equal((await tools(conv)).status,404,'transporte de conversación ocioso: cerrado');
+    assert.equal((await tools(sinUso)).status,404,'transporte sin llamadas: cerrado');
+    assert.equal((await tools(propio)).status,200,'el que es identidad de su sesión sigue vivo');
+    holder(propio).seen-=2*3600_000+1000;
+    const otro2=await connect(s.base,token);
+    assert.equal((await tools(propio)).status,404,'a las 2 h también se cierra');
+    for(const c of [conv,propio,sinUso,otro,otro2])await c.client.close().catch(()=>{});
+    await s.close();s=null;
+    // 2. Tope lleno: se desaloja primero uno que no es identidad, aunque sea más nuevo.
+    await start({maxSessions:2});
+    const dueno=await connect(s.base,token);
+    await dueno.call('zana_session_status');
+    const nuevo=await connect(s.base,token);
+    const tercero=await connect(s.base,token);
+    assert.deepEqual([(await tools(dueno)).status,(await tools(nuevo)).status],[200,404]);
+    for(const c of [dueno,nuevo,tercero])await c.client.close().catch(()=>{});
+    await s.close();s=null;
+    // 3. Una llamada en vuelo protege a su transporte, por ocioso y por tope.
+    let gate=new Promise(ok=>{release=ok;});
+    const slow={...f.runtime,createServer:()=>f.runtime.createServer(async()=>{await gate;return {sessionId:'sesion-lenta-1',host:'zana-chatgpt',clientId:'c',createdAt:new Date().toISOString()};})};
+    await start({runtime:slow,maxSessions:1});
+    const c1=await connect(s.base,token),h1=holder(c1);
+    const enVuelo=c1.client.callTool({name:'zana_session_status',arguments:{}});
+    enVuelo.catch(()=>{});
+    await until(()=>h1.inflight>0);
+    h1.seen-=3*3600_000;
+    assert.equal((await init()).status,503,'todos ocupados: 503 en vez de cortar la llamada en vuelo');
+    assert.equal(s.http.sessions.has(c1.transport.sessionId),true);
+    release();
+    assert.equal((await enVuelo).structuredContent.session.id,'sesion-lenta-1');
+    await until(()=>h1.inflight===0);
+    assert.equal((await init()).status,200,'ya libre, se desaloja');
+    assert.equal((await tools(c1)).status,404);
+    await c1.client.close().catch(()=>{});
+    // 4. La protección tiene tope: una llamada colgada (cancelada sin cerrar la
+    // conexión) deja de proteger pasado el plazo de una tool.
+    gate=new Promise(ok=>{release=ok;});
+    const c2=await connect(s.base,token),h2=holder(c2);
+    const colgada=c2.client.callTool({name:'zana_session_status',arguments:{}});
+    colgada.catch(()=>{});
+    await until(()=>h2.inflight>0);
+    assert.equal((await init()).status,503);
+    h2.busyAt-=10*60_000;
+    assert.equal((await init()).status,200,'la llamada colgada ya no fija el transporte');
+    assert.equal(s.http.sessions.has(c2.transport.sessionId),false);
+    release();
+    await c2.client.close().catch(()=>{});
+  }finally{release();if(s)await s.close();await f.cleanup();}
 });

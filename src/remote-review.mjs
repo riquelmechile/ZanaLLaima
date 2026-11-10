@@ -8,6 +8,7 @@ import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {canonicalJson} from './actor-assertion.mjs';
 import {missionPull} from './github-delivery.mjs';
 import {recordActivity,sessionRow,sessionWrote,nowIso,writeAudit,missionClients,remoteMission} from './remote-state.mjs';
+import {UNTESTED_REASON} from './checks.mjs';
 import {budgetOf} from './budget.mjs';
 import {redactText,envSecrets} from './redact.mjs';
 import {lineBudget,lineLimit,EXTEND_MAX,excluded,isTestPath,correctionLimit} from './line-budget.mjs';
@@ -31,6 +32,8 @@ export function ticketCode(bytes=randomBytes(16)){
 }
 export class ReviewError extends Error{constructor(code,message){super(code+': '+message);this.code=code;}}
 const fail=(code,message)=>{throw new ReviewError(code,message);};
+// El motivo de un veredicto que no es SUCCESS (por ejemplo, solo checks saltados).
+const why=verdict=>verdict.untested?' ('+UNTESTED_REASON+')':'';
 
 export function validateLens(lens,findings,evidence){
   if(!LENSES.includes(lens))fail('INVALID_LENS','lens must be one of '+LENSES.join(', '));
@@ -253,9 +256,10 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
       const ctx=await missionContext(missionId,session.sessionId,{write:true});
       const pull=await missionPull(github,ctx);
       if(!pull||pull.state!=='open')fail('NO_PULL_REQUEST','open a pull request from '+ctx.branch+' to '+ctx.base+' first');
+      if(pull.draft===true)fail('PULL_REQUEST_DRAFT','el PR #'+pull.number+' está en borrador: no se puede mergear y ZanaLLaima no puede cambiar ese estado; pídele al usuario que lo marque listo para revisión');
       const sha=String(pull.head?.sha??'');
       const verdict=await checks.verdict(ctx.repo,sha);
-      if(verdict.state!=='SUCCESS')fail('CHECKS_NOT_GREEN','checks on '+sha+' are '+verdict.state);
+      if(verdict.state!=='SUCCESS')fail('CHECKS_NOT_GREEN','checks on '+sha+' are '+verdict.state+why(verdict));
       // Size limits before the ticket: the diff cap has no exception; the line
       // budget can only be raised with zana_budget_extend (user's yes).
       const measured=await fetchPages(ctx.repo,ctx.base,sha);
@@ -458,7 +462,7 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
             note:'The pull request head changed; nothing was published. Ask the author for a new ticket.'};
         }
         const verdict=await checks.verdict(t.repo,t.sha);
-        if(verdict.state!=='SUCCESS')fail('CHECKS_NOT_GREEN','checks on '+t.sha+' are '+verdict.state+'; nothing was published');
+        if(verdict.state!=='SUCCESS')fail('CHECKS_NOT_GREEN','checks on '+t.sha+' are '+verdict.state+why(verdict)+'; nothing was published');
         const ordered=LENSES.map(l=>lenses.find(x=>x.lens===l));
         const event=ordered.some(l=>blocking(l.findings))?'REQUEST_CHANGES':'APPROVE';
         const moved=await remoteWrite(db=>{

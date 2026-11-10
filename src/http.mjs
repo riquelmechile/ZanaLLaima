@@ -30,6 +30,8 @@ const IDLE_MS=2*3600*1000;
 // una conversación (o no hizo ninguna llamada) no guarda nada y se suelta rápido.
 // El que es la identidad de su sesión (sin openai/session) conserva las 2 h.
 const CONVERSATION_IDLE_MS=5*60*1000;
+// Margen sobre el plazo de una tool durante el que una llamada en vuelo protege a su transporte.
+const BUSY_MARGIN_MS=15_000;
 
 // ChatGPT abre una sesión MCP nueva en casi cada tool call, así que el
 // Mcp-Session-Id no sirve para reconocer una conversación. Cada tools/call trae
@@ -100,35 +102,42 @@ export function httpSettings(env=process.env){
 }
 
 export function createHttpServer({runtime,oauth,settings,log=console,maxSessions=MAX_SESSIONS,
-  idleMs=IDLE_MS,conversationIdleMs=CONVERSATION_IDLE_MS}){
-  if(!Number.isInteger(maxSessions)||maxSessions<1)throw new Error('maxSessions must be an integer of at least 1');
+  idleMs=IDLE_MS,conversationIdleMs=CONVERSATION_IDLE_MS,busyMs=(runtime?.config?.toolDeadlineMs??45_000)+BUSY_MARGIN_MS}){
+  if(!Number.isInteger(maxSessions)||maxSessions<1)throw new Error('INVALID_MAX_SESSIONS: maxSessions debe ser un entero de al menos 1');
   const sessions=new Map();
+  // En vuelo, pero con tope: si el cliente cancela y deja la conexión abierta el
+  // SDK no cierra ese stream, y sin tope el transporte quedaría fijo para siempre.
+  const busy=(s,now)=>s.inflight>0&&now-s.busyAt<busyMs;
   const secrets=()=>envSecrets();
   function evictIdle(){
     const now=Date.now();
     for(const [id,s] of sessions)
-      if(!s.inflight&&now-s.seen>(s.own?idleMs:conversationIdleMs)){sessions.delete(id);s.transport.close().catch(()=>{});}
+      if(!busy(s,now)&&now-s.seen>(s.own?idleMs:conversationIdleMs)){sessions.delete(id);s.transport.close().catch(()=>{});}
   }
   // Una llamada en vuelo protege a su transporte: cerrarlo cortaría la respuesta
   // de una tool que igual termina en el servidor.
   async function serve(holder,res,respond){
-    holder.inflight++;
+    holder.inflight++;holder.busyAt=Date.now();
     try{await sendWeb(res,await respond());}
     finally{holder.inflight--;holder.seen=Date.now();}
   }
   async function openSession(identity,request,parsed){
     evictIdle();
     // ChatGPT abre un transporte por llamada y no siempre lo cierra: con el tope
-    // lleno se cierra el más viejo que no tenga una llamada en vuelo. La sesión
-    // de ZanaLLaima no vive en el transporte, así que la conversación no pierde
-    // nada. Solo si todos están ocupados se rechaza.
+    // lleno se cierra el más viejo que no tenga una llamada en vuelo, y antes uno
+    // que no sea la identidad de su sesión (ese no pierde nada: la sesión de una
+    // conversación no vive en el transporte). Solo si todos están ocupados se rechaza.
     while(sessions.size>=maxSessions){
+      const now=Date.now();
       let oldest=null;
-      for(const [id,s] of sessions)if(!s.inflight&&(!oldest||s.seen<oldest[1].seen))oldest=[id,s];
+      for(const [id,s] of sessions){
+        if(busy(s,now))continue;
+        if(!oldest||(s.own!==oldest[1].own?!s.own:s.seen<oldest[1].seen))oldest=[id,s];
+      }
       if(!oldest)throw Object.assign(new Error('Too many open MCP sessions'),{status:503});
       sessions.delete(oldest[0]);oldest[1].transport.close().catch(()=>{});
     }
-    const holder={identity,info:null,seen:Date.now(),transport:null,inflight:0,own:false};
+    const holder={identity,info:null,seen:Date.now(),transport:null,inflight:0,busyAt:0,own:false};
     const transport=new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator:()=>randomUUID(),
       onsessioninitialized:async id=>{

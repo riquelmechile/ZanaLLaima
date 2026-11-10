@@ -8,6 +8,8 @@ import {createDeadline,LOG_BUDGET_MS} from './deadline.mjs';
 
 const OK=new Set(['success','neutral','skipped']);
 const MAX_FAILED_LOGS=3;
+// Versión corta para los errores (clean corta en 300 caracteres).
+export const UNTESTED_REASON='solo checks saltados, ninguno lo probó todavía';
 const UNTESTED_NOTE='Solo hay checks saltados o neutros sobre este SHA: ninguno lo probó todavía. Si acabas de llamar zana_checks_start, vuelve a consultar; no hagas un commit de corrección por esto.';
 
 // SUCCESS only with at least one success, every relevant run completed and
@@ -24,7 +26,7 @@ export function evaluateRuns(runs,sha,required=[]){
   const untested=!failed.length&&!pending.length&&relevant.length>0&&!relevant.some(r=>r.conclusion==='success');
   const state=failed.length?'FAILURE':
     pending.length||missing.length||!relevant.length||untested?'PENDING':'SUCCESS';
-  return {state,sha,missing,...(untested?{note:UNTESTED_NOTE}:{}),
+  return {state,sha,missing,...(untested?{untested:true,note:UNTESTED_NOTE}:{}),
     runs:relevant.map(r=>({id:r.id,name:r.name,status:r.status,conclusion:r.conclusion??null,url:r.html_url??null,
       ...(r.details_url?{detailsUrl:r.details_url}:{})}))};
 }

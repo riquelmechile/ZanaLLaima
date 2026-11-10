@@ -3,7 +3,7 @@
 ## [0.7.0] - No publicado
 
 - **Pulido tras las primeras misiones reales:**
-  - **Transportes MCP.** ChatGPT abre uno por tool call y no lo cierra: tres misiones llenaron el tope de 200. El que solo sirvió a una conversación, o no hizo ninguna llamada, se suelta a los 5 minutos; el que es la identidad de su sesión conserva las 2 horas. Un transporte con un POST en vuelo no se desaloja ni por ocioso ni por tope, y solo si todos están ocupados `/mcp` responde 503. `maxSessions` menor que 1 se rechaza al crear el servidor.
+  - **Transportes MCP.** ChatGPT abre uno por tool call y no lo cierra: tres misiones llenaron el tope de 200. El que solo sirvió a una conversación, o no hizo ninguna llamada, se suelta a los 5 minutos; el que es la identidad de su sesión conserva las 2 horas. Un transporte con un POST en vuelo no se desaloja ni por ocioso ni por tope, y solo si todos están ocupados `/mcp` responde 503. Esa protección dura el plazo de una tool más 15 s: una llamada cancelada sin cerrar la conexión deja el stream abierto y, sin ese tope, fijaría el transporte. Con el tope lleno se desaloja primero uno que no sea identidad de su sesión. `maxSessions` menor que 1 se rechaza al crear el servidor.
   - **Borradores.** `create_pull_request` con `draft: true` responde `DRAFT_NOT_ALLOWED`, y `zana_review_request` sobre un PR en borrador responde `PULL_REQUEST_DRAFT`. La autora no puede sacar un PR de borrador y un borrador no se puede mergear.
   - **Nota de checks.** La `note` de "solo checks saltados" llega también a `zana_delivery_status` (`ci.note`) y al texto de `CHECKS_NOT_GREEN`. `zana-odd` pone tope a esa espera.
   - **Audit.** Una tool que falla guarda en `detail.error` los primeros 300 caracteres de su error, ya redactado.

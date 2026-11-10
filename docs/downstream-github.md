@@ -27,7 +27,7 @@ Allowlist y fail closed sobre la lista real de tools (`data/github-mcp-tools.jso
 - **Escritura:** solo con `missionId` de la misión activa remota, desde una sesión que tiene una unidad `RUNNING` de esa misión, que **no** reclamó un ticket de revisión de ella, en el repo de la misión, y:
   - `create_branch`: `branch` = `zana/<missionId>` y `from_branch` = base de la misión;
   - `create_or_update_file`, `delete_file`, `push_files`: `branch` = `zana/<missionId>`, rutas relativas sin `..`, nunca `.github/workflows/**` ni `.git/`;
-  - `create_pull_request`: `head` = rama de la misión, `base` = base de la misión, solo `title` y `body` (`draft: true` se rechaza con `DRAFT_NOT_ALLOWED`: la política no permite cambiar el estado de borrador y un borrador no se puede mergear);
+  - `create_pull_request`: `head` = rama de la misión, `base` = base de la misión, solo `title` y `body`; `draft` solo se acepta ausente o en `false` (cualquier otro valor da `DRAFT_NOT_ALLOWED`: la política no permite cambiar el estado de borrador y un borrador no se puede mergear);
   - `update_pull_request`, `update_pull_request_title`, `update_pull_request_body`: solo título y cuerpo del PR abierto desde la rama de la misión hacia su base;
   - `add_reply_to_pull_request_comment`, `add_issue_comment`: solo texto (sin reacciones) en el PR de la misión. `add_issue_comment` es del toolset `issues`, que no viene en `ZANA_DOWNSTREAM_GITHUB_TOOLSETS` por defecto; para comentar la conversación del PR el operador agrega `issues` (las demás tools de issues quedan `UNCLASSIFIED` y denegadas);
   - `actions_run_trigger`: solo `method: run_workflow` del workflow de checks (`ZANA_CHECKS_WORKFLOW`) con `ref` = rama de la misión y sin `inputs`.

@@ -117,7 +117,7 @@ export function createGitHubPolicy({deps,config,catalog=CATALOG}){
         if(args.base!==ctx.base)return deny('WRONG_BASE','base must be '+ctx.base);
         // Un borrador no se puede mergear y esta política no permite sacarlo de ahí.
         if(args.draft!==undefined&&args.draft!==false)
-          return deny('DRAFT_NOT_ALLOWED','open the pull request ready for review (omit draft): a draft cannot be merged and its draft state cannot be changed through ZanaLLaima');
+          return deny('DRAFT_NOT_ALLOWED','abre el PR listo para revisión (sin draft): un borrador no se puede mergear y ZanaLLaima no puede cambiar ese estado');
         return null;
       }
       case 'pr-edit':

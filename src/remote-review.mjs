@@ -8,6 +8,7 @@ import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {canonicalJson} from './actor-assertion.mjs';
 import {missionPull} from './github-delivery.mjs';
 import {recordActivity,sessionRow,sessionWrote,nowIso,writeAudit,missionClients,remoteMission} from './remote-state.mjs';
+import {UNTESTED_REASON} from './checks.mjs';
 import {budgetOf} from './budget.mjs';
 import {redactText,envSecrets} from './redact.mjs';
 import {lineBudget,lineLimit,EXTEND_MAX,excluded,isTestPath,correctionLimit} from './line-budget.mjs';
@@ -32,7 +33,7 @@ export function ticketCode(bytes=randomBytes(16)){
 export class ReviewError extends Error{constructor(code,message){super(code+': '+message);this.code=code;}}
 const fail=(code,message)=>{throw new ReviewError(code,message);};
 // El motivo de un veredicto que no es SUCCESS (por ejemplo, solo checks saltados).
-const why=verdict=>verdict.note?' ('+verdict.note+')':'';
+const why=verdict=>verdict.untested?' ('+UNTESTED_REASON+')':'';
 
 export function validateLens(lens,findings,evidence){
   if(!LENSES.includes(lens))fail('INVALID_LENS','lens must be one of '+LENSES.join(', '));
@@ -255,7 +256,7 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
       const ctx=await missionContext(missionId,session.sessionId,{write:true});
       const pull=await missionPull(github,ctx);
       if(!pull||pull.state!=='open')fail('NO_PULL_REQUEST','open a pull request from '+ctx.branch+' to '+ctx.base+' first');
-      if(pull.draft===true)fail('PULL_REQUEST_DRAFT','pull request #'+pull.number+' is a draft: it cannot be merged and ZanaLLaima cannot change its draft state; ask the user to mark it ready for review');
+      if(pull.draft===true)fail('PULL_REQUEST_DRAFT','el PR #'+pull.number+' está en borrador: no se puede mergear y ZanaLLaima no puede cambiar ese estado; pídele al usuario que lo marque listo para revisión');
       const sha=String(pull.head?.sha??'');
       const verdict=await checks.verdict(ctx.repo,sha);
       if(verdict.state!=='SUCCESS')fail('CHECKS_NOT_GREEN','checks on '+sha+' are '+verdict.state+why(verdict));

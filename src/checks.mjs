@@ -1,26 +1,30 @@
-// Checks in GitHub Actions (the host has no shell). checksStart dispatches the
-// checks workflow on the head of the mission branch, or associates the runs
-// the push already started, and returns a checkId bound to that SHA without
-// blocking. checksStatus reads the check runs of that exact SHA; on failure it
+// Checks in GitHub Actions (the only evidence, whatever the host can run).
+// checksStart dispatches the checks workflow on the head of the mission branch,
+// or associates the runs that SHA already has, and returns a checkId bound to
+// that SHA without blocking. checksStatus reads the check runs of that exact SHA; on failure it
 // returns the redacted tail of the failed job logs.
 import {randomUUID} from 'node:crypto';
 import {createDeadline,LOG_BUDGET_MS} from './deadline.mjs';
 
 const OK=new Set(['success','neutral','skipped']);
 const MAX_FAILED_LOGS=3;
+const UNTESTED_NOTE='Solo hay checks saltados o neutros sobre este SHA: ninguno lo probó todavía. Si acabas de llamar zana_checks_start, vuelve a consultar; no hagas un commit de corrección por esto.';
 
 // SUCCESS only with at least one success, every relevant run completed and
-// none failed. Required names, when configured, must all be present.
+// none failed. Required names, when configured, must all be present. Si solo
+// hay checks saltados o neutros, nadie probó el SHA: es PENDING con una nota,
+// no FAILURE (el CI propio del repo, saltado en zana/**, aparece antes que la
+// corrida real).
 export function evaluateRuns(runs,sha,required=[]){
   const exact=runs.filter(r=>!r.head_sha||r.head_sha===sha);
   const relevant=required.length?exact.filter(r=>required.includes(r.name)):exact;
   const missing=required.filter(n=>!exact.some(r=>r.name===n));
   const failed=relevant.filter(r=>r.status==='completed'&&!OK.has(r.conclusion));
   const pending=relevant.filter(r=>r.status!=='completed');
+  const untested=!failed.length&&!pending.length&&relevant.length>0&&!relevant.some(r=>r.conclusion==='success');
   const state=failed.length?'FAILURE':
-    pending.length||missing.length||!relevant.length?'PENDING':
-    relevant.some(r=>r.conclusion==='success')?'SUCCESS':'FAILURE';
-  return {state,sha,missing,
+    pending.length||missing.length||!relevant.length||untested?'PENDING':'SUCCESS';
+  return {state,sha,missing,...(untested?{note:UNTESTED_NOTE}:{}),
     runs:relevant.map(r=>({id:r.id,name:r.name,status:r.status,conclusion:r.conclusion??null,url:r.html_url??null,
       ...(r.details_url?{detailsUrl:r.details_url}:{})}))};
 }
@@ -65,7 +69,7 @@ export function createChecks({github,config,remoteWrite,remoteRead,missionContex
       return {checkId,missionId,sha,branch:ctx.branch,workflow,dispatched,
         associatedRuns:runs.map(r=>({id:r.id,status:r.status,conclusion:r.conclusion??null,url:r.html_url??null})),
         note:dispatched?'Dispatched '+workflow+' on '+ctx.branch+'; it runs on the branch head at dispatch time. Status is always read for this exact SHA.':
-          'Associated the runs the push already started for this SHA.'};
+          'Associated the runs this SHA already has.'};
     },
     async status(checkId){
       const row=await remoteRead(db=>db?.prepare('SELECT * FROM remote_checks WHERE check_id=?').get(checkId)??null);

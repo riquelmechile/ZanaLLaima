@@ -115,6 +115,9 @@ export function createGitHubPolicy({deps,config,catalog=CATALOG}){
         if(branch!==ctx.branch||(owner!==null&&!same(owner,ctx.repo.split('/')[0])))
           return deny('OUTSIDE_MISSION_BRANCH','head must be exactly '+ctx.branch);
         if(args.base!==ctx.base)return deny('WRONG_BASE','base must be '+ctx.base);
+        // Un borrador no se puede mergear y esta política no permite sacarlo de ahí.
+        if(args.draft!==undefined&&args.draft!==false)
+          return deny('DRAFT_NOT_ALLOWED','open the pull request ready for review (omit draft): a draft cannot be merged and its draft state cannot be changed through ZanaLLaima');
         return null;
       }
       case 'pr-edit':

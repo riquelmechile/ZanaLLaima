@@ -90,7 +90,7 @@ export async function deliveryStatus({github,config,ctx,openBlockingTickets=[],c
   const authority=ticketAuthority(currentTicket,head,review);
   if(!authority.ok)blockers.push('Current review ticket: '+authority.reason);
   return {missionId:ctx.missionId,repo:ctx.repo,pullNumber:pull.number,pullUrl:pull.html_url??null,headSha:head,
-    review,currentTicket:authority.ticket??null,ci:{state:ci.state,runs:ci.runs,missing:ci.missing},fourR,mergeable,
+    review,currentTicket:authority.ticket??null,ci:{state:ci.state,runs:ci.runs,missing:ci.missing,...(ci.note?{note:ci.note}:{})},fourR,mergeable,
     mergeableState:pull.mergeable_state??null,openBlockingTickets,ready:blockers.length===0,blockers,
     ...(lineBudget?{lineBudget}:{}),
     ...(deadline.partial.length?{partial:deadline.partial}:{}),readOnly:true};

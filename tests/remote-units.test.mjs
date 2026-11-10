@@ -164,6 +164,8 @@ test('delivery helpers: missing PR, unreadable evidence, dismissed review, merge
     statuses:async()=>[{context:'zana/4r',state:'success',creator:{login:'rev'}}],
     pullReviews:async()=>[{user:{login:'rev'},state:'APPROVED',commit_id:'h',id:1}]});
   const currentTicket={ticket_id:'t',state:'FINALIZED',verdict:'APPROVE',sha:'h',github_review_id:1};
+  const soloSkip=await deliveryStatus({github:{...ready,checkRuns:async()=>[{name:'t',status:'completed',conclusion:'skipped',head_sha:'h'}]},config,ctx,openBlockingTickets:[],currentTicket});
+  assert.deepEqual([soloSkip.ci.state,/ninguno lo probó/.test(soloSkip.ci.note)],['PENDING',true]);
   // Without the current ticket of the mission the merge is never ready (fail closed).
   assert.equal((await mergeMission({github:{...ready,merge:async()=>({merged:true})},config,ctx,openBlockingTickets:[]})).state,'NOT_READY');
   assert.equal((await mergeMission({github:{...ready,merge:async()=>({merged:false,message:'nope'})},config,ctx,openBlockingTickets:[],currentTicket})).state,'MERGE_REFUSED');

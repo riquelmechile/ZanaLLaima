@@ -14,10 +14,11 @@ const PASSWORD='p'.repeat(40);
 const REDIRECT='https://chatgpt.com/connector_platform_oauth_redirect';
 const PUBLIC='https://zanallaima.test/mcp';
 
-async function server(f,{password=PASSWORD,maxSessions,runtime=f.runtime}={}){
+async function server(f,{password=PASSWORD,maxSessions,runtime=f.runtime,idleMs,conversationIdleMs}={}){
   const settings={...httpSettings({ZANA_PUBLIC_HOST:'zanallaima.test',ZANA_OAUTH_DB:join(f.dir,'oauth.sqlite')}),password};
   const oauth=new EmbeddedOAuth({path:settings.oauthDb,resource:PUBLIC,redirectUris:[REDIRECT],password});
-  const http=createHttpServer({runtime,oauth,settings,log:{error(){}},...(maxSessions?{maxSessions}:{})});
+  const http=createHttpServer({runtime,oauth,settings,log:{error(){}},...(maxSessions===undefined?{}:{maxSessions}),
+    ...(idleMs?{idleMs}:{}),...(conversationIdleMs?{conversationIdleMs}:{})});
   await new Promise(ok=>http.listen(0,'127.0.0.1',ok));
   const base='http://127.0.0.1:'+http.address().port;
   return {base,oauth,settings,http,close:async()=>{http.closeAllConnections();await new Promise(ok=>http.close(ok));oauth.close();}};
@@ -371,6 +372,8 @@ test('openai/session: la revisión se separa por conversación aunque cada llama
     const audit=await f.runtime.readAudit({limit:200});
     assert.ok(audit.some(x=>x.tool==='zana_review_claim'&&x.outcome==='OK'&&/^oai-[0-9a-f]{32}$/.test(x.sessionId)));
     assert.equal(JSON.stringify(audit).includes(B),false,'el valor crudo de openai/session no se guarda');
+    // Un error deja su texto (redactado y corto) en el audit.
+    assert.ok(audit.some(x=>x.tool==='zana_review_claim'&&x.outcome==='ERROR'&&/^AUTHOR_SESSION/.test(x.detail?.error??'')));
     // Bordes: 128 caracteres vale; DEL (0x7f) no.
     assert.equal((await call('x'.repeat(128),'zana_session_status')).session.source,'conversation');
     assert.equal((await call('x\x7f','zana_session_status')).session.source,'transport');
@@ -405,4 +408,50 @@ test('transportes: con el tope lleno se cierra el más viejo; si la sesión no s
     assert.equal(r.content[0].text.includes(AUTHOR_TOKEN),false);
     await c.client.close();
   }finally{await t.close();await g.cleanup();}
+});
+
+test('transportes: los de conversación se sueltan a los minutos; uno con una llamada en vuelo no se desaloja',async()=>{
+  const f=await remoteFixture();
+  let s=null,release=()=>{};
+  try{
+  assert.throws(()=>createHttpServer({runtime:f.runtime,oauth:{},settings:{},maxSessions:0}),/maxSessions/);
+  const tools=c=>fetch(s.base+'/mcp',{method:'POST',headers:{authorization:'Bearer '+token,'mcp-session-id':c.transport.sessionId,
+    'content-type':'application/json',accept:'application/json, text/event-stream','mcp-protocol-version':'2025-06-18'},
+    body:JSON.stringify({jsonrpc:'2.0',id:9,method:'tools/list'})});
+  s=await server(f,{conversationIdleMs:40,idleMs:60_000});
+  let token;
+  try{
+    setEnrollment(s.settings.oauthDb,5);
+    ({access_token:token}=await login(s.base));
+    // conv: solo llamadas con openai/session. propio: su identidad es el transporte.
+    const conv=await connect(s.base,token),propio=await connect(s.base,token),sinUso=await connect(s.base,token);
+    await conv.client.callTool({name:'zana_session_status',arguments:{},_meta:{'openai/session':'v1/c'}});
+    assert.equal((await propio.call('zana_session_status')).session.source,'transport');
+    await new Promise(ok=>setTimeout(ok,90));
+    const otro=await connect(s.base,token);   // abrir uno nuevo barre los ociosos
+    assert.equal((await tools(conv)).status,404,'transporte de conversación ocioso: cerrado');
+    assert.equal((await tools(sinUso)).status,404,'transporte sin llamadas: cerrado');
+    assert.equal((await tools(propio)).status,200,'el que es identidad de su sesión sigue vivo');
+    for(const c of [conv,propio,sinUso,otro])await c.client.close().catch(()=>{});
+  }finally{await s.close();s=null;}
+  // Tope lleno con una llamada en vuelo: no se desaloja, el nuevo recibe 503.
+  const gate=new Promise(ok=>{release=ok;});
+  const slow={...f.runtime,createServer:()=>f.runtime.createServer(async()=>{await gate;return {sessionId:'sesion-lenta-1',host:'zana-chatgpt',clientId:'c',createdAt:new Date().toISOString()};})};
+  s=await server(f,{runtime:slow,maxSessions:1});
+    setEnrollment(s.settings.oauthDb,5);
+    ({access_token:token}=await login(s.base));
+    const c1=await connect(s.base,token);
+    const enVuelo=c1.client.callTool({name:'zana_session_status',arguments:{}});
+    enVuelo.catch(()=>{});
+    await new Promise(ok=>setTimeout(ok,60));
+    const init=()=>fetch(s.base+'/mcp',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json',
+      accept:'application/json, text/event-stream'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'initialize',
+      params:{protocolVersion:'2025-06-18',capabilities:{},clientInfo:{name:'x',version:'1'}}})});
+    assert.equal((await init()).status,503,'todos ocupados: 503 en vez de cortar la llamada en vuelo');
+    release();
+    assert.equal((await enVuelo).structuredContent.session.id,'sesion-lenta-1');
+    assert.equal((await init()).status,200,'ya libre, el más viejo se desaloja');
+    assert.equal((await tools(c1)).status,404);
+    await c1.client.close().catch(()=>{});
+  }finally{release();if(s)await s.close();await f.cleanup();}
 });

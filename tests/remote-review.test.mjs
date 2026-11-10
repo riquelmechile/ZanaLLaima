@@ -83,6 +83,14 @@ test('review request needs an open mission PR with green checks; claim rules',as
     const noPr=await f.authorReady({pull:false});
     assert.match((await f.call('zana_review_request',{missionId:noPr.missionId},noPr.author)).error,/NO_PULL_REQUEST/);
     f.api.state.openPull(noPr.branch);
+    // Un PR en borrador no se puede mergear y la autora no puede sacarlo de ahí.
+    f.api.state.pulls.at(-1).draft=true;
+    assert.match((await f.call('zana_review_request',{missionId:noPr.missionId},noPr.author)).error,/PULL_REQUEST_DRAFT/);
+    f.api.state.pulls.at(-1).draft=false;
+    f.api.state.checkRuns={};
+    // Solo checks saltados: el motivo viaja en el error.
+    f.api.state.checkRuns[sha('a')]=[{name:'check',status:'completed',conclusion:'skipped',head_sha:sha('a')}];
+    assert.match((await f.call('zana_review_request',{missionId:noPr.missionId},noPr.author)).error,/CHECKS_NOT_GREEN.*PENDING.*ninguno lo probó/);
     f.api.state.checkRuns={};
     assert.match((await f.call('zana_review_request',{missionId:noPr.missionId},noPr.author)).error,/CHECKS_NOT_GREEN/);
     f.api.state.green(sha('a'));

@@ -86,6 +86,7 @@ test('mission-branch writes: allowed with a RUNNING unit, refused outside the br
       ['create_pull_request',{owner:'o',repo:'r',title:'t',head:'main',base:'main'},/OUTSIDE_MISSION_BRANCH/],
       ['create_pull_request',{owner:'o',repo:'r',title:'t',head:branch,base:'dev'},/WRONG_BASE/],
       ['create_pull_request',{owner:'o',repo:'r',title:'t',head:branch,base:'main',reviewers:['x']},/FIELD_NOT_ALLOWED/],
+      ['create_pull_request',{owner:'o',repo:'r',title:'t',head:branch,base:'main',draft:true},/DRAFT_NOT_ALLOWED/],
       ['actions_run_trigger',{owner:'o',repo:'r',method:'cancel_workflow_run',run_id:1},/FIELD_NOT_ALLOWED: actions_run_trigger does not accept run_id/],
       ['actions_run_trigger',{owner:'o',repo:'r',method:'cancel_workflow_run'},/METHOD_NOT_ALLOWED/],
       ['actions_run_trigger',{owner:'o',repo:'r',method:'run_workflow',workflow_id:'ci.yml',ref:branch},/WORKFLOW_NOT_ALLOWED/],

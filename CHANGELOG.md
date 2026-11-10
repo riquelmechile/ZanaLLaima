@@ -2,7 +2,7 @@
 
 ## [Sin publicar]
 
-- **Lecturas de archivos sin aviso de "materializar archivos".** El GitHub MCP devuelve cada archivo como recurso embebido, ChatGPT lo trata como archivo adjunto y pedía aprobación en cada lectura (39 avisos en una tarde de trabajo real). Ahora un recurso de texto, o un enlace a recurso, llega como texto: una línea con su origen y luego el contenido exacto (`inlineResources`). Un binario queda como llegó.
+- **Lecturas de archivos sin aviso de "materializar archivos".** El GitHub MCP devuelve cada archivo como recurso embebido, ChatGPT lo trata como archivo adjunto y pedía aprobación en cada lectura (39 avisos en una tarde de trabajo real). Ahora un recurso de texto llega como texto: una línea con su origen y luego el contenido exacto (`inlineResources`). Un enlace a recurso (lo que devuelve el GitHub MCP para archivos grandes) no trae contenido y queda en una línea con su origen y su nombre. Un binario queda como llegó.
 
 ## [0.7.0] - 2026-11-10
 

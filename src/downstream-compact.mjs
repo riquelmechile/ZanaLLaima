@@ -1,3 +1,6 @@
+// Forma de las respuestas del downstream de GitHub hacia el anfitrión: las
+// escrituras exitosas salen compactas y los recursos de texto salen como texto
+// (inlineResources, al final).
 // Compact answers for successful GitHub downstream writes, so the chat shows
 // what changed (paths, SHA, link) instead of the whole GitHub payload. Any
 // shape this module does not recognise is returned untouched: nothing is
@@ -61,21 +64,26 @@ export function compactWrite(tool,args,result){
 // GitHub MCP) y un enlace a recurso como archivos adjuntos, y le pide al
 // usuario aprobación para materializarlos en cada lectura. Un recurso de texto
 // se entrega como texto: una línea con su origen y luego el contenido exacto.
+// Un enlace no trae contenido: queda en una línea con su origen y su nombre.
 // Un binario no se puede dar como texto y queda como llegó; cualquier forma
 // que no se reconoce también.
-const origin=(label,r)=>label+' '+String(r.uri??'')+(typeof r.mimeType==='string'&&r.mimeType?' ('+r.mimeType+')':'');
+// La línea de origen la arma el servidor con datos del downstream: va en una
+// sola línea y acotada, para que un nombre de archivo no pueda falsificar otra.
+const oneLine=v=>typeof v==='string'?v.replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g,' ').trim().slice(0,300):'';
+const origin=(label,r)=>[label,oneLine(r.uri),oneLine(r.mimeType)&&'('+oneLine(r.mimeType)+')'].filter(Boolean).join(' ');
 export function inlineResources(result){
   if(!result||!Array.isArray(result.content))return result;
   let changed=false;
   const content=result.content.flatMap(item=>{
     if(item?.type==='resource_link'&&typeof item.uri==='string'){
       changed=true;
-      return [{type:'text',text:origin('resource link',item)+(typeof item.name==='string'?' '+item.name:'')}];
+      return [{type:'text',text:[origin('resource link',item),oneLine(item.name)].filter(Boolean).join(' ')}];
     }
     const r=item?.type==='resource'?item.resource:null;
     if(!r||typeof r!=='object'||typeof r.text!=='string'||r.blob!==undefined)return [item];
     changed=true;
-    return [{type:'text',text:origin('resource',r)},{type:'text',text:r.text}];
+    // Un archivo vacío no lleva bloque de contenido: lo dice la línea de origen.
+    return r.text?[{type:'text',text:origin('resource',r)},{type:'text',text:r.text}]:[{type:'text',text:origin('resource',r)+' [empty]'}];
   });
   return changed?{...result,content}:result;
 }

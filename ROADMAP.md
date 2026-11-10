@@ -1,15 +1,27 @@
-## Candidato 0.6.0 (sin publicar): MCP remoto para la app de ChatGPT
+## 0.7.0 (publicada el 9 nov 2026): MCP remoto para la app de ChatGPT, en uso real
 
-**Cambio de rumbo.** ZanaLLaima deja de ser solo un MCP stdio que vigila un worktree y pasa a ser un **MCP remoto** en el servidor del operador, conectado como conector de la app de ChatGPT. La verdad es el SHA en GitHub y los checks de Actions; GPT escribe por el downstream de GitHub solo en `zana/<missionId>`; la revisión la hace el mismo GPT en una conversación nueva y la publica la cuenta revisora.
+**Cambio de rumbo.** ZanaLLaima dejó de ser solo un MCP stdio que vigila un worktree y pasó a ser un **MCP remoto** en el servidor del operador, conectado como conector de la app de ChatGPT. La verdad es el SHA en GitHub y los checks de Actions; GPT escribe por el downstream de GitHub solo en `zana/<missionId>`; la revisión la hace el mismo GPT en una conversación nueva y la publica la cuenta revisora.
 
-- [x] **ZL-020 (pasa a esta fase).** Streamable HTTP con sesiones, OAuth embebido con registro cerrado por ventana de alta, `/health`, `deploy/` y `docs/deploy-remote.md`.
-- [x] Downstream del GitHub MCP oficial (gateway copiado de Panter-ai) y política allowlist propia sobre la lista real de tools v2.1.0 (`docs/downstream-github.md`).
+Hecho en esta versión:
+
+- [x] **ZL-020.** Streamable HTTP con sesiones, OAuth embebido con registro cerrado por ventana de alta, `/health`, `deploy/` y `docs/deploy-remote.md`.
+- [x] Downstream del GitHub MCP oficial y política allowlist propia sobre la lista real de tools v2.1.0 (`docs/downstream-github.md`).
 - [x] Checks en Actions (`zana_checks_*`) y unidad de código que no se completa sin check verde sobre su SHA final.
-- [x] Skills servidas por MCP (`zana-odd`, `zana-4r`, `review-*`).
+- [x] Skills servidas por MCP (`zana-odd`, `zana-4r`, `zana-pr`, `review-*`).
 - [x] Ticket de revisión, sesión revisora en solo lectura, publicación con `ZANA_REVIEWER_TOKEN`, `zana/4r`, `zana_delivery_status` y `zana_merge` guardado por SHA.
-- [x] Auditoría por llamada con HMAC de argumentos y redacción de tokens.
-- [ ] **ZL-018: E2E real con la app de ChatGPT** (`docs/host-e2e-remote.md`). Lo corre el operador después del deploy; incluye verificar que ChatGPT abre una sesión MCP nueva por conversación. Hasta entonces la separación de sesiones queda sin observar.
-- Pendiente de esta fase: las skills `review-*` se adaptaron desde gentle-shell (vía Panter-ai) porque la copia de Xanxito no estaba accesible al escribirlas; comparar con Xanxito y alinear si difieren.
+- [x] Auditoría por llamada con HMAC de argumentos, redacción de tokens y el error de la tool cuando falla.
+- [x] Límites de tamaño del PR, hallazgos con origen causal, rondas de corrección acotadas y memoria por proyecto con puntero en el repo.
+- [x] **ZL-018: E2E real con la app de ChatGPT** (`docs/host-e2e-remote.md`), corrido el 9 nov 2026. Mostró que ChatGPT abre una sesión MCP nueva por tool call: la sesión pasó a seguir a la conversación (`_meta["openai/session"]`). Quedan sin observar en vivo los casos negativos de esa guía.
+- [x] Una corrida de Actions por SHA terminado y transportes MCP que se sueltan a los minutos.
+
+Lo que sigue:
+
+- [ ] Casos negativos del E2E en vivo (la revisora intenta escribir, la autora reclama su ticket, push después del ticket, merge por el downstream).
+- [ ] Workflow de checks configurable por repo (hoy `ZANA_CHECKS_WORKFLOW` y `ZANA_REQUIRED_CHECKS` son globales).
+- [ ] Escritura por archivo adjunto (`openai/fileParams`) para cambios grandes sin pasar el contenido por el chat.
+- [ ] Panel MCP Apps con el estado de la misión y la memoria del proyecto.
+- [ ] Cerco de merge entre procesos: solo si se corre más de un proceso.
+- Pendiente menor: las skills `review-*` se adaptaron desde gentle-shell; compararlas con la copia de referencia y alinear si difieren.
 
 ### Congelado por el cambio de rumbo
 
@@ -31,6 +43,7 @@ El código queda y sigue probado en stdio, pero **no se toca más**:
 - 0.5.0: verificación Git del worktree y diario SQLite por UUID.
 - 0.5.1: gramática autoignore exacta, adopt con fusión de revocaciones y repos anidados fail-closed.
 - 0.5.2: presupuesto monótono en restore y adopt (`CONSUMED_BUDGET`) y congelamiento de la línea local.
+- 0.6.0: MCP remoto para la app de ChatGPT. No se publicó por separado: quedó dentro de la versión vigente.
 <!-- HISTORICAL_VERSIONS_END -->
 
 # Roadmap técnico de ZanaLLaima

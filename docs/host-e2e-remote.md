@@ -2,6 +2,9 @@
 
 **La corre el operador después del deploy** (`docs/deploy-remote.md`). Ningún resultado de esta guía se puede afirmar desde los tests locales: los tests usan un MCP y una API de GitHub falsos. El reporte va en `examples/host-e2e-remote.json` y lleva `assurance: OPERATOR_OBSERVED` **solo** con links al PR, a la review, a los check runs y el extracto de auditoría.
 
+
+**Resultado registrado (9 nov 2026):** el camino feliz y una ronda de corrección se observaron sobre un deploy real; los casos negativos de la sección 3 todavía no se corrieron en vivo. Por eso `examples/host-e2e-remote.json` dice `PARTIALLY_OBSERVED`.
+
 ## 0. Preparación
 
 1. Repo sandbox, por ejemplo `<owner>/zanallaima-sandbox`, en `ZANA_GITHUB_REPOS`, con `main` protegida (checks y review requeridos) y el workflow de `docs/checks-workflow.md`.

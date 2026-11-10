@@ -114,6 +114,11 @@ test('Streamable HTTP sessions: two conversations get two sessions; the reviewer
     assert.equal(listed.zana_ds_github_read.readOnlyHint,true);
     assert.equal(listed.zana_start_batch.destructiveHint,false);
     assert.equal(listed.zana_merge.destructiveHint,true);
+    // Por MCP real: la tool de lectura no acepta missionId ni una escritura.
+    const sneaky=await a.client.callTool({name:'zana_ds_github_read',arguments:{operation:'get_file_contents',missionId:'m-12345678',
+      arguments:{owner:'o',repo:'r',path:'README.md'}}}).catch(error=>({isError:true,content:[{text:String(error?.message)}]}));
+    assert.equal(sneaky.isError,true);
+    assert.match((await a.call('zana_ds_github_read',{operation:'push_files',arguments:{owner:'o',repo:'r'}})).error,/NOT_A_READ/);
     for(const local of ['zana_apply_write','zana_review_open','zana_review_submit','zana_storage_status','zana_permission_status'])
       assert.equal(tools.includes(local),false,local+' is stdio-only');
     assert.match(a.client.getInstructions(),/zana-odd/);

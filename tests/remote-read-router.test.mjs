@@ -35,10 +35,9 @@ test('zana_ds_github_read: nada que no sea lectura sale hacia GitHub',async()=>{
       assert.match(errText(await read(f,name,{},author)),/NOT_A_READ/,name);
     // El catálogo dice lectura pero el servidor ya no la declara de solo lectura: la política la niega.
     assert.match(errText(await read(f,'get_me',{},author)),/CLASSIFICATION_DRIFT/);
-    // missionId no es parte de la tool de lectura.
-    assert.ok(errText(await f.call('zana_ds_github_read',{operation:'get_file_contents',missionId,
-      arguments:{owner:'o',repo:'r',path:'README.md'}},author)));
     assert.equal(f.ds.calls.length,before,'ninguna llamada llegó al downstream');
+    const audit=await f.runtime.readAudit({limit:200});
+    assert.ok(audit.some(a=>a.tool==='github.push_files'&&a.outcome==='REFUSED'&&a.sessionId===author.sessionId));
   }finally{await f.cleanup();}
 });
 

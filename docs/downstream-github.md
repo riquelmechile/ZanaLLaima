@@ -3,11 +3,22 @@
 ZanaLLaima monta el **GitHub MCP oficial** (`https://api.githubcopilot.com/mcp/`, toolsets `context,repos,pull_requests,git,actions` enviados en la cabecera `X-MCP-Toolsets`) detrás de un gateway copiado de Panter-ai (`src/downstream.mjs`, procedencia `panter-ai@1a99048`, `src/core/downstream.ts` y `docs/DOWNSTREAM_MCP.md`). El host lo usa con un solo router:
 
 ```
-zana_ds_github { "operation": "index" }
-zana_ds_github { "operation": "index", "arguments": { "operation": "push_files" } }
-zana_ds_github { "operation": "get_file_contents", "arguments": { "owner": "o", "repo": "r", "path": "README.md" } }
+zana_ds_github_read { "operation": "index" }
+zana_ds_github_read { "operation": "index", "arguments": { "operation": "push_files" } }
+zana_ds_github_read { "operation": "get_file_contents", "arguments": { "owner": "o", "repo": "r", "path": "README.md" } }
 zana_ds_github { "operation": "push_files", "missionId": "<id>", "arguments": { "owner": "o", "repo": "r", "branch": "zana/<id>", "files": [ ... ], "message": "..." } }
 ```
+
+## Dos routers y las confirmaciones del anfitrión
+
+ChatGPT pide confirmación al usuario antes de cada tool que escribe, y no la pide en las que declaran `readOnlyHint: true`. Por eso hay dos routers:
+
+- **`zana_ds_github_read`** (`readOnlyHint: true`): `index` y las tools que el catálogo clasifica `read`. Cualquier otra operación responde `NOT_A_READ`, queda en la auditoría como `REFUSED` y no llega a GitHub. La política vuelve a exigir que el downstream siga declarando la tool de solo lectura (`CLASSIFICATION_DRIFT`).
+- **`zana_ds_github`**: las escrituras, con `missionId`. Sigue aceptando lecturas, pero con confirmación del anfitrión.
+
+Las anotaciones de las demás tools están en `remoteAnnotations` (`src/remote.mjs`): una escritura se declara destructiva salvo que esté en la lista `ADDITIVE` (solo anota estado propio o agrega algo sin pisar ni borrar). Quedan destructivas `zana_ds_github`, `zana_merge`, `zana_mission_cancel` y `zana_budget_extend`. Las anotaciones solo cambian cuánto pregunta el anfitrión: no son un control de seguridad, y todas las reglas de abajo las aplica el servidor en cada llamada.
+
+Que el usuario marque "recordar para esta conversación" es decisión suya en ChatGPT; el servidor no puede quitar la confirmación de una escritura.
 
 ## Gateway (contrato heredado de Panter)
 

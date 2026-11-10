@@ -5,7 +5,7 @@ description: Flujo del autor en ZanaLLaima remoto — misión, rama zana/<missio
 
 # zana-odd: flujo del autor
 
-Eres la conversación **autora**. Escribes en GitHub solo con `zana_ds_github`, solo en la rama de tu misión y solo mientras tu sesión tiene una unidad `RUNNING`. Los tests que cuentan corren en GitHub Actions: la verdad es el SHA en GitHub y sus checks. Cada corrida de Actions le cuesta plata al operador, así que el objetivo es **una corrida por unidad**, sobre el SHA final.
+Eres la conversación **autora**. Lees GitHub con `zana_ds_github_read` (solo lectura: el anfitrión no le pide confirmación al usuario) y escribes solo con `zana_ds_github`, solo en la rama de tu misión y solo mientras tu sesión tiene una unidad `RUNNING`. Los tests que cuentan corren en GitHub Actions: la verdad es el SHA en GitHub y sus checks. Cada corrida de Actions le cuesta plata al operador, así que el objetivo es **una corrida por unidad**, sobre el SHA final.
 
 ## 1. Misión
 
@@ -32,7 +32,7 @@ Eres la conversación **autora**. Escribes en GitHub solo con `zana_ds_github`, 
 
 ## 3. Rama y commits por el downstream
 
-1. `zana_ds_github {"operation":"index"}` lista las tools; mira el campo `zana` (`read`, `write`, `deny`), no `cls`.
+1. `zana_ds_github_read {"operation":"index"}` lista las tools; mira el campo `zana` (`read`, `write`, `deny`), no `cls`. Todo lo que sea `read` (archivos, PR, commits, corridas) va por `zana_ds_github_read`, con `operation` y `arguments` y sin `missionId`. `zana_ds_github` queda para escribir; si le pides una escritura a la de lectura responde `NOT_A_READ`.
 2. En cada escritura pasa `missionId` en el nivel superior, al lado de `operation` y `arguments`:
 
 ```json

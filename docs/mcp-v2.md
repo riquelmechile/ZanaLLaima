@@ -4,7 +4,7 @@
 
 Esta implementación reemplaza el transporte MCP `stdio` construido manualmente por el **SDK oficial TypeScript v2**, fijado en `@modelcontextprotocol/server@2.4.0`. Usa `@modelcontextprotocol/client@2.4.0` en las pruebas y `zod@4.6.7` para definir y validar los argumentos. El modo **stdio** es local y sin HTTP. El modo **remoto** (Streamable HTTP + OAuth, ver abajo) sirve a la app de ChatGPT. Ninguno llama a proveedores de inferencia.
 
-El SDK soporta la especificación MCP 2026-07-28 y negociación con clientes compatibles con versiones anteriores. En stdio el catálogo tiene **24 herramientas**, incluyendo `zana_capability_status`; en remoto tiene 34 (tabla abajo). La conexión real con ChatGPT la ejecuta el operador (`docs/host-e2e-remote.md`).
+El SDK soporta la especificación MCP 2026-07-28 y negociación con clientes compatibles con versiones anteriores. En stdio el catálogo tiene **24 herramientas**, incluyendo `zana_capability_status`; en remoto tiene 35 (tabla abajo). La conexión real con ChatGPT la ejecuta el operador (`docs/host-e2e-remote.md`).
 
 Fuentes normativas del SDK:
 - https://ts.sdk.modelcontextprotocol.io/v2/
@@ -84,9 +84,10 @@ Desde el 9 nov 2026 hay una prueba con una cuenta ChatGPT real para el camino fe
 | `zana_mission_archive` | no | sí | Archiva una misión `CLOSED` o `CANCELLED` para iniciar otra |
 | `zana_delivery_status` | no | sí | Solo lectura; la autoridad es el ticket vigente de la misión |
 | `zana_merge` | no | sí | Solo con todo verde sobre un mismo head; `ZANA_MERGE_ENABLED=false` lo apaga |
-| `zana_ds_github` | no | sí | Router del GitHub MCP oficial, ver `docs/downstream-github.md` |
+| `zana_ds_github` | no | sí | Router de escritura del GitHub MCP oficial, ver `docs/downstream-github.md` |
+| `zana_ds_github_read` | no | sí | Router de solo lectura (`readOnlyHint`): `index` y las tools clasificadas `read`; lo demás responde `NOT_A_READ` |
 
-Total: 24 en stdio y 34 en remoto. La restauración, la adopción de cuarentenas, la ventana de alta OAuth, la revocación de clientes, la auditoría (`remote-audit`), la salud con detalle (`remote-health`), los tickets (`remote-tickets`, `remote-ticket-abandon`) y el merge del operador (`remote-merge`) son solo CLI en el servidor.
+Total: 24 en stdio y 35 en remoto. La restauración, la adopción de cuarentenas, la ventana de alta OAuth, la revocación de clientes, la auditoría (`remote-audit`), la salud con detalle (`remote-health`), los tickets (`remote-tickets`, `remote-ticket-abandon`) y el merge del operador (`remote-merge`) son solo CLI en el servidor.
 
 ### Plazos
 

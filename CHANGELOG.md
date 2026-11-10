@@ -1,5 +1,13 @@
 # Registro de cambios
 
+## [Sin publicar]
+
+- **Menos confirmaciones en ChatGPT.** ChatGPT pide confirmación antes de cada tool que escribe, y las lecturas de GitHub pasaban por el mismo router que las escrituras, así que cada archivo leído pedía permiso.
+  - Tool nueva `zana_ds_github_read`, declarada de solo lectura: `index` y las tools clasificadas `read`. Cualquier otra operación responde `NOT_A_READ`, se audita y no llega a GitHub. `zana_ds_github` queda para escribir.
+  - Las tools que solo anotan estado propio o agregan algo sin pisar ni borrar dejan de declararse destructivas (`remoteAnnotations`). Siguen destructivas `zana_ds_github`, `zana_merge`, `zana_mission_cancel` y `zana_budget_extend`. Una tool nueva sin clasificar queda destructiva.
+  - Todas declaran `openWorldHint` (solo los dos routers de GitHub en `true`).
+  - La confirmación de las escrituras la decide ChatGPT y no se puede quitar desde el servidor.
+
 ## [0.7.0] - 2026-11-10
 
 Primera versión que se publica (tag `v0.7.0`). Incluye el modo remoto de la 0.6.0, que no llegó a publicarse, y lo que mostraron el primer deploy y las primeras misiones reales con la app de ChatGPT.

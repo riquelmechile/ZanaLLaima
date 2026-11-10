@@ -23,7 +23,7 @@ zana_ds_github { "operation": "push_files", "missionId": "<id>", "arguments": { 
 
 Allowlist y fail closed sobre la lista real de tools (`data/github-mcp-tools.json`):
 
-- **Lectura:** siempre permitida, a cualquier sesión.
+- **Lectura:** siempre permitida, a cualquier sesión. El contenido llega íntegro. Un recurso de texto embebido (lo que devuelve `get_file_contents`) o un enlace a recurso se entregan como texto, con una línea de origen (`resource <uri> (<mime>)`) y luego el contenido exacto: ChatGPT trata los recursos como archivos adjuntos y pide aprobación para materializar cada uno. Un recurso binario queda como llegó.
 - **Escritura:** solo con `missionId` de la misión activa remota, desde una sesión que tiene una unidad `RUNNING` de esa misión, que **no** reclamó un ticket de revisión de ella, en el repo de la misión, y:
   - `create_branch`: `branch` = `zana/<missionId>` y `from_branch` = base de la misión;
   - `create_or_update_file`, `delete_file`, `push_files`: `branch` = `zana/<missionId>`, rutas relativas sin `..`, nunca `.github/workflows/**` ni `.git/`;

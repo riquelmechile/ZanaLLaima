@@ -56,3 +56,26 @@ export function compactWrite(tool,args,result){
   const compact={ok:true,tool,...summary,compacted:true};
   return {content:[{type:'text',text:JSON.stringify(compact)}],structuredContent:compact};
 }
+
+// ChatGPT trata un recurso embebido (lo que devuelve get_file_contents del
+// GitHub MCP) y un enlace a recurso como archivos adjuntos, y le pide al
+// usuario aprobación para materializarlos en cada lectura. Un recurso de texto
+// se entrega como texto: una línea con su origen y luego el contenido exacto.
+// Un binario no se puede dar como texto y queda como llegó; cualquier forma
+// que no se reconoce también.
+const origin=(label,r)=>label+' '+String(r.uri??'')+(typeof r.mimeType==='string'&&r.mimeType?' ('+r.mimeType+')':'');
+export function inlineResources(result){
+  if(!result||!Array.isArray(result.content))return result;
+  let changed=false;
+  const content=result.content.flatMap(item=>{
+    if(item?.type==='resource_link'&&typeof item.uri==='string'){
+      changed=true;
+      return [{type:'text',text:origin('resource link',item)+(typeof item.name==='string'?' '+item.name:'')}];
+    }
+    const r=item?.type==='resource'?item.resource:null;
+    if(!r||typeof r!=='object'||typeof r.text!=='string'||r.blob!==undefined)return [item];
+    changed=true;
+    return [{type:'text',text:origin('resource',r)},{type:'text',text:r.text}];
+  });
+  return changed?{...result,content}:result;
+}

@@ -18,7 +18,7 @@ import {DownstreamGateway} from './downstream.mjs';
 import {createGitHubPolicy,CATALOG,liveProblems,missionBranch} from './github-policy.mjs';
 import {createChecks,UNTESTED_REASON} from './checks.mjs';
 import {createReview,correctionPrev,LENSES,SEVERITIES,EXECUTIONS,ORIGINS} from './remote-review.mjs';
-import {compactWrite} from './downstream-compact.mjs';
+import {compactWrite,inlineResources} from './downstream-compact.mjs';
 import {deliveryStatus,mergeMission,ticketView} from './github-delivery.mjs';
 import {listSkills,loadSkill} from './skills.mjs';
 import {ActorSigner} from './actor-assertion.mjs';
@@ -518,8 +518,9 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       const reviewer=id?await rr(db=>Boolean(db&&sessionReviews(db,session.sessionId,id))):false;
       const result=await gateway.call({host:session.host,sessionId:session.sessionId,clientId:session.clientId,role:reviewer?'reviewer':'author'},
         operation,args,{missionId:id??null});
-      // Successful writes come back compact (paths, SHA, link); reads stay whole.
-      return {passthrough:CATALOG.tools[operation]?.zana==='write'?compactWrite(operation,args,result):result};
+      // Successful writes come back compact (paths, SHA, link); reads keep all
+      // their content, with text resources as plain text (no host attachment).
+      return {passthrough:CATALOG.tools[operation]?.zana==='write'?compactWrite(operation,args,result):inlineResources(result)};
     },
   };
 

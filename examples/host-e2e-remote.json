@@ -1,18 +1,93 @@
 {
   "schema": "zana-host-e2e-remote/1",
-  "version": "0.6.0",
-  "assurance": "NOT_OBSERVED",
-  "note": "Plantilla. La completa el operador después del deploy. assurance pasa a OPERATOR_OBSERVED solo con todos los links.",
-  "server": {"publicUrl": "https://zanallaima.<tu-dominio>/mcp", "deployedSha": null, "health": null},
-  "sandboxRepo": "<owner>/zanallaima-sandbox",
-  "conversationA": {"sessionId": null, "sessionCreatedAt": null, "missionId": null, "pullRequest": null, "checkRuns": [], "ticketIssuedAt": null},
-  "conversationB": {"sessionId": null, "sessionCreatedAt": null, "differentSessionThanA": null, "execution": null, "review": null, "zana4rStatus": null},
-  "negativeCases": {
-    "reviewerWriteRefused": {"observed": null, "auditId": null},
-    "authorClaimRefused": {"observed": null, "auditId": null},
-    "pushAfterTicketStale": {"observed": null, "auditId": null},
-    "mergeOrMainWriteRefused": {"observed": null, "auditId": null}
+  "version": "0.7.0",
+  "assurance": "PARTIALLY_OBSERVED",
+  "note": "Observado por el operador el 2026-11-09 sobre un deploy real. Camino feliz y una ronda de corrección: observados. Casos negativos en vivo: sin ejercitar, por eso no es OPERATOR_OBSERVED. Sin dominio, cuentas ni ids de sesión: esos valores viven solo en el servidor.",
+  "server": {
+    "publicUrl": "https://zanallaima.<tu-dominio>/mcp",
+    "deployedShas": [
+      "a7565c5",
+      "7bef65b"
+    ],
+    "health": "ok"
   },
-  "sessionSeparationObserved": null,
+  "sandboxRepo": "<owner>/zanallaima-sandbox",
+  "missions": [
+    {
+      "repo": "<owner>/zanallaima-sandbox",
+      "pullRequest": 1,
+      "units": "1 de código",
+      "checks": "verdes sobre el head",
+      "reviewRounds": 1,
+      "verdicts": [
+        "APPROVE"
+      ],
+      "merged": true,
+      "closedWithSummary": true
+    },
+    {
+      "repo": "repo privado del operador",
+      "pullRequest": 46,
+      "linesChanged": "+74/-2",
+      "reviewRounds": 1,
+      "verdicts": [
+        "APPROVE"
+      ],
+      "merged": true,
+      "actionsRuns": 5
+    },
+    {
+      "repo": "repo privado del operador",
+      "pullRequest": 48,
+      "linesChanged": "+169/-15",
+      "reviewRounds": 2,
+      "verdicts": [
+        "REQUEST_CHANGES",
+        "APPROVE"
+      ],
+      "criticalFoundByReviewer": 1,
+      "merged": true,
+      "actionsRuns": 3,
+      "ciCorrections": 1,
+      "actionsRunsNote": "una corrida por SHA: la primera falló por tipos, la corrección de CI y la corrección de la revisión salieron verdes"
+    }
+  ],
+  "conversationA": {
+    "sessionSource": "conversation",
+    "missionCreated": true,
+    "wroteOnlyOnMissionBranch": true,
+    "ticketAfterUnitCompleted": true
+  },
+  "conversationB": {
+    "differentSessionThanA": true,
+    "createdAfterTicket": true,
+    "execution": "SEQUENTIAL_SAME_CONVERSATION",
+    "review": "publicada por la cuenta revisora sobre el SHA exacto",
+    "zana4rStatus": "success"
+  },
+  "negativeCases": {
+    "reviewerWriteRefused": {
+      "observed": null,
+      "auditId": null
+    },
+    "authorClaimRefused": {
+      "observed": null,
+      "auditId": null
+    },
+    "pushAfterTicketStale": {
+      "observed": null,
+      "auditId": null
+    },
+    "mergeOrMainWriteRefused": {
+      "observed": null,
+      "auditId": null
+    }
+  },
+  "sessionSeparationObserved": "ChatGPT abre una sesión MCP nueva en casi cada tool call (22 sesiones de transporte en 22 llamadas, antes del arreglo). Con _meta[\"openai/session\"] hubo una sesión por conversación: autora, revisora y segunda revisora fueron tres sesiones distintas y estables.",
+  "otherObservations": [
+    "ChatGPT no cierra los transportes: tres misiones llenaron el tope de 200.",
+    "Una misión con el workflow de checks en push y pull_request gastó 5 corridas; con solo workflow_dispatch, una por SHA.",
+    "El host creó un PR como borrador y no pudo sacarlo de ahí; desde esta versión se rechaza al crearlo."
+  ],
   "auditExcerpt": []
 }

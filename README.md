@@ -39,7 +39,7 @@ GPT programa, prueba y revisa en GitHub sin terminal: un MCP remoto pone las reg
 
 1. **Conversación autora.** GPT carga la skill `zana-odd` y crea la misión (`github: {repo, base}`).
    - Con la unidad de código `RUNNING`, escribe **solo** por `zana_ds_github` y **solo** en `zana/<missionId>`.
-   - Abre el PR y corre los checks hasta que queden verdes.
+   - Abre el PR y corre los checks hasta que queden verdes: una corrida de Actions por SHA terminado, no una por commit.
    - **Completa la unidad** y recién entonces pide el ticket con `zana_review_request`. Mientras haya una unidad de código `RUNNING`, responde `UNIT_STILL_RUNNING`.
 2. **Conversación revisora (nueva).** Tú pegas "Revisa el ticket ZR-… con ZanaLLaima".
    - Esa sesión reclama el ticket. No puede ser la autora, no puede haber escrito y tiene que ser posterior al ticket.
@@ -57,14 +57,14 @@ GPT programa, prueba y revisa en GitHub sin terminal: un MCP remoto pone las reg
 | --- | --- |
 | Que la sesión revisora no es la autora, no escribió y revisó **ese** SHA con el diff completo y CI verde | El modelo usado ni que los subagentes hayan tenido contexto realmente fresco (eso lo informa el host) |
 | Que GPT no puede escribir en `main`, en `.github/workflows` ni mergear por el downstream | Que la revisora sea otra cuenta de ChatGPT. Con `ZANA_DISTINCT_REVIEWER_CLIENT=true` solo se prueba que es otro cliente OAuth; que sea otra cuenta depende de las altas que haga el operador |
-| Que un SHA con cambios pedidos no se vuelve a aprobar sin cambiar el código | Que un reinicio del servidor no abra una sesión nueva en la conversación autora (ver [docs/solo-rdd.md](docs/solo-rdd.md)) |
+| Que un SHA con cambios pedidos no se vuelve a aprobar sin cambiar el código | Que la separación aguante a un cliente que no mande el id de conversación: sin él, cada conexión cuenta como una sesión nueva (ver [docs/solo-rdd.md](docs/solo-rdd.md)) |
 
 ## Cómo levantarlo
 
 La guía completa, desde cero, está en **[docs/deploy-remote.md](docs/deploy-remote.md)**. En resumen:
 
 1. **Dos cuentas de GitHub.** La autora, con un token fine-grained limitado a tus repos, y una revisora, que solo publica reviews. Los permisos exactos están en la guía.
-2. **Cada repo administrado** lleva el workflow de checks ([docs/checks-workflow.md](docs/checks-workflow.md)) y la rama default protegida.
+2. **Cada repo administrado** lleva el workflow de checks ([docs/checks-workflow.md](docs/checks-workflow.md)), que corre solo cuando ZanaLLaima lo pide, y la rama default protegida.
 3. **Un servidor Linux** con Node.js ≥22.16: clonas, `npm ci`, completas `zanallaima.env` (fuera del repo, `chmod 600`) y lo dejas como servicio `systemd --user`.
 4. **Un túnel HTTPS** (Cloudflare Tunnel u otro proxy) que publica `https://<tu-dominio>/mcp`.
 5. **En ChatGPT**, con el modo desarrollador activo, creas el conector con esa URL y OAuth, mientras la ventana de alta está abierta (`node src/cli.mjs remote-enroll 15`).
@@ -73,14 +73,21 @@ Tus valores reales (dominio, cuentas, tokens y clave del operador) viven **solo*
 
 ## Estado del proyecto
 
+**Versión 0.7.0, alfa.** Es software experimental para **una instancia por operador**. Está en uso real desde el 9 de noviembre de 2026, conectado a la app de ChatGPT.
+
 | Componente | Estado |
 | --- | --- |
-| Modo remoto: HTTP con sesiones, OAuth con registro cerrado, `/health` | Implementado y probado con el cliente oficial contra servidores falsos locales |
-| Downstream GitHub MCP y política allowlist (v2.1.0) | Implementado y probado con un MCP falso; sin contacto real con `api.githubcopilot.com` |
-| Checks, tickets, lentes, review con cuenta revisora, delivery y merge | Implementado y probado contra una API de GitHub falsa |
-| Deploy real y E2E con la app de ChatGPT | **Paso del operador**, todavía sin observar |
+| Modo remoto: HTTP con sesiones, OAuth con registro cerrado, `/health` | En uso real, detrás de un túnel HTTPS |
+| Sesión por conversación | Observado: ChatGPT abre una conexión nueva en casi cada tool call, así que la sesión sigue a la conversación y no a la conexión |
+| Downstream GitHub MCP y política allowlist (v2.1.0) | En uso real contra el MCP oficial de GitHub |
+| Checks, tickets, lentes, review con cuenta revisora, delivery y merge | En uso real: 3 misiones completas. En una, la conversación revisora encontró un error crítico y pidió cambios, y otra conversación aprobó la corrección |
+| Memoria por proyecto, límites de tamaño del PR y rondas de corrección acotadas | Implementado y probado; en uso |
+| Una corrida de Actions por SHA | Observado: una misión con una corrección de CI y una ronda de corrección de la revisión gastó 3 corridas, una por SHA |
+| Casos negativos en vivo (la revisora intenta escribir, la autora reclama su ticket, push después del ticket) | Probados contra servidores falsos; **sin observar en vivo** |
 | SQLite WAL, leases, reintentos y recuperación | Implementado y probado |
 | Modo stdio local, `zana_apply_write`, RDD local con `git-evidence`, grants Ed25519 | Implementado; **congelado** por el cambio de rumbo |
+
+Lo que esta versión **no** es: una auditoría de seguridad ni un producto certificado. La revisión 4R la hace el mismo modelo en otra conversación, y el modelo y los subagentes que declara el host son su palabra. Los límites están en [SECURITY.md](SECURITY.md) y en [docs/release-security.md](docs/release-security.md).
 
 ## Documentación
 

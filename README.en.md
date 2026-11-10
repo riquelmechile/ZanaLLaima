@@ -39,7 +39,7 @@ GPT codes, tests and reviews on GitHub with no terminal: a remote MCP sets the r
 
 1. **Author conversation.** GPT loads the `zana-odd` skill and creates the mission (`github: {repo, base}`).
    - While the code unit is `RUNNING`, it writes **only** through `zana_ds_github` and **only** to `zana/<missionId>`.
-   - It opens the PR and runs the checks until they are green.
+   - It opens the PR and runs the checks until they are green: one Actions run per finished SHA, not one per commit.
    - Then it **completes the unit**, and only after that requests a ticket with `zana_review_request`. While a code unit is still `RUNNING`, that call returns `UNIT_STILL_RUNNING`.
 2. **Reviewer conversation (new).** You paste "Review ticket ZR-… with ZanaLLaima".
    - That session claims the ticket. It cannot be the author, it cannot have written anything and it must be newer than the ticket.
@@ -57,14 +57,14 @@ GPT codes, tests and reviews on GitHub with no terminal: a remote MCP sets the r
 | --- | --- |
 | The reviewer session is not the author, wrote nothing, and reviewed **that** SHA with the full diff and green CI | Which model was used, or that subagents really had a fresh context (the host reports that) |
 | GPT cannot write to `main` or `.github/workflows`, or merge through the downstream | That the reviewer is a different ChatGPT account. With `ZANA_DISTINCT_REVIEWER_CLIENT=true` it only proves a different OAuth client; a different account depends on which clients the operator registers |
-| A SHA with requested changes cannot be approved again without changing the code | That a server restart won't open a new session in the author conversation (see [docs/solo-rdd.md](docs/solo-rdd.md)) |
+| A SHA with requested changes cannot be approved again without changing the code | That the separation holds for a client that does not send the conversation id: without it, every connection counts as a new session (see [docs/solo-rdd.md](docs/solo-rdd.md)) |
 
 ## How to set it up
 
 The full guide, from scratch, is in **[docs/deploy-remote.md](docs/deploy-remote.md)** (in Spanish). In short:
 
 1. **Two GitHub accounts.** The author, with a fine-grained token limited to your repos, and a reviewer that only publishes reviews. The exact permissions are in the guide.
-2. **Each managed repo** gets the checks workflow ([docs/checks-workflow.md](docs/checks-workflow.md)) and a protected default branch.
+2. **Each managed repo** gets the checks workflow ([docs/checks-workflow.md](docs/checks-workflow.md)), which runs only when ZanaLLaima asks for it, and a protected default branch.
 3. **A Linux server** with Node.js ≥22.16: clone, `npm ci`, fill in `zanallaima.env` (outside the repo, `chmod 600`) and run it as a `systemd --user` service.
 4. **An HTTPS tunnel** (Cloudflare Tunnel or another proxy) that publishes `https://<your-domain>/mcp`.
 5. **In ChatGPT**, with developer mode on, create the connector with that URL and OAuth while the enrollment window is open (`node src/cli.mjs remote-enroll 15`).
@@ -73,14 +73,21 @@ Your real values (domain, accounts, tokens and operator password) live **only** 
 
 ## Project status
 
+**Version 0.7.0, alpha.** This is experimental software for **one instance per operator**. It has been in real use since November 9, 2026, connected to the ChatGPT app.
+
 | Component | Status |
 | --- | --- |
-| Remote mode: HTTP with sessions, OAuth with closed registration, `/health` | Implemented and tested with the official client against local fake servers |
-| GitHub MCP downstream and allowlist policy (v2.1.0) | Implemented and tested with a fake MCP; no real contact with `api.githubcopilot.com` |
-| Checks, tickets, lenses, review by the reviewer account, delivery and merge | Implemented and tested against a fake GitHub API |
-| Real deploy and E2E with the ChatGPT app | **Operator step**, not observed yet |
+| Remote mode: HTTP with sessions, OAuth with closed registration, `/health` | In real use, behind an HTTPS tunnel |
+| Session per conversation | Observed: ChatGPT opens a new connection on almost every tool call, so the session follows the conversation, not the connection |
+| GitHub MCP downstream and allowlist policy (v2.1.0) | In real use against the official GitHub MCP |
+| Checks, tickets, lenses, review by the reviewer account, delivery and merge | In real use: 3 complete missions. In one, the reviewer conversation found a critical bug, requested changes, and another conversation approved the fix |
+| Per-project memory, PR size limits and bounded correction rounds | Implemented and tested; in use |
+| One Actions run per SHA | Observed: a mission with one CI fix and one review correction round used 3 runs, one per SHA |
+| Live negative cases (the reviewer tries to write, the author claims its own ticket, a push after the ticket) | Tested against fake servers; **not observed live** |
 | SQLite WAL, leases, retries and recovery | Implemented and tested |
 | Local stdio mode, `zana_apply_write`, local RDD with `git-evidence`, Ed25519 grants | Implemented; **frozen** after the change of direction |
+
+What this version is **not**: a security audit or a certified product. The 4R review is done by the same model in another conversation, and the model and subagents the host declares are its word. The limits are in [SECURITY.md](SECURITY.md) and [docs/release-security.md](docs/release-security.md).
 
 ## Documentation
 

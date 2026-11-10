@@ -2,7 +2,7 @@
 
 Motor de misiones para **una sola cuenta GPT**, sin llamadas propias a APIs de inferencia, sin trabajo entre cuentas y sin dependencias de otros coordinadores. Usar solamente herramientas y subagentes nativos realmente disponibles en el anfitrión.
 
-## Modo remoto (app de ChatGPT, 0.6.0)
+## Modo remoto (app de ChatGPT, 0.7.0)
 
 1. Al empezar, cargar `zana-odd` con `zana_skill_load` y seguirla. Al recibir un ticket `ZR-...`, cargar `zana-4r` en esa conversación.
 2. La verdad es el SHA en GitHub y sus checks de Actions; lo que el anfitrión pruebe en un entorno propio no es evidencia. Escribir **solo** con `zana_ds_github`, solo en `zana/<missionId>` y solo con una unidad `RUNNING` de la propia sesión. Nunca en la rama default ni en `.github/workflows/**`.

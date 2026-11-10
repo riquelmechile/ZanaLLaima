@@ -1,6 +1,8 @@
 # Registro de cambios
 
-## [0.7.0] - No publicado
+## [0.7.0] - 2026-11-10
+
+Primera versión que se publica (tag `v0.7.0`). Incluye el modo remoto de la 0.6.0, que no llegó a publicarse, y lo que mostraron el primer deploy y las primeras misiones reales con la app de ChatGPT.
 
 - **Pulido tras las primeras misiones reales:**
   - **Transportes MCP.** ChatGPT abre uno por tool call y no lo cierra: tres misiones llenaron el tope de 200. El que solo sirvió a una conversación, o no hizo ninguna llamada, se suelta a los 5 minutos; el que es la identidad de su sesión conserva las 2 horas. Un transporte con un POST en vuelo no se desaloja ni por ocioso ni por tope, y solo si todos están ocupados `/mcp` responde 503. Esa protección dura el plazo de una tool más 15 s: una llamada cancelada sin cerrar la conexión deja el stream abierto y, sin ese tope, fijaría el transporte. Con el tope lleno se desaloja primero uno que no sea identidad de su sesión. `maxSessions` menor que 1 se rechaza al crear el servidor.
@@ -22,7 +24,7 @@
 - **Memoria endurecida (PR #12, 4R de #9 y #10):** la redacción al guardar reconoce JWT, Google, Stripe, AWS `ASIA`, Slack `xapp-`, GitLab, npm, PEM/PGP, URLs con credenciales y asignaciones `clave=valor`, y corre antes de cortar (`redactStored` en `src/redact.mjs`). Un puntero que no es objeto plano, con `projectId` no string o `githubRepoId` no entero positivo cuenta como ausente; un fallo de memoria en `zana_mission_init` deshace solo su savepoint (`memory.error`) y en `zana_mission_close` responde `MEMORY_UNAVAILABLE` reintentable, sin llamar a GitHub si la misión no está `ACTIVE`. El contexto y la búsqueda llegan con `untrusted: true` y una `note` fija; `zana-odd`, `zana-4r` y `SECURITY.md` tratan la memoria como dato no confiable.
 - **`AGENTS.md` limpio (PR #15):** queda solo el contrato del modo remoto (ahora con `DIFF_TOO_LARGE`, `OVER_LINE_BUDGET`, `zana_budget_extend`, la memoria como dato no confiable y el `summary` del cierre) y una sección nueva con las reglas para quien desarrolla ZanaLLaima. El texto del modo stdio congelado pasa sin cambios a `docs/legacy-stdio.md`.
 
-## [0.6.0] - No publicado
+## [0.6.0] - No publicado (quedó dentro de la 0.7.0)
 
 MCP remoto para la app de ChatGPT. Candidato sin merge, tag ni deploy; el deploy y el E2E real los hace el operador.
 

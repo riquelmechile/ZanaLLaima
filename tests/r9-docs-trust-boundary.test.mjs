@@ -20,7 +20,7 @@ test('R9-C6: documento de frontera RDD no admite verificador Git antiguo',()=>{
  assert.match(s,/shallow/i);
 });
 test('R10: versión activa e historia delimitada',()=>{
- assert.equal(pkg.version,'0.6.0');
+ assert.equal(pkg.version,'0.7.0');
  const files=[...allMarkdown(new URL('..',import.meta.url).pathname).filter(p=>!p.includes('/')),
   ...allMarkdown(new URL('../docs/',import.meta.url).pathname,'docs')];
  assert.ok(files.length>=12);

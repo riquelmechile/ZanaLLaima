@@ -1,15 +1,12 @@
 # Plantilla del workflow de checks para repos administrados
 
-GPT no tiene shell: los tests corren en GitHub Actions. Cada repo de `ZANA_GITHUB_REPOS` necesita un workflow llamado como `ZANA_CHECKS_WORKFLOW` (por defecto `zana-checks.yml`) que corra en cada push a `zana/**` y que se pueda disparar con `workflow_dispatch`.
+Los tests que cuentan corren en GitHub Actions. Cada repo de `ZANA_GITHUB_REPOS` necesita un workflow llamado como `ZANA_CHECKS_WORKFLOW` (por defecto `zana-checks.yml`) que se pueda disparar con `workflow_dispatch`. Con eso basta: `zana_checks_start` lo dispara **una vez por SHA**, cuando la autora terminó de escribir. Así una misión gasta una corrida, y no una por cada push.
 
 **Lo agrega el operador.** ZanaLLaima nunca escribe en `.github/workflows/**` de otro repo (la política lo deniega) y esta plantilla no se instala sola.
 
 ```yaml
 name: zana-checks
 on:
-  push:
-    branches: ['zana/**']
-  pull_request:
   workflow_dispatch:
 permissions:
   contents: read
@@ -37,4 +34,6 @@ Adaptar los pasos al lenguaje del repo. Reglas:
 - El job debe producir check runs sobre el SHA del commit (`zana_checks_status` lee `GET /commits/{sha}/check-runs`).
 - Si se configura `ZANA_REQUIRED_CHECKS`, esos nombres de check deben existir; si no, cuentan todos los check runs del SHA.
 - Sin secretos en el workflow; `permissions: contents: read`.
-- `zana_checks_start` dispara `workflow_dispatch` sobre la rama de la misión solo si el push no dejó ya un run para ese SHA. El run disparado corre sobre el head de la rama en ese momento; el estado siempre se lee por SHA exacto.
+- **Costo.** En un repo privado cada corrida se paga. No agregues `push` ni `pull_request` a este workflow: con `push` corre en cada commit de la rama, y con `pull_request` corre otra vez sobre el mismo SHA.
+- **Si el repo ya tiene su propio CI en `pull_request`**, sáltalo en las ramas de ZanaLLaima con `if: ${{ !startsWith(github.head_ref, 'zana/') }}` en el job (un job saltado no se cobra y `zana_checks_status` lo cuenta como neutro). Ojo: GitHub cuenta un check requerido saltado como aprobado; lo que exige la corrida real es ZanaLLaima, que pide al menos un check exitoso sobre el SHA.
+- `zana_checks_start` dispara `workflow_dispatch` sobre la rama de la misión solo si ese SHA no tiene ya un run de este workflow. El run disparado corre sobre el head de la rama en ese momento; el estado siempre se lee por SHA exacto.

@@ -70,7 +70,7 @@ openssl rand -base64 36
 
 Cada repo que GPT va a tocar necesita tres cosas, y **las haces tú** (ZanaLLaima nunca escribe en `.github/workflows/**`):
 
-1. **El workflow de checks**: copia la plantilla de [checks-workflow.md](checks-workflow.md) a `.github/workflows/zana-checks.yml` y adapta los pasos al lenguaje del repo. Tiene que correr en push a `zana/**` y aceptar `workflow_dispatch`.
+1. **El workflow de checks**: copia la plantilla de [checks-workflow.md](checks-workflow.md) a `.github/workflows/zana-checks.yml` y adapta los pasos al lenguaje del repo. Tiene que aceptar `workflow_dispatch`; no le agregues `push` ni `pull_request`, para que cada misión gaste una sola corrida.
 2. **Protección de la rama default** (Settings → Branches o Rulesets):
    - exigir PR antes de mergear, con 1 aprobación;
    - exigir que los checks de `zana-checks` estén verdes;

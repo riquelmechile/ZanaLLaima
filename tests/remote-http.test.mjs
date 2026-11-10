@@ -412,46 +412,72 @@ test('transportes: con el tope lleno se cierra el más viejo; si la sesión no s
 
 test('transportes: los de conversación se sueltan a los minutos; uno con una llamada en vuelo no se desaloja',async()=>{
   const f=await remoteFixture();
-  let s=null,release=()=>{};
-  try{
-  assert.throws(()=>createHttpServer({runtime:f.runtime,oauth:{},settings:{},maxSessions:0}),/maxSessions/);
+  let s=null,token,release=()=>{};
+  // Sin relojes: se envejece el transporte a mano y se sondea el contador.
+  const holder=c=>s.http.sessions.get(c.transport.sessionId);
+  const until=async cond=>{for(let i=0;i<1000&&!cond();i++)await new Promise(ok=>setTimeout(ok,5));assert.ok(cond(),'condición no alcanzada');};
   const tools=c=>fetch(s.base+'/mcp',{method:'POST',headers:{authorization:'Bearer '+token,'mcp-session-id':c.transport.sessionId,
     'content-type':'application/json',accept:'application/json, text/event-stream','mcp-protocol-version':'2025-06-18'},
     body:JSON.stringify({jsonrpc:'2.0',id:9,method:'tools/list'})});
-  s=await server(f,{conversationIdleMs:40,idleMs:60_000});
-  let token;
+  const init=()=>fetch(s.base+'/mcp',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json',
+    accept:'application/json, text/event-stream'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'initialize',
+    params:{protocolVersion:'2025-06-18',capabilities:{},clientInfo:{name:'x',version:'1'}}})});
+  const start=async opts=>{s=await server(f,opts);setEnrollment(s.settings.oauthDb,5);({access_token:token}=await login(s.base));};
   try{
-    setEnrollment(s.settings.oauthDb,5);
-    ({access_token:token}=await login(s.base));
-    // conv: solo llamadas con openai/session. propio: su identidad es el transporte.
+    assert.throws(()=>createHttpServer({runtime:f.runtime,oauth:{},settings:{},maxSessions:0}),/maxSessions/);
+    // 1. Ociosos: 5 min si solo sirvió a una conversación o no hizo llamadas; 2 h si es identidad.
+    await start();
     const conv=await connect(s.base,token),propio=await connect(s.base,token),sinUso=await connect(s.base,token);
     await conv.client.callTool({name:'zana_session_status',arguments:{},_meta:{'openai/session':'v1/c'}});
     assert.equal((await propio.call('zana_session_status')).session.source,'transport');
-    await new Promise(ok=>setTimeout(ok,90));
+    for(const c of [conv,propio,sinUso])holder(c).seen-=6*60_000;
     const otro=await connect(s.base,token);   // abrir uno nuevo barre los ociosos
     assert.equal((await tools(conv)).status,404,'transporte de conversación ocioso: cerrado');
     assert.equal((await tools(sinUso)).status,404,'transporte sin llamadas: cerrado');
     assert.equal((await tools(propio)).status,200,'el que es identidad de su sesión sigue vivo');
-    for(const c of [conv,propio,sinUso,otro])await c.client.close().catch(()=>{});
-  }finally{await s.close();s=null;}
-  // Tope lleno con una llamada en vuelo: no se desaloja, el nuevo recibe 503.
-  const gate=new Promise(ok=>{release=ok;});
-  const slow={...f.runtime,createServer:()=>f.runtime.createServer(async()=>{await gate;return {sessionId:'sesion-lenta-1',host:'zana-chatgpt',clientId:'c',createdAt:new Date().toISOString()};})};
-  s=await server(f,{runtime:slow,maxSessions:1});
-    setEnrollment(s.settings.oauthDb,5);
-    ({access_token:token}=await login(s.base));
-    const c1=await connect(s.base,token);
+    holder(propio).seen-=2*3600_000+1000;
+    const otro2=await connect(s.base,token);
+    assert.equal((await tools(propio)).status,404,'a las 2 h también se cierra');
+    for(const c of [conv,propio,sinUso,otro,otro2])await c.client.close().catch(()=>{});
+    await s.close();s=null;
+    // 2. Tope lleno: se desaloja primero uno que no es identidad, aunque sea más nuevo.
+    await start({maxSessions:2});
+    const dueno=await connect(s.base,token);
+    await dueno.call('zana_session_status');
+    const nuevo=await connect(s.base,token);
+    const tercero=await connect(s.base,token);
+    assert.deepEqual([(await tools(dueno)).status,(await tools(nuevo)).status],[200,404]);
+    for(const c of [dueno,nuevo,tercero])await c.client.close().catch(()=>{});
+    await s.close();s=null;
+    // 3. Una llamada en vuelo protege a su transporte, por ocioso y por tope.
+    let gate=new Promise(ok=>{release=ok;});
+    const slow={...f.runtime,createServer:()=>f.runtime.createServer(async()=>{await gate;return {sessionId:'sesion-lenta-1',host:'zana-chatgpt',clientId:'c',createdAt:new Date().toISOString()};})};
+    await start({runtime:slow,maxSessions:1});
+    const c1=await connect(s.base,token),h1=holder(c1);
     const enVuelo=c1.client.callTool({name:'zana_session_status',arguments:{}});
     enVuelo.catch(()=>{});
-    await new Promise(ok=>setTimeout(ok,60));
-    const init=()=>fetch(s.base+'/mcp',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json',
-      accept:'application/json, text/event-stream'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'initialize',
-      params:{protocolVersion:'2025-06-18',capabilities:{},clientInfo:{name:'x',version:'1'}}})});
+    await until(()=>h1.inflight>0);
+    h1.seen-=3*3600_000;
     assert.equal((await init()).status,503,'todos ocupados: 503 en vez de cortar la llamada en vuelo');
+    assert.equal(s.http.sessions.has(c1.transport.sessionId),true);
     release();
     assert.equal((await enVuelo).structuredContent.session.id,'sesion-lenta-1');
-    assert.equal((await init()).status,200,'ya libre, el más viejo se desaloja');
+    await until(()=>h1.inflight===0);
+    assert.equal((await init()).status,200,'ya libre, se desaloja');
     assert.equal((await tools(c1)).status,404);
     await c1.client.close().catch(()=>{});
+    // 4. La protección tiene tope: una llamada colgada (cancelada sin cerrar la
+    // conexión) deja de proteger pasado el plazo de una tool.
+    gate=new Promise(ok=>{release=ok;});
+    const c2=await connect(s.base,token),h2=holder(c2);
+    const colgada=c2.client.callTool({name:'zana_session_status',arguments:{}});
+    colgada.catch(()=>{});
+    await until(()=>h2.inflight>0);
+    assert.equal((await init()).status,503);
+    h2.busyAt-=10*60_000;
+    assert.equal((await init()).status,200,'la llamada colgada ya no fija el transporte');
+    assert.equal(s.http.sessions.has(c2.transport.sessionId),false);
+    release();
+    await c2.client.close().catch(()=>{});
   }finally{release();if(s)await s.close();await f.cleanup();}
 });

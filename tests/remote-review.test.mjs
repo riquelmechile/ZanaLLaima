@@ -43,6 +43,13 @@ test('checks: start dispatches or associates on the exact head SHA; status repor
     const outcome={success:true,summary:'implemented',evidence:['x']};
     const blocked=await f.call('zana_complete_unit',{unitId:'code',token:packet.token,leaseGeneration:packet.leaseGeneration,outcome},author);
     assert.match(blocked.error,/CHECKS_NOT_GREEN/);
+    // Con solo checks saltados el error dice el motivo y cabe entero (clean corta en 300).
+    const rojo=f.api.state.checkRuns[sha('a')];
+    f.api.state.checkRuns[sha('a')]=[{name:'check',status:'completed',conclusion:'skipped',head_sha:sha('a')}];
+    const saltado=await f.call('zana_complete_unit',{unitId:'code',token:packet.token,leaseGeneration:packet.leaseGeneration,outcome},author);
+    assert.match(saltado.error,/^CHECKS_NOT_GREEN: .*PENDING.*ninguno lo probó.*run zana_checks_start$/);
+    assert.ok(saltado.error.length<300);
+    f.api.state.checkRuns[sha('a')]=rojo;
     // New push: the runs of that SHA are associated, not re-dispatched.
     f.api.state.push(branch,sha('b'));
     f.api.state.workflowRuns[sha('b')]=[{id:3,head_sha:sha('b'),path:'.github/workflows/zana-checks.yml',status:'in_progress'}];

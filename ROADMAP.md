@@ -1,4 +1,4 @@
-## 0.7.0 (publicada el 9 nov 2026): MCP remoto para la app de ChatGPT, en uso real
+## 0.7.0: MCP remoto para la app de ChatGPT, en uso real desde el 9 nov 2026
 
 **Cambio de rumbo.** ZanaLLaima dejó de ser solo un MCP stdio que vigila un worktree y pasó a ser un **MCP remoto** en el servidor del operador, conectado como conector de la app de ChatGPT. La verdad es el SHA en GitHub y los checks de Actions; GPT escribe por el downstream de GitHub solo en `zana/<missionId>`; la revisión la hace el mismo GPT en una conversación nueva y la publica la cuenta revisora.
 
@@ -11,12 +11,12 @@ Hecho en esta versión:
 - [x] Ticket de revisión, sesión revisora en solo lectura, publicación con `ZANA_REVIEWER_TOKEN`, `zana/4r`, `zana_delivery_status` y `zana_merge` guardado por SHA.
 - [x] Auditoría por llamada con HMAC de argumentos, redacción de tokens y el error de la tool cuando falla.
 - [x] Límites de tamaño del PR, hallazgos con origen causal, rondas de corrección acotadas y memoria por proyecto con puntero en el repo.
-- [x] **ZL-018: E2E real con la app de ChatGPT** (`docs/host-e2e-remote.md`), corrido el 9 nov 2026. Mostró que ChatGPT abre una sesión MCP nueva por tool call: la sesión pasó a seguir a la conversación (`_meta["openai/session"]`). Quedan sin observar en vivo los casos negativos de esa guía.
+- [x] Primer E2E real con la app de ChatGPT, el 9 nov 2026 (parte de ZL-018, ver abajo). Mostró que ChatGPT abre una sesión MCP nueva en casi cada tool call: la sesión pasó a seguir a la conversación (`_meta["openai/session"]`).
 - [x] Una corrida de Actions por SHA terminado y transportes MCP que se sueltan a los minutos.
 
 Lo que sigue:
 
-- [ ] Casos negativos del E2E en vivo (la revisora intenta escribir, la autora reclama su ticket, push después del ticket, merge por el downstream).
+- [ ] **ZL-018 (parcial).** Observado: el camino feliz, una ronda de corrección y la sesión por conversación (`examples/host-e2e-remote.json`). Falta: los casos negativos en vivo (la revisora intenta escribir, la autora reclama su ticket, push después del ticket, merge por el downstream) y recibos de modelo, esfuerzo y subagentes, que siguen siendo palabra del host.
 - [ ] Workflow de checks configurable por repo (hoy `ZANA_CHECKS_WORKFLOW` y `ZANA_REQUIRED_CHECKS` son globales).
 - [ ] Escritura por archivo adjunto (`openai/fileParams`) para cambios grandes sin pasar el contenido por el chat.
 - [ ] Panel MCP Apps con el estado de la misión y la memoria del proyecto.
@@ -97,7 +97,7 @@ El código queda y sigue probado en stdio, pero **no se toca más**:
 | 0 | P0 | Evitar bloqueos, errores de autorización y pérdidas de trabajo | [ ] Control local probado; gate real de escrituras del anfitrión pendiente |
 | 1 | P1 | Persistencia transaccional y recuperación tras reinicio | [x] Implementada y probada; gate operacional pendiente de Fase 0 |
 | 2 | P1 | RDD verificable sobre SHA exacto y revisión de una sola cuenta | [x] Motor local y pruebas; integración real pendiente |
-| 3 | P1 | MCP compatible e integración real con el anfitrión GPT | [ ] SDK y E2E local implementados; ZL-018 real pendiente |
+| 3 | P1 | MCP compatible e integración real con el anfitrión GPT | [ ] SDK y E2E local implementados; ZL-018 parcial (camino feliz del modo remoto observado el 9 nov 2026) |
 | 4 | P2 | Aprovechar paralelismo nativo y mejorar rendimiento | [x] Planificador, cuotas y benchmark locales probados; E2E host pendiente |
 | 5 | P2 | CI, seguridad de repositorio y criterios de entrega | [x] CI, documentación, auditoría y protección de main verificadas; release real pendiente |
 
@@ -145,7 +145,7 @@ El código queda y sigue probado en stdio, pero **no se toca más**:
 
 - [x] **ZL-016. SDK MCP oficial.** Reemplazar o encapsular el parser `stdio` manual; validar negociación de versiones, esquema, notificaciones, cancelación y errores recuperables `isError`.
 - [x] **ZL-017. Contrato de capacidades.** Distinguir `REQUESTED`, `HOST_REPORTED` y `VERIFIED`; nunca permitir que un informe del modelo cambie permisos efectivos.
-- [ ] **ZL-018. Prueba con una cuenta GPT real.** Verificar, con recibos observables, qué controles de modelo/esfuerzo y qué lanzadores nativos existen en esa superficie; medir cuántos subagentes funcionan de verdad.
+- [ ] **ZL-018. Prueba con una cuenta GPT real.** *Parcial desde el 9 nov 2026: el camino feliz del modo remoto se observó; lo que sigue de este párrafo continúa abierto.* Verificar, con recibos observables, qué controles de modelo/esfuerzo y qué lanzadores nativos existen en esa superficie; medir cuántos subagentes funcionan de verdad.
 - [x] **ZL-019. Sin subagentes.** Completar una misión y su 4R en un solo contexto, sin fingir paralelismo ni independencia.
 - [x] **ZL-020. Límite de exposición.** Mantener `stdio` local por defecto. Cualquier interfaz remota requiere diseño explícito de autenticación, autorización, transporte seguro, cuotas y pruebas negativas antes de habilitarla.
 

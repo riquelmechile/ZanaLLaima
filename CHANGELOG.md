@@ -1,8 +1,8 @@
 # Registro de cambios
 
-## [0.7.0] - 2026-11-09
+## [0.7.0] - 2026-11-10
 
-Primera versión publicada. Incluye el modo remoto de la 0.6.0, que no llegó a publicarse, y lo que mostraron el primer deploy y las primeras misiones reales con la app de ChatGPT.
+Primera versión que se publica (tag `v0.7.0`). Incluye el modo remoto de la 0.6.0, que no llegó a publicarse, y lo que mostraron el primer deploy y las primeras misiones reales con la app de ChatGPT.
 
 - **Pulido tras las primeras misiones reales:**
   - **Transportes MCP.** ChatGPT abre uno por tool call y no lo cierra: tres misiones llenaron el tope de 200. El que solo sirvió a una conversación, o no hizo ninguna llamada, se suelta a los 5 minutos; el que es la identidad de su sesión conserva las 2 horas. Un transporte con un POST en vuelo no se desaloja ni por ocioso ni por tope, y solo si todos están ocupados `/mcp` responde 503. Esa protección dura el plazo de una tool más 15 s: una llamada cancelada sin cerrar la conexión deja el stream abierto y, sin ese tope, fijaría el transporte. Con el tope lleno se desaloja primero uno que no sea identidad de su sesión. `maxSessions` menor que 1 se rechaza al crear el servidor.

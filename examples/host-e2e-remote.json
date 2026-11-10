@@ -5,7 +5,10 @@
   "note": "Observado por el operador el 2026-11-09 sobre un deploy real. Camino feliz y una ronda de corrección: observados. Casos negativos en vivo: sin ejercitar, por eso no es OPERATOR_OBSERVED. Sin dominio, cuentas ni ids de sesión: esos valores viven solo en el servidor.",
   "server": {
     "publicUrl": "https://zanallaima.<tu-dominio>/mcp",
-    "deployedSha": "a7565c5 (misión 1), 7bef65b (misión 3)",
+    "deployedShas": [
+      "a7565c5",
+      "7bef65b"
+    ],
     "health": "ok"
   },
   "sandboxRepo": "<owner>/zanallaima-sandbox",
@@ -44,7 +47,9 @@
       ],
       "criticalFoundByReviewer": 1,
       "merged": true,
-      "actionsRuns": 3
+      "actionsRuns": 3,
+      "ciCorrections": 1,
+      "actionsRunsNote": "una corrida por SHA: la primera falló por tipos, la corrección de CI y la corrección de la revisión salieron verdes"
     }
   ],
   "conversationA": {

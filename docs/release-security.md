@@ -4,13 +4,13 @@
 
 ## Qué es la release 0.7.0 y qué no
 
-Es una versión **alfa** para instalaciones de un solo operador, publicada el 9 de noviembre de 2026 por decisión del operador. El resto de este documento es la auditoría de la fase 5, hecha antes del modo remoto: sus hallazgos sobre el modo stdio siguen valiendo para ese modo, que está congelado.
+Es una versión **alfa** para instalaciones de un solo operador, en uso real desde el 9 de noviembre de 2026. Se publica con el tag `v0.7.0` por decisión del operador. El resto de este documento es la auditoría de la fase 5, hecha antes del modo remoto: sus hallazgos sobre el modo stdio siguen valiendo para ese modo, que está congelado.
 
 | Puerta | Estado en esta versión |
 | --- | --- |
 | `main` protegida: 3 checks, 1 aprobación sobre el último push, sin excepción para admins | Activa |
 | Revisión de cada PR sobre el SHA exacto | Hecha: 4R en otra sesión y aprobación de la cuenta revisora. Las dos cuentas son del mismo dueño: es separación de credenciales, no independencia organizacional |
-| ZL-018: conectividad real con la app de ChatGPT | Observada el 9 nov 2026 (`examples/host-e2e-remote.json`). El modelo, el esfuerzo y los subagentes siguen siendo palabra del host |
+| ZL-018: prueba con la app de ChatGPT | Parcial. El camino feliz y una ronda de corrección se observaron el 9 nov 2026 (`examples/host-e2e-remote.json`, palabra del operador, sin extracto de auditoría). El modelo, el esfuerzo y los subagentes siguen siendo palabra del host |
 | Casos negativos del E2E en vivo | Sin observar; probados solo contra servidores falsos |
 | Atestación CI Ed25519 (`ci-attestation.yml`) | Sin activar: sigue siendo paso humano. `release:preflight` responde `releaseAuthorized:false`, que aplica al gate de entrega del modo stdio |
 | ZL-004: permisos en cada mutación del ejecutor local | Congelado con el modo stdio |

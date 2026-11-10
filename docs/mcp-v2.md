@@ -49,7 +49,7 @@ El manejador consulta `ctx.mcpReq.signal.aborted` antes de despachar. **La cance
 
 `tests/sdk-mcp.test.mjs` inicia un proceso local real `stdio` mediante el cliente oficial. Verifica negociación, descubrimiento del catálogo, validación de argumentos, tratamiento de errores, frontera de capacidades y una misión **READ** completa. Crea un repositorio Git temporal, revisa su SHA verificado y completa los cuatro lentes secuencialmente. Debe terminar en `SELF_CHECK_COMPLETE_UNVERIFIED`, `independentReviewVerified:false` y `approved:false`. Los resultados de la prueba son pruebas de integración del **controlador**, no revisiones de código independientes realizadas por un modelo.
 
-No existe todavía una prueba de una cuenta ChatGPT real, ni evidencia de modelo/esfuerzo real, ni subagentes nativos lanzados. Estos criterios corresponden a **ZL-018** y siguen abiertos por decisión del operador.
+Desde el 9 nov 2026 hay una prueba con una cuenta ChatGPT real para el camino feliz del modo remoto (`examples/host-e2e-remote.json`). No hay evidencia de modelo/esfuerzo real ni de subagentes nativos lanzados. Estos criterios corresponden a **ZL-018** y siguen abiertos por decisión del operador.
 
 ## Modo remoto (ZL-020, esta versión)
 

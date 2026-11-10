@@ -78,11 +78,11 @@ Your real values (domain, accounts, tokens and operator password) live **only** 
 | Component | Status |
 | --- | --- |
 | Remote mode: HTTP with sessions, OAuth with closed registration, `/health` | In real use, behind an HTTPS tunnel |
-| Session per conversation | Observed: ChatGPT opens a new connection per tool call, so the session follows the conversation, not the connection |
+| Session per conversation | Observed: ChatGPT opens a new connection on almost every tool call, so the session follows the conversation, not the connection |
 | GitHub MCP downstream and allowlist policy (v2.1.0) | In real use against the official GitHub MCP |
 | Checks, tickets, lenses, review by the reviewer account, delivery and merge | In real use: 3 complete missions. In one, the reviewer conversation found a critical bug, requested changes, and another conversation approved the fix |
 | Per-project memory, PR size limits and bounded correction rounds | Implemented and tested; in use |
-| One Actions run per SHA | Observed: a mission with two corrections used 3 runs, one per SHA |
+| One Actions run per SHA | Observed: a mission with one CI fix and one review correction round used 3 runs, one per SHA |
 | Live negative cases (the reviewer tries to write, the author claims its own ticket, a push after the ticket) | Tested against fake servers; **not observed live** |
 | SQLite WAL, leases, retries and recovery | Implemented and tested |
 | Local stdio mode, `zana_apply_write`, local RDD with `git-evidence`, Ed25519 grants | Implemented; **frozen** after the change of direction |

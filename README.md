@@ -78,11 +78,11 @@ Tus valores reales (dominio, cuentas, tokens y clave del operador) viven **solo*
 | Componente | Estado |
 | --- | --- |
 | Modo remoto: HTTP con sesiones, OAuth con registro cerrado, `/health` | En uso real, detrás de un túnel HTTPS |
-| Sesión por conversación | Observado: ChatGPT abre una conexión nueva por tool call, así que la sesión sigue a la conversación y no a la conexión |
+| Sesión por conversación | Observado: ChatGPT abre una conexión nueva en casi cada tool call, así que la sesión sigue a la conversación y no a la conexión |
 | Downstream GitHub MCP y política allowlist (v2.1.0) | En uso real contra el MCP oficial de GitHub |
-| Checks, tickets, lentes, review con cuenta revisora, delivery y merge | En uso real: 3 misiones completas. En una, la conversación revisora encontró un error crítico, pidió cambios y aprobó la corrección en otra conversación |
+| Checks, tickets, lentes, review con cuenta revisora, delivery y merge | En uso real: 3 misiones completas. En una, la conversación revisora encontró un error crítico y pidió cambios, y otra conversación aprobó la corrección |
 | Memoria por proyecto, límites de tamaño del PR y rondas de corrección acotadas | Implementado y probado; en uso |
-| Una corrida de Actions por SHA | Observado: una misión con dos correcciones gastó 3 corridas, una por SHA |
+| Una corrida de Actions por SHA | Observado: una misión con una corrección de CI y una ronda de corrección de la revisión gastó 3 corridas, una por SHA |
 | Casos negativos en vivo (la revisora intenta escribir, la autora reclama su ticket, push después del ticket) | Probados contra servidores falsos; **sin observar en vivo** |
 | SQLite WAL, leases, reintentos y recuperación | Implementado y probado |
 | Modo stdio local, `zana_apply_write`, RDD local con `git-evidence`, grants Ed25519 | Implementado; **congelado** por el cambio de rumbo |

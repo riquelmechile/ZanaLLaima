@@ -75,6 +75,8 @@ export function updateProjectWorkspace(db,{clientId,workspaceId,expectedVersion,
     // Se guarda la forma canónica: variantes equivalentes (espacios, NFC, forma
     // de una URL) comparten digest y no deben quedar almacenadas tal cual.
     const canonical=canonicalPlan(plan);
+    // El chequeo de secretos también corre sobre lo que de verdad se guarda.
+    if(different(canonical,redactValue(canonical)))fail('WORKSPACE_SECRET_DETECTED','Regenera el plan sin credenciales');
     const brief=canonical.brief,current=row.brief;
     const norm=o=>JSON.stringify(Object.entries(o).sort(([a],[b])=>a.localeCompare(b)));
     if(brief.idea!==current.idea||brief.revision!==current.revision||

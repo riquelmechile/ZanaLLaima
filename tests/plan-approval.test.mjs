@@ -232,3 +232,28 @@ test('el origen público solo se arma con https',async()=>{
   assert.equal(origin({ZANA_PUBLIC_MCP_URL:'http://zana.test/mcp'}),null);
   assert.equal(origin({}),null);
 });
+
+// Segunda ronda de corrección (reverificación 4R).
+test('una aprobación dormida sigue siendo revocable; un secreto no entra por la forma canónica',()=>{
+  const {db,w,at,request}=fixture();
+  const prev=process.env.ZANA_REVIEWER_TOKEN;
+  process.env.ZANA_REVIEWER_TOKEN='ghx_SecretoK1234567890';
+  try{
+    const r=request();
+    assert.equal(describePlanApproval(db,{approvalId:r.approvalId,now:T0}).revocable,false);
+    decidePlanApproval(db,{approvalId:r.approvalId,decision:'allow',passwordOk:true,now:T0});
+    const w2=updateProjectWorkspace(db,{...at,expectedVersion:w.version,plan:draft(w.brief,'Otro modelo')});
+    const dormant=describePlanApproval(db,{approvalId:r.approvalId,now:T0});
+    assert.deepEqual({status:dormant.status,revocable:dormant.revocable},{status:'SUPERSEDED',revocable:true},
+      'el plan A ya no es el vigente, pero su aprobación sigue guardada y se puede retirar');
+    // U+212A (KELVIN) pasa a "K" con NFC: el texto crudo no contiene el secreto, el canónico sí.
+    const sneaky=JSON.parse(JSON.stringify(draft(w.brief,'usar ghx_SecretoK1234567890 aquí')));
+    sneaky.milestones[0].objective='usar ghx_SecretoK1234567890 aquí';
+    assert.throws(()=>updateProjectWorkspace(db,{...at,expectedVersion:w2.version,plan:sneaky}),/WORKSPACE_SECRET_DETECTED/);
+    const stored=db.prepare("SELECT value FROM metadata WHERE key LIKE 'zana:workspace:%'").get().value;
+    assert.ok(!stored.includes('ghx_SecretoK1234567890'));
+  }finally{
+    if(prev===undefined)delete process.env.ZANA_REVIEWER_TOKEN;else process.env.ZANA_REVIEWER_TOKEN=prev;
+    db.close();
+  }
+});

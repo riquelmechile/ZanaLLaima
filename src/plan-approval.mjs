@@ -83,7 +83,7 @@ export function planApprovalStatus(db,{clientId,workspaceId,now=Date.now()}){
   // Solo cuentan las solicitudes del plan vigente: la decisión sobre otro plan
   // no se le atribuye a este.
   const current=digest===null?[]:rows.filter(x=>x.planDigest===digest&&x.status!=='REPLACED');
-  const row=current.find(x=>x.status==='APPROVED')??current[0]??null;
+  const row=current.find(x=>x.status==='APPROVED')??current.find(x=>x.status==='PENDING')??current[0]??null;
   const status=row?effective(row,digest,now):rows.length?'SUPERSEDED':'NONE';
   const open=['PENDING','APPROVED'].includes(status);
   return {workspaceId,version:ws.version,planDigest:ws.plan?.digest??null,status,
@@ -100,6 +100,8 @@ export function describePlanApproval(db,{approvalId,now=Date.now()}){
   try{plan=ws.plan?.digest===row.planDigest?canonicalPlan(ws.plan):null;}catch{}
   return {approvalId,status:effective(row,liveDigest(ws),now),planDigest:row.planDigest,
     expiresAt:row.expiresAt,decidedAt:row.decidedAt,attemptsLeft:Math.max(0,MAX_FAILURES-row.failures),
+    // La aprobación guardada se puede retirar aunque su plan ya no sea el vigente.
+    revocable:row.status==='APPROVED',
     plan:plan&&{idea:plan.brief.idea,answers:plan.brief.answers,selectedId:plan.selectedId,
       alternatives:plan.alternatives,milestones:plan.milestones}};
 }

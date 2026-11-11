@@ -2,6 +2,11 @@
 
 ZanaLLaima sirve estas skills con `zana_skill_list` y `zana_skill_load(name)`. Son instrucciones para el anfitrión, no capacidades: no autorizan escrituras ni sustituyen los gates del servidor.
 
+- `zana-project-discovery`: entrevista y alternativas con fuentes oficiales.
+- `zana-project-bootstrap`: autorización administrativa previa a crear un repositorio (integración de ejecución pendiente).
+- `zana-project-orchestrator`: coordinación de hitos y misiones dependientes.
+- `zana-project-review-delegation`: paquetes 4R para contextos frescos, sin autoaprobar.
+- `zana-project-delivery`: gates de entrega y separación de autorizaciones.
 - `zana-odd`: flujo de la conversación autora.
 - `zana-pr`: commits, cuerpo del PR, plan de pruebas y línea `Risk:` (la carga `zana-odd` antes de abrir el PR).
 - `zana-4r`: conversación revisora y reglas del verificador.

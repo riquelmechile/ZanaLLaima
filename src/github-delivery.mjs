@@ -7,6 +7,7 @@
 // UNAVAILABLE. Panter's label, issue, conventional-commit and review-budget
 // gates are not copied: ZanaLLaima adds no gates beyond its contract.
 import {evaluateRuns} from './checks.mjs';
+import {checksForRepo} from './checks-policy.mjs';
 import {createDeadline,DeadlineError} from './deadline.mjs';
 
 export async function independentReview(github,repo,number,head,pull,reviewer){
@@ -69,7 +70,7 @@ export async function deliveryStatus({github,config,ctx,openBlockingTickets=[],c
   const head=String(pull.head?.sha??'');
   // Each read gets what is left of the tool deadline; a step that does not fit
   // is reported as partial and counts as a blocker (never as green).
-  const ci=await deadline.step(async()=>evaluateRuns(await github.checkRuns(ctx.repo,head),head,config.requiredChecks),'ci',
+  const ci=await deadline.step(async()=>evaluateRuns(await github.checkRuns(ctx.repo,head),head,checksForRepo(config,ctx.repo).requiredChecks),'ci',
     {fallback:{state:'UNKNOWN',runs:[],missing:[]}});
   const fourR=await deadline.step(async()=>fourRStatus(await github.statuses(ctx.repo,head),config.reviewerLogin),'zana/4r',
     {fallback:'UNKNOWN'});

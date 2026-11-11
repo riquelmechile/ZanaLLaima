@@ -169,3 +169,67 @@ test('una aprobación cuyo plan ya no es el vigente se puede revocar desde la p�
     assert.doesNotMatch(await (await fetch(t.base+'/operator/approve?aid='+r.approvalId)).text(),/value="revoke"/);
   }finally{await t.close();}
 });
+
+// Bootstrap: autorización de crear el repositorio.
+test('la página pide autorizar la creación del repositorio y lo audita aparte',async()=>{
+  const t=await setup();
+  try{
+    const plan=await t.request();
+    assert.equal((await t.post(plan.approvalId,{decision:'allow',password:PASSWORD})).status,200);
+    const s=await t.f.session('zana-chatgpt','oauth-one');
+    const r=await t.f.call('zana_bootstrap_request',{workspaceId:t.workspaceId,expectedVersion:2,owner:'o',name:'r<b>',visibility:'public'},s);
+    assert.match(r.error,/INVALID_REPOSITORY/);
+    const op=await t.f.call('zana_bootstrap_request',{workspaceId:t.workspaceId,expectedVersion:2,owner:'o',name:'r',visibility:'public'},s);
+    const aid=op.authorization.approvalId;
+    const html=await (await fetch(t.base+'/operator/approve?aid='+aid)).text();
+    for(const visible of ['<code>o/r</code> (PÚBLICO)',op.intentDigest,t.plan.digest,'Autorizar la creación','type="password"'])
+      assert.ok(html.includes(visible),'falta en la página: '+visible);
+    assert.ok(!html.includes('Aprobar este plan'));
+    assert.equal((await t.post(aid,{decision:'allow',password:'x'.repeat(40)})).status,403);
+    const ok=await t.post(aid,{decision:'allow',password:PASSWORD});
+    assert.equal(ok.status,200);
+    assert.match(await ok.text(),/Creación autorizada/);
+    assert.equal((await t.f.call('zana_bootstrap_status',{operationId:op.operationId},s)).authorization.status,'APPROVED');
+    const closed=await (await fetch(t.base+'/operator/approve?aid='+aid)).text();
+    assert.match(closed,/ya fue autorizada/);
+    assert.match(closed,/value="revoke"/);
+    assert.match(await (await t.post(aid,{decision:'revoke'})).text(),/Autorización revocada/);
+    assert.equal((await t.f.call('zana_bootstrap_status',{operationId:op.operationId},s)).authorization.status,'REVOKED');
+    assert.equal(await t.status(),'APPROVED','el plan sigue aprobado');
+    const audit=(await t.f.runtime.readAudit({limit:50})).filter(x=>x.tool==='operator_repository_approval');
+    assert.deepEqual(audit.map(x=>x.outcome).sort(),['APPROVED','REFUSED','REVOKED']);
+  }finally{await t.close();}
+});
+
+// Ronda de corrección tras la revisión 4R de la página de bootstrap.
+test('la página de repo no promete uso único, marca privado y usa sus propios textos de cierre',async()=>{
+  const t=await setup();
+  try{
+    const plan=await t.request();
+    await t.post(plan.approvalId,{decision:'allow',password:PASSWORD});
+    const s=await t.f.session('zana-chatgpt','oauth-one');
+    const op=await t.f.call('zana_bootstrap_request',{workspaceId:t.workspaceId,expectedVersion:2,owner:'o',name:'r'},s);
+    const aid=op.authorization.approvalId;
+    const html=await (await fetch(t.base+'/operator/approve?aid='+aid)).text();
+    assert.ok(html.includes('<code>o/r</code> (privado)'));
+    assert.doesNotMatch(html,/una vez/,'el uso único lo hará cumplir la ejecución; hoy no se promete');
+    assert.equal((await t.post(aid,{decision:'allow',password:PASSWORD})).status,200);
+    // El operador revoca la aprobación del plan: la autorización del repo queda dormida.
+    await t.post(plan.approvalId,{decision:'revoke'});
+    const dormant=await (await fetch(t.base+'/operator/approve?aid='+aid)).text();
+    assert.match(dormant,/El plan aprobado cambió o su aprobación se retiró/);
+    assert.match(dormant,/value="revoke"/);
+    assert.doesNotMatch(dormant,/type="password"/);
+    // Una solicitud pendiente cuyo plan dejó de estar aprobado responde con el texto de repo.
+    const plan2=await t.request();
+    await t.post(plan2.approvalId,{decision:'allow',password:PASSWORD});
+    const op2=await t.f.call('zana_bootstrap_request',{workspaceId:t.workspaceId,expectedVersion:2,owner:'o',name:'r'},s);
+    assert.equal(op2.authorization.status,'PENDING');
+    await t.post(plan2.approvalId,{decision:'revoke'});
+    const late=await t.post(op2.authorization.approvalId,{decision:'allow',password:PASSWORD});
+    assert.equal(late.status,409);
+    assert.match(await late.text(),/El plan aprobado cambió o su aprobación se retiró/);
+    const audit=(await t.f.runtime.readAudit({limit:80})).filter(x=>x.tool==='operator_repository_approval'&&x.outcome==='APPROVED');
+    assert.deepEqual(audit.map(x=>[x.detail.subject.repo,x.detail.subject.visibility]),[['o/r','private']]);
+  }finally{await t.close();}
+});

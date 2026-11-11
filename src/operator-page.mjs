@@ -12,6 +12,12 @@ const CLOSED={APPROVED:'Este plan ya fue aprobado.',DENIED:'Este plan fue rechaz
   LOCKED:'Solicitud bloqueada por intentos fallidos. Pide una nueva desde ChatGPT.',
   SUPERSEDED:'El plan cambió o el proyecto se archivó después de pedir la aprobación. Pide una nueva desde ChatGPT.',
   REPLACED:'Esta solicitud fue reemplazada por una más nueva.'};
+const REPO_CLOSED={APPROVED:'La creación de este repositorio ya fue autorizada.',DENIED:'La creación de este repositorio fue rechazada.',
+  REVOKED:'La autorización de crear este repositorio fue revocada.',EXPIRED:'La autorización caducó. Pide una nueva desde ChatGPT.',
+  SUPERSEDED:'El plan aprobado cambió o su aprobación se retiró. Pide una nueva autorización desde ChatGPT.'};
+const DONE_REPO={APPROVED:['Creación autorizada','<p>Autorizaste crear el repositorio. Vuelve a ChatGPT para continuar.</p>'],
+  DENIED:['Creación rechazada','<p>No se autorizó crear el repositorio.</p>'],
+  REVOKED:['Autorización revocada','<p>La autorización de crear el repositorio quedó revocada.</p>']};
 // Errores esperados: código → [estado HTTP, texto]. Cualquier otro sube al
 // servidor HTTP, que lo registra y responde 500.
 const MISSING=[404,'No existe esa solicitud.'],INVALID=[400,'Solicitud inválida.'];
@@ -65,6 +71,18 @@ function form(view,host,note=''){
     '<button name="decision" value="allow">Aprobar este plan</button> <button name="decision" value="deny">Rechazar</button></form>'+
     '<p>Vence: '+esc(view.expiresAt)+'. Intentos restantes: '+esc(view.attemptsLeft)+'.</p>';
 }
+function repoForm(view,host,note=''){
+  const r=view.repository;
+  return '<p>Estás en <strong>'+esc(host)+'</strong>. Escribe la contraseña solo si esa es la dirección de tu servidor.</p>'+
+    '<div class="box"><p><strong>Crear el repositorio:</strong> <code>'+esc(r.fullName)+'</code> ('+(r.visibility==='public'?'PÚBLICO':'privado')+')</p>'+
+    '<p><strong>Proyecto:</strong> '+esc(view.idea)+'</p><p><strong>Plan aprobado:</strong> <code>'+esc(view.planDigest)+'</code></p>'+
+    '<p><strong>Digest del intento:</strong> <code>'+esc(r.intentDigest)+'</code></p></div>'+
+    '<p>Autorizas solo crear ese repositorio, dentro de 24 horas. No autoriza fusionar ni desplegar.</p>'+
+    (note?'<p><strong>'+esc(note)+'</strong></p>':'')+
+    '<form method="post"><label>Contraseña del operador<input type="password" name="password" autocomplete="current-password"></label>'+
+    '<button name="decision" value="allow">Autorizar la creación</button> <button name="decision" value="deny">Rechazar</button></form>'+
+    '<p>Vence: '+esc(view.expiresAt)+'. Intentos restantes: '+esc(view.attemptsLeft)+'.</p>';
+}
 const REVOKE='<form method="post"><button name="decision" value="revoke">Revocar la aprobación</button></form>';
 
 // approvals: {describe(approvalId), decide({approvalId,decision,passwordOk,from})}.
@@ -72,10 +90,16 @@ export function createOperatorPage({oauth,approvals}){
   const host=new URL(oauth.issuer).host,allowed=limiter();
   const stop=code=>{throw Object.assign(new Error(code),{code});};
   // El formulario solo se muestra si la solicitud sigue abierta sobre el plan vigente.
-  const show=(res,status,view,note)=>view.status==='PENDING'&&view.plan?send(res,status,'Aprobar plan',form(view,host,note)):
-    send(res,status,'Solicitud cerrada','<p>'+esc(CLOSED[view.status]??'Solicitud no disponible.')+'</p>'+
-      (view.revocable?'<p>Digest: <code>'+esc(view.planDigest)+'</code></p>'+
-        (view.status==='APPROVED'?'':'<p>La aprobación de ese plan sigue guardada: si el proyecto vuelve a ese mismo plan, vuelve a valer.</p>')+REVOKE:''));
+  const show=(res,status,view,note)=>{
+    const repo=view.effect==='CREATE_REPOSITORY';
+    if(view.status==='PENDING'&&repo)return send(res,status,'Autorizar repositorio',repoForm(view,host,note));
+    if(view.status==='PENDING'&&view.plan)return send(res,status,'Aprobar plan',form(view,host,note));
+    const text=(repo?REPO_CLOSED[view.status]:null)??CLOSED[view.status]??'Solicitud no disponible.';
+    const kept=repo?'<p>Repositorio: <code>'+esc(view.repository.fullName)+'</code></p>'+
+      (view.status==='SUPERSEDED'?'<p>La autorización sigue guardada. Si el plan vigente cambió, vuelve a valer cuando el proyecto regrese a ese plan antes de que venza; si la aprobación del plan se revocó, ya no vuelve.</p>':''):'<p>Digest: <code>'+esc(view.planDigest)+'</code></p>'+
+      (view.status==='APPROVED'?'':'<p>La aprobación de ese plan sigue guardada: si el proyecto vuelve a ese mismo plan, vuelve a valer.</p>');
+    send(res,status,'Solicitud cerrada','<p>'+esc(text)+'</p>'+(view.revocable?kept+REVOKE:''));
+  };
   return async function handle(req,res){
     const raw=String(req.url??''),cut=raw.indexOf('?');
     if((cut<0?raw:raw.slice(0,cut))!=='/operator/approve')return false;
@@ -102,11 +126,12 @@ export function createOperatorPage({oauth,approvals}){
       if(result.denied){
         if(result.status==='LOCKED')send(res,403,'Solicitud bloqueada','<p>Contraseña incorrecta. '+esc(CLOSED.LOCKED)+'</p>');
         else show(res,403,await approvals.describe(aid),'Contraseña incorrecta.');
-      }else if(result.status==='APPROVED')
+      }else if(result.effect==='CREATE_REPOSITORY'&&DONE_REPO[result.status])send(res,200,...DONE_REPO[result.status]);
+      else if(result.status==='APPROVED')
         send(res,200,'Plan aprobado','<p>Plan aprobado. Digest: <code>'+esc(result.planDigest)+'</code></p><p>Vuelve a ChatGPT para continuar.</p>');
       else if(result.status==='DENIED')send(res,200,'Plan rechazado','<p>Plan rechazado. No se aprobó nada.</p>');
       else if(result.status==='REVOKED')send(res,200,'Aprobación revocada','<p>Aprobación revocada. El plan ya no está aprobado.</p>');
-      else send(res,409,'Solicitud cerrada','<p>'+esc(CLOSED[result.status]??'Solicitud no disponible.')+'</p>');
+      else send(res,409,'Solicitud cerrada','<p>'+esc((result.effect==='CREATE_REPOSITORY'?REPO_CLOSED[result.status]:null)??CLOSED[result.status]??'Solicitud no disponible.')+'</p>');
     }catch(error){
       const known=ERRORS[error?.code];
       if(!known)throw error;

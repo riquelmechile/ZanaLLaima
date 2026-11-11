@@ -149,3 +149,23 @@ test('el operador revoca una aprobación desde la misma página y queda auditado
     assert.ok(rows.every(x=>x.detail.from==='127.0.0.1'&&x.detail.workspaceId===t.workspaceId));
   }finally{await t.close();}
 });
+
+// Segunda ronda de corrección (reverificación 4R).
+test('una aprobación cuyo plan ya no es el vigente se puede revocar desde la página',async()=>{
+  const t=await setup();
+  try{
+    const r=await t.request();
+    assert.equal((await t.post(r.approvalId,{decision:'allow',password:PASSWORD})).status,200);
+    const s=await t.f.session('zana-chatgpt','oauth-one');
+    const archived=await t.f.call('zana_workspace_set_archived',{workspaceId:t.workspaceId,expectedVersion:2,archived:true},s);
+    assert.ok(archived.archivedAt);
+    assert.equal(await t.status(),'SUPERSEDED');
+    const page=await (await fetch(t.base+'/operator/approve?aid='+r.approvalId)).text();
+    assert.match(page,/sigue guardada/);
+    assert.match(page,/value="revoke"/);
+    assert.equal((await t.post(r.approvalId,{decision:'revoke'})).status,200);
+    await t.f.call('zana_workspace_set_archived',{workspaceId:t.workspaceId,expectedVersion:3,archived:false},s);
+    assert.equal(await t.status(),'REVOKED','restaurar el proyecto ya no revive la aprobación');
+    assert.doesNotMatch(await (await fetch(t.base+'/operator/approve?aid='+r.approvalId)).text(),/value="revoke"/);
+  }finally{await t.close();}
+});

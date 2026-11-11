@@ -26,6 +26,7 @@ import {prepareBootstrap} from './project-bootstrap.mjs';
 import {createProjectWorkspace,getProjectWorkspace,updateProjectWorkspace,listProjectWorkspaces,setProjectWorkspaceArchived} from './project-workspace.mjs';
 import {requestPlanApproval,planApprovalStatus,describePlanApproval,decidePlanApproval} from './plan-approval.mjs';
 import {requestBootstrap,bootstrapStatus} from './bootstrap-request.mjs';
+import {runBootstrap,reconcileBootstrap} from './bootstrap-execute.mjs';
 import {ActorSigner} from './actor-assertion.mjs';
 import {lineBudget,lineLimit,EXTEND_MAX,correctionLimit} from './line-budget.mjs';
 import {nowIso,recordActivity,remoteMission,sessionReviews,sessionWrote,sessionIsMissionAuthor,writeAudit,readAudit} from './remote-state.mjs';
@@ -79,6 +80,10 @@ const NEW_TOOLS={
   zana_bootstrap_request:['Ask the operator to authorize creating the GitHub repository for a workspace whose current plan is already approved. Creates nothing. Returns authorization.approvalUrl: give that link to the user; only the operator authorizes, on that page with the operator password. Repeating the same request returns the same operation',false,
     z.object({workspaceId:z.string().uuid(),expectedVersion:z.number().int().min(0),owner:z.string().min(1).max(100),
       name:z.string().min(1).max(100),visibility:z.enum(['private','public']).default('private')}).strict()],
+  zana_bootstrap_execute:['Create the GitHub repository of a bootstrap operation the operator already authorized. One authorization is one attempt. If GitHub rejects it the cause is kept and a new authorization is needed; if the outcome is unknown it answers OUTCOME_UNKNOWN and must be settled with zana_bootstrap_reconcile, never retried',false,
+    z.object({operationId:z.string().uuid()}).strict()],
+  zana_bootstrap_reconcile:['Settle a bootstrap operation whose creation attempt had an unknown outcome: looks at GitHub and adopts the repository only if that attempt created it',false,
+    z.object({operationId:z.string().uuid()}).strict()],
   zana_bootstrap_status:['Show a bootstrap operation: its repository, state and whether the operator authorized creating it (PENDING, APPROVED, DENIED, REVOKED, EXPIRED, LOCKED or SUPERSEDED when the plan approval no longer holds)',true,
     z.object({operationId:z.string().uuid()}).strict()],
   zana_discovery_start:['Start a new in-chat project brief; no repository, mission or durable approval is created',true,
@@ -151,7 +156,9 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
   // State lives where ZANA_STATE_FILE points, like every other mode.
   const github=new GitHubApi({baseUrl:config.apiUrl,token:config.authorToken,fetcher});
   const reviewerGithub=new GitHubApi({baseUrl:config.apiUrl,token:config.reviewerToken,fetcher});
-  const secrets=()=>[...envSecrets(env),...[config.authorToken,config.reviewerToken].filter(Boolean)];
+  // Cliente aparte para crear repositorios: el token de misiones no lleva ese permiso.
+  const bootstrapGithub=new GitHubApi({baseUrl:config.apiUrl,token:config.bootstrapToken,fetcher});
+  const secrets=()=>[...envSecrets(env),...[config.authorToken,config.reviewerToken,config.bootstrapToken].filter(Boolean)];
   const rw=fn=>remoteWrite(fn),rr=fn=>remoteRead(fn);
   const audit=entry=>rw(db=>writeAudit(db,entry));
 
@@ -254,6 +261,10 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     return {...r,approvalPath,approvalUrl:approvalPath&&config.publicOrigin?config.publicOrigin+approvalPath:null};
   };
   const withApprovalUrl=r=>({...r,authorization:approvalLink(r.authorization)});
+  const bootstrapDeps=(session,operationId)=>{
+    if(!bootstrapGithub.configured)throw new Error('BOOTSTRAP_TOKEN_MISSING: ZANA_BOOTSTRAP_GITHUB_TOKEN is not set on the server');
+    return {rw,rr,github:bootstrapGithub,allowed:repo=>repoAllowed(config,repo),clientId:session.clientId,operationId};
+  };
   const ops={
     zana_workspace_create:({idea},session)=>rw(db=>createProjectWorkspace(db,{clientId:session.clientId,idea})),
     zana_workspace_get:({workspaceId},session)=>rr(db=>getProjectWorkspace(db,{workspaceId,clientId:session.clientId})),
@@ -268,6 +279,8 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     zana_plan_approval_status:({workspaceId},session)=>rr(db=>planApprovalStatus(db,{clientId:session.clientId,workspaceId})),
     zana_bootstrap_request:({workspaceId,expectedVersion,owner,name,visibility},session)=>rw(db=>withApprovalUrl(
       requestBootstrap(db,{clientId:session.clientId,workspaceId,expectedVersion,owner,name,visibility,allowed:repo=>repoAllowed(config,repo)}))),
+    zana_bootstrap_execute:async({operationId},session)=>withApprovalUrl(await runBootstrap(bootstrapDeps(session,operationId))),
+    zana_bootstrap_reconcile:async({operationId},session)=>withApprovalUrl(await reconcileBootstrap(bootstrapDeps(session,operationId))),
     zana_bootstrap_status:({operationId},session)=>rr(db=>withApprovalUrl(bootstrapStatus(db,{clientId:session.clientId,operationId}))),
     zana_discovery_start:({idea})=>startDiscovery(idea),
     zana_discovery_questions:({brief,limit,includeOptional})=>nextDiscoveryQuestions(brief,{limit,includeOptional}),
@@ -681,6 +694,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     if(!config.reviewerLogin)problems.push('ZANA_REVIEWER_LOGIN missing');
     return {status:problems.length?'degraded':'ok',problems,schemaVersion,staleTickets,
       authorToken:config.authorToken?'configured':'missing',reviewerToken:config.reviewerToken?'configured':'missing',
+      bootstrapToken:config.bootstrapToken?'configured':'missing',
       downstream:gateway.status().state};
   }
   // Decisión del operador: la llama la página HTTP, nunca una tool. Queda auditada.

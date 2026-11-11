@@ -67,6 +67,6 @@ export function redactDeep(value,secrets=[]){
 }
 
 // Names of the environment variables that hold secrets in remote mode.
-export const SECRET_ENV=Object.freeze(['ZANA_DOWNSTREAM_GITHUB_TOKEN','ZANA_REVIEWER_TOKEN',
+export const SECRET_ENV=Object.freeze(['ZANA_DOWNSTREAM_GITHUB_TOKEN','ZANA_REVIEWER_TOKEN','ZANA_BOOTSTRAP_GITHUB_TOKEN',
   'ZANA_OAUTH_CONSENT_PASSWORD']);
 export const envSecrets=(env=process.env)=>SECRET_ENV.map(name=>env[name]).filter(Boolean);

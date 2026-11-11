@@ -115,6 +115,7 @@ Edítalo con un editor en el servidor, nunca en el repo ni en un chat. **Rutas a
 | `ZANA_GITHUB_REPOS` | sí | Repos donde GPT puede abrir misiones, separados por coma. Cada entrada es `owner/repo` (ese repo) u `owner/*` (todos los repos de esa cuenta, incluidos los que se creen después). No existe `*` solo: la cuenta siempre va nombrada, con un login de letras, números y guiones (una cuenta con `_` en el nombre lista sus repos uno por uno). GPT no puede escribir en ningún otro. |
 | `ZANA_DOWNSTREAM_GITHUB_TOKEN` | sí | Token de la cuenta autora (1.1). |
 | `ZANA_REVIEWER_TOKEN` | sí | Token de la cuenta revisora (1.2). |
+| `ZANA_BOOTSTRAP_GITHUB_TOKEN` | no | Token de la cuenta dueña solo para crear repositorios (bootstrap). Aparte del de misiones a propósito; sin él `zana_bootstrap_execute` responde `BOOTSTRAP_TOKEN_MISSING`. |
 | `ZANA_REVIEWER_LOGIN` | sí | Login de GitHub de la cuenta revisora. No tiene valor por defecto: sin él el servidor no arranca, y `node src/cli.mjs remote-health` lo muestra como `degraded`. |
 | `ZANA_HTTP_PORT` | no | Puerto local, 8787 por defecto. |
 | `ZANA_REQUIRED_CHECKS` | no | Nombres de checks que deben estar verdes. Vacío = todos los check runs del SHA. |

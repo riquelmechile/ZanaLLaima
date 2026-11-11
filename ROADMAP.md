@@ -14,7 +14,7 @@ Hecho en esta versión:
 Lo que sigue:
 
 - [x] Aprobación autenticada del plan por su huella exacta: el modelo la pide (`zana_plan_approval_request`) y solo el operador la concede en `/operator/approve` con su contraseña. Hecho después de publicar esta versión; todavía ninguna tool consume la aprobación.
-- [ ] Conectar al backend el bootstrap (crear el repo, instalar el CI, invitar a la revisora y proteger la rama), con autorización del operador registrada. Hecho hasta ahora: la autorización del operador para crear el repositorio (`zana_bootstrap_request`, `zana_bootstrap_status`); falta la ejecución.
+- [ ] Conectar al backend el bootstrap (crear el repo, instalar el CI, invitar a la revisora y proteger la rama), con autorización del operador registrada. Hecho hasta ahora: la autorización del operador (`zana_bootstrap_request`, `zana_bootstrap_status`) y la creación del repositorio con reconciliación (`zana_bootstrap_execute`, `zana_bootstrap_reconcile`); falta instalar el CI, invitar a la revisora y proteger la rama.
 - [ ] Conectar el orquestador: varias misiones por proyecto, estado guardado en el servidor.
 - [ ] 4R con subagentes nativos. Primero hay que comprobar si un subagente llega al servidor con una identidad distinta de la conversación que lo lanzó.
 - [ ] Revisión que converge: el revisor recibe los hallazgos de las rondas anteriores y el operador puede aceptar un riesgo.

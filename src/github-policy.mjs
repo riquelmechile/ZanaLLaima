@@ -8,6 +8,7 @@
 // src/core/github-workforce.ts (own branch only, never default or CI files).
 import {readFileSync} from 'node:fs';
 import {validRefName} from './github-api.mjs';
+import {checksForRepo} from './checks-policy.mjs';
 
 export const CATALOG=JSON.parse(readFileSync(new URL('../data/github-mcp-tools.json',import.meta.url),'utf8'));
 export const WRITE_RULES=Object.freeze(['branch','file','files','pr-create','pr-edit','pr-title','pr-body',
@@ -141,7 +142,8 @@ export function createGitHubPolicy({deps,config,catalog=CATALOG}){
         return pullDenied(await pullOfMission(ctx,args.issue_number));
       case 'checks-dispatch':
         if(args.method!=='run_workflow')return deny('METHOD_NOT_ALLOWED','only run_workflow of the checks workflow is allowed');
-        if(args.workflow_id!==config.checksWorkflow)return deny('WORKFLOW_NOT_ALLOWED','only '+config.checksWorkflow+' may be dispatched');
+        const workflow=checksForRepo(config,ctx.repo).workflow;
+        if(args.workflow_id!==workflow)return deny('WORKFLOW_NOT_ALLOWED','only '+workflow+' may be dispatched');
         if(args.ref!==ctx.branch)return deny('OUTSIDE_MISSION_BRANCH','ref must be '+ctx.branch);
         return null;
       default:

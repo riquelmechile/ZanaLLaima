@@ -253,7 +253,9 @@ test('remote state: session identity binding and bounded audit reads',async()=>{
 
 test('skills: list, load, frontmatter and path traversal',async()=>{
   const names=listSkills().map(s=>s.name);
-  assert.deepEqual(names,['review-discipline','review-readability','review-reliability','review-resilience','review-risk','zana-4r','zana-odd','zana-pr']);
+  for(const required of ['review-discipline','review-readability','review-reliability','review-resilience','review-risk','zana-4r','zana-odd','zana-pr','zana-project-discovery'])
+    assert.ok(names.includes(required),'missing mandatory skill '+required);
+  assert.equal(new Set(names).size,names.length,'skill names must be unique');
   for(const name of names){
     const s=loadSkill(name);
     assert.equal(s.name,name);

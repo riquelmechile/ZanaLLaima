@@ -37,6 +37,8 @@ test('prohíbe misma sesión, revisión autora y sesiones anteriores al ticket',
   const x=session();
   await assert.rejects(verifyIndependentReview({...x,reviewSession:{...x.reviewSession,id:'author'}},async()=>true),/REVIEWER_NOT_INDEPENDENT/);
   await assert.rejects(verifyIndependentReview({...x,reviewSession:{...x.reviewSession,wrote:true}},async()=>true),/REVIEWER_NOT_INDEPENDENT/);
+  const {wrote:unknown,...unverified}=x.reviewSession;
+  await assert.rejects(verifyIndependentReview({...x,reviewSession:unverified},async()=>true),/REVIEWER_NOT_INDEPENDENT/);
   await assert.rejects(verifyIndependentReview({...x,reviewSession:{...x.reviewSession,createdAt:'2026-11-11T00:20:00Z'}},async()=>true),/REVIEWER_PREDATES_TICKET/);
 });
 test('distinto cliente OAuth cuando se requiere y verificador obligatorio',async()=>{

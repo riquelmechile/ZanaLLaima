@@ -192,3 +192,30 @@ test('un 4xx con el repositorio creado se adopta; el circuito abierto no cuenta 
     assert.equal(t.gh.posts().length,0,'la reserva vuelve a comprobar que la autorización sea de esta operación');
   }finally{t.f.db.close();}
 });
+
+test('un reconciliador o una ejecución obsoletos no pisan un intento posterior',async()=>{
+  const gh=github({create:()=>{throw new GitHubApiError(502,'GitHub HTTP 502');}}),t=setup({gh});
+  const late={now:()=>T0+200_000},renew=()=>{
+    const r=requestBootstrap(t.f.db,{...t.f.at,expectedVersion:t.f.w.version,owner:'acme',name:'gestor',visibility:'private',allowed,now:T0+200_000});
+    decidePlanApproval(t.f.db,{approvalId:r.authorization.approvalId,decision:'allow',passwordOk:true,now:T0+200_000});
+  };
+  try{
+    await assert.rejects(t.run(),/OUTCOME_UNKNOWN/); // intento A: incierto
+    let open;const gate=new Promise(ok=>{open=ok;});
+    const slow={repo:async repo=>{await gate;return gh.repo(repo);}};
+    const stale=t.reconcile({...late,github:slow}); // lee el intento A y queda esperando a GitHub
+    await new Promise(setImmediate);
+    assert.equal((await t.reconcile(late)).state,'AWAITING_AUTHORIZATION');
+    renew();
+    // Intento B: su POST queda en vuelo mientras llegan los resultados viejos de A.
+    let fly;gh.request=(request=>async(m,p,o)=>{if(m==='POST')await new Promise(ok=>{fly=ok;});return request(m,p,o);})(gh.request.bind(gh));
+    const second=t.run(late);
+    while(!fly)await new Promise(setImmediate);
+    open();
+    await assert.rejects(stale,/NOTHING_TO_RECONCILE/);
+    assert.equal(t.status().state,'UNCERTAIN','el resultado viejo de A no reabre el intento B');
+    fly();await assert.rejects(second,/OUTCOME_UNKNOWN/);
+    const marks=gh.posts().map(x=>x[2].description);
+    assert.equal(marks.length,2);assert.notEqual(marks[0],marks[1],'cada intento lleva su propia marca');
+  }finally{t.f.db.close();}
+});

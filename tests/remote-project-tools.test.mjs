@@ -29,7 +29,7 @@ test('discovery y plan MCP funcionan sin misión ni repositorio',async()=>{
     assert.equal(proposal.visibility,'private');
     assert.deepEqual(f.api.state.dispatches,[],'no CI or external write');
     assert.deepEqual(f.api.state.pulls,[],'no PR or repository created');
-    assert.equal(REMOTE_TOOL_NAMES.length,39);
+    assert.equal(REMOTE_TOOL_NAMES.length,42);
   }finally{await f.cleanup();}
 });
 test('tampers y documentos sin fuente no crean propuesta',async()=>{
@@ -43,5 +43,28 @@ test('tampers y documentos sin fuente no crean propuesta',async()=>{
     assert.ok(draft.error);
     const proposal=await f.call('zana_bootstrap_prepare',{plan:{schema:'fake'},owner:'o',name:'repo'},session);
     assert.match(proposal.error,/INVALID_PLAN/);
+  }finally{await f.cleanup();}
+});
+
+test('workspace OAuth persiste entre sesiones, rechaza versiones obsoletas y clientes ajenos',async()=>{
+  const f=await remoteFixture();
+  try{
+    const author=await f.session('zana-chatgpt','oauth-one');
+    const w=await f.call('zana_workspace_create',{idea:'Plataforma privada para gestionar proyectos de desarrollo'},author);
+    assert.equal(w.version,0);assert.equal(w.plan,null);
+    const same=await f.session('zana-chatgpt','oauth-one');
+    assert.equal((await f.call('zana_workspace_get',{workspaceId:w.workspaceId},same)).workspaceId,w.workspaceId);
+    const v1=await f.call('zana_workspace_update',{workspaceId:w.workspaceId,expectedVersion:0,answers:{
+      goal:'Gestionar proyectos',users:'Desarrolladores',platform:'Web',features:'Misiones',data:'Sin secretos'}},same);
+    assert.equal(v1.version,1);
+    const stale=await f.call('zana_workspace_update',{workspaceId:w.workspaceId,expectedVersion:0,answers:{goal:'Cambio'}},same);
+    assert.match(stale.error,/STALE_REVISION/);
+    const foreign=await f.session('zana-chatgpt','oauth-other');
+    assert.match((await f.call('zana_workspace_get',{workspaceId:w.workspaceId},foreign)).error,/WORKSPACE_NOT_FOUND/);
+    const p=await f.call('zana_project_plan_draft',{brief:v1.brief,alternatives:sources,
+      selectedId:'node',milestones:[{id:'core',objective:'Diseñar',acceptance:'Tests',dependsOn:[]}]},same);
+    const stored=await f.call('zana_workspace_update',{workspaceId:w.workspaceId,expectedVersion:1,plan:p},same);
+    assert.equal(stored.plan.digest,p.digest);
+    assert.deepEqual(f.api.state.dispatches,[]);
   }finally{await f.cleanup();}
 });

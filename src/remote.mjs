@@ -25,6 +25,7 @@ import {startDiscovery,answerDiscovery,nextDiscoveryQuestions,draftProjectPlan} 
 import {prepareBootstrap} from './project-bootstrap.mjs';
 import {createProjectWorkspace,getProjectWorkspace,updateProjectWorkspace,listProjectWorkspaces,setProjectWorkspaceArchived} from './project-workspace.mjs';
 import {requestPlanApproval,planApprovalStatus,describePlanApproval,decidePlanApproval} from './plan-approval.mjs';
+import {requestBootstrap,bootstrapStatus} from './bootstrap-request.mjs';
 import {ActorSigner} from './actor-assertion.mjs';
 import {lineBudget,lineLimit,EXTEND_MAX,correctionLimit} from './line-budget.mjs';
 import {nowIso,recordActivity,remoteMission,sessionReviews,sessionWrote,sessionIsMissionAuthor,writeAudit,readAudit} from './remote-state.mjs';
@@ -75,6 +76,11 @@ const NEW_TOOLS={
     z.object({workspaceId:z.string().uuid(),expectedVersion:z.number().int().min(0)}).strict()],
   zana_plan_approval_status:['Show whether the current plan of a workspace is approved by the operator (NONE, PENDING, APPROVED, DENIED, REVOKED, EXPIRED, LOCKED, or SUPERSEDED when the plan changed)',true,
     z.object({workspaceId:z.string().uuid()}).strict()],
+  zana_bootstrap_request:['Ask the operator to authorize creating the GitHub repository for a workspace whose current plan is already approved. Creates nothing. Returns authorization.approvalUrl: give that link to the user; only the operator authorizes, on that page with the operator password. Repeating the same request returns the same operation',false,
+    z.object({workspaceId:z.string().uuid(),expectedVersion:z.number().int().min(0),owner:z.string().min(1).max(100),
+      name:z.string().min(1).max(100),visibility:z.enum(['private','public']).default('private')}).strict()],
+  zana_bootstrap_status:['Show a bootstrap operation: its repository, state and whether the operator authorized creating it (PENDING, APPROVED, DENIED, REVOKED, EXPIRED, LOCKED or SUPERSEDED when the plan approval no longer holds)',true,
+    z.object({operationId:z.string().uuid()}).strict()],
   zana_discovery_start:['Start a new in-chat project brief; no repository, mission or durable approval is created',true,
     z.object({idea:z.string().min(12).max(2000)}).strict()],
   zana_discovery_questions:['Return outstanding questions for a project brief; no state change',true,
@@ -242,6 +248,12 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
   const checks=createChecks({github,config,remoteWrite:rw,remoteRead:rr,missionContext,recordActivity});
   const review=createReview({github,reviewerGithub,config,checks,remoteWrite:rw,remoteRead:rr,transact,missionContext});
 
+  // Enlace a la página del operador para una solicitud abierta.
+  const approvalLink=r=>{
+    const approvalPath=r.approvalId?'/operator/approve?aid='+r.approvalId:null;
+    return {...r,approvalPath,approvalUrl:approvalPath&&config.publicOrigin?config.publicOrigin+approvalPath:null};
+  };
+  const withApprovalUrl=r=>({...r,authorization:approvalLink(r.authorization)});
   const ops={
     zana_workspace_create:({idea},session)=>rw(db=>createProjectWorkspace(db,{clientId:session.clientId,idea})),
     zana_workspace_get:({workspaceId},session)=>rr(db=>getProjectWorkspace(db,{workspaceId,clientId:session.clientId})),
@@ -251,12 +263,12 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       setProjectWorkspaceArchived(db,{clientId:session.clientId,workspaceId,expectedVersion,archived})),
     zana_workspace_update:({workspaceId,expectedVersion,answers,plan},session)=>rw(db=>
       updateProjectWorkspace(db,{clientId:session.clientId,workspaceId,expectedVersion,answers,plan})),
-    zana_plan_approval_request:({workspaceId,expectedVersion},session)=>rw(db=>{
-      const r=requestPlanApproval(db,{clientId:session.clientId,workspaceId,expectedVersion});
-      const approvalPath=r.approvalId?'/operator/approve?aid='+r.approvalId:null;
-      return {...r,approvalPath,approvalUrl:approvalPath&&config.publicOrigin?config.publicOrigin+approvalPath:null};
-    }),
+    zana_plan_approval_request:({workspaceId,expectedVersion},session)=>rw(db=>
+      approvalLink(requestPlanApproval(db,{clientId:session.clientId,workspaceId,expectedVersion}))),
     zana_plan_approval_status:({workspaceId},session)=>rr(db=>planApprovalStatus(db,{clientId:session.clientId,workspaceId})),
+    zana_bootstrap_request:({workspaceId,expectedVersion,owner,name,visibility},session)=>rw(db=>withApprovalUrl(
+      requestBootstrap(db,{clientId:session.clientId,workspaceId,expectedVersion,owner,name,visibility,allowed:repo=>repoAllowed(config,repo)}))),
+    zana_bootstrap_status:({operationId},session)=>rr(db=>withApprovalUrl(bootstrapStatus(db,{clientId:session.clientId,operationId}))),
     zana_discovery_start:({idea})=>startDiscovery(idea),
     zana_discovery_questions:({brief,limit,includeOptional})=>nextDiscoveryQuestions(brief,{limit,includeOptional}),
     zana_discovery_answer:({brief,answers})=>answerDiscovery(brief,answers),
@@ -672,8 +684,8 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     describe:approvalId=>rr(db=>describePlanApproval(db,{approvalId})),
     decide:({approvalId,decision,passwordOk,from=null})=>rw(db=>{
       const r=decidePlanApproval(db,{approvalId,decision,passwordOk});
-      writeAudit(db,{caller:{host:'operator',sessionId:null},tool:'operator_plan_approval',
-        outcome:r.denied?'REFUSED':r.status,detail:{workspaceId:r.workspaceId,planDigest:r.planDigest,from},category:'operator'});
+      writeAudit(db,{caller:{host:'operator',sessionId:null},tool:r.effect==='CREATE_REPOSITORY'?'operator_repository_approval':'operator_plan_approval',
+        outcome:r.denied?'REFUSED':r.status,detail:{workspaceId:r.workspaceId,planDigest:r.planDigest,subject:r.subject,from},category:'operator'});
       return r;
     }),
   };

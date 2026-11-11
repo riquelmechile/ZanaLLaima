@@ -249,6 +249,10 @@ export function createHttpServer({runtime,oauth,settings,log=console,maxSessions
     }
   });
   server.sessions=sessions;
+  // Reintentos de los avisos pendientes (MCP Events); el primer envío sale al encolar.
+  const eventTimer=runtime?.events?setInterval(()=>{void runtime.events.flush();},30_000):null;
+  eventTimer?.unref();
+  server.on('close',()=>clearInterval(eventTimer));
   return server;
 }
 

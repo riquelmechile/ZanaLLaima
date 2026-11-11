@@ -163,7 +163,12 @@ async function runRemoteCommand({command,input}){
   if(command==='remote-enroll')return setEnrollment(db,input.minutes);
   if(command==='remote-enroll-close')return setEnrollment(db,0);
   if(command==='remote-clients')return listClients(db);
-  if(command==='remote-revoke')return revokeClient(db,input.clientId);
+  if(command==='remote-revoke'){
+    // Un cliente revocado deja de recibir avisos: se borran sus suscripciones a eventos.
+    const result=revokeClient(db,input.clientId);
+    const {remoteWrite}=await import('./store.mjs'),{dropClientEvents}=await import('./mcp-events.mjs');
+    return {...result,eventSubscriptionsDropped:await remoteWrite(state=>dropClientEvents(state,{clientId:input.clientId}))};
+  }
   const {createRemoteRuntime}=await import('./remote.mjs');
   const runtime=createRemoteRuntime();
   try{

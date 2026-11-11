@@ -16,7 +16,8 @@ export async function readDiff(call,ticket,s){
 }
 export {AUTHOR_TOKEN,REVIEWER_TOKEN,REVIEWER_LOGIN,AUTHOR_LOGIN,sha};
 
-export async function remoteFixture({envExtra={},mcp={}}={}){
+// runtimeOptions: opciones extra de createRemoteRuntime (por ejemplo eventPost).
+export async function remoteFixture({envExtra={},mcp={},runtimeOptions={}}={}){
   const dir=await mkdtemp(join(tmpdir(),'zana-remote-'));
   const previous=process.env.ZANA_STATE_FILE;
   process.env.ZANA_STATE_FILE=join(dir,'state.json');
@@ -25,7 +26,7 @@ export async function remoteFixture({envExtra={},mcp={}}={}){
   const ds=await fakeGitHubMcp(mcp);
   const env={ZANA_GITHUB_REPOS:'o/r',ZANA_GITHUB_API_URL:api.url,ZANA_DOWNSTREAM_GITHUB_URL:ds.url,
     ZANA_DOWNSTREAM_GITHUB_TOKEN:AUTHOR_TOKEN,ZANA_REVIEWER_TOKEN:REVIEWER_TOKEN,ZANA_REVIEWER_LOGIN:REVIEWER_LOGIN,...envExtra};
-  const runtime=createRemoteRuntime({env});
+  const runtime=createRemoteRuntime({env,...runtimeOptions});
   let n=0;
   const session=async(host='zana-chatgpt',clientId='zc_test')=>{
     await sleep(3); // distinct creation timestamps

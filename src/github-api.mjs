@@ -30,17 +30,25 @@ export function validRepo(repo){
 // Una entrada de la lista de repos permitidos: `owner/repo` exacto u `owner/*`
 // (todos los repos de esa cuenta). No hay `*`, `*/*` ni prefijos: el comodín
 // solo vale como nombre completo del repo y la cuenta va nombrada con un login de GitHub válido.
-const OWNER_LOGIN=/^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
+// Los logins con `_` (cuentas administradas por una empresa) no calzan: esas
+// cuentas nombran sus repos uno por uno.
+export const LOGIN=/^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
 export function validRepoPattern(pattern){
   if(typeof pattern!=='string')return false;
-  return pattern.endsWith('/*')?OWNER_LOGIN.test(pattern.slice(0,-2)):validRepo(pattern);
+  return pattern.endsWith('/*')?LOGIN.test(pattern.slice(0,-2)):validRepo(pattern);
 }
 // ¿Algún patrón de la lista cubre este repo? El repo tiene que ser un
 // `owner/repo` válido por sí mismo; la comparación no distingue mayúsculas.
+// Un patrón que no pasa validRepoPattern no cubre nada: ambos lados son ASCII
+// antes de pasar a minúsculas, así que el plegado Unicode no entra en juego.
 export function repoMatches(patterns,repo){
-  if(!validRepo(repo))return false;
+  if(!Array.isArray(patterns)||!validRepo(repo))return false;
   const name=repo.toLowerCase(),owner=name.slice(0,name.indexOf('/')+1);
-  return patterns.some(p=>{const q=String(p).toLowerCase();return q.endsWith('/*')?q.slice(0,-1)===owner:q===name;});
+  return patterns.some(p=>{
+    if(!validRepoPattern(p))return false;
+    const q=p.toLowerCase();
+    return q.endsWith('/*')?q.slice(0,-1)===owner:q===name;
+  });
 }
 // A git branch name per check-ref-format, without anything a URL parser could
 // reinterpret. Copied from panter-ai github-workforce.ts validRefName.

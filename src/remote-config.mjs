@@ -1,11 +1,10 @@
 // Remote-mode configuration from the server environment. Fails closed on
 // anything unclear. Secrets are referenced by variable name only; their values
 // stay in the environment file outside the repository.
-import {validRepoPattern,repoMatches,validRefName} from './github-api.mjs';
+import {validRepoPattern,repoMatches,validRefName,LOGIN} from './github-api.mjs';
 import {allowedUrl} from './downstream.mjs';
 import {parseRepoChecks} from './checks-policy.mjs';
 
-const LOGIN=/^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
 const list=v=>String(v??'').split(',').map(x=>x.trim()).filter(Boolean);
 const int=(v,def,min,max,name)=>{
   if(v===undefined||v==='')return def;

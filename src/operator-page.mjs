@@ -74,7 +74,8 @@ export function createOperatorPage({oauth,approvals}){
   // El formulario solo se muestra si la solicitud sigue abierta sobre el plan vigente.
   const show=(res,status,view,note)=>view.status==='PENDING'&&view.plan?send(res,status,'Aprobar plan',form(view,host,note)):
     send(res,status,'Solicitud cerrada','<p>'+esc(CLOSED[view.status]??'Solicitud no disponible.')+'</p>'+
-      (view.status==='APPROVED'?'<p>Digest: <code>'+esc(view.planDigest)+'</code></p>'+REVOKE:''));
+      (view.revocable?'<p>Digest: <code>'+esc(view.planDigest)+'</code></p>'+
+        (view.status==='APPROVED'?'':'<p>La aprobación de ese plan sigue guardada: si el proyecto vuelve a ese mismo plan, vuelve a valer.</p>')+REVOKE:''));
   return async function handle(req,res){
     const raw=String(req.url??''),cut=raw.indexOf('?');
     if((cut<0?raw:raw.slice(0,cut))!=='/operator/approve')return false;

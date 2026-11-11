@@ -51,7 +51,7 @@ export function validateReviewFindingPacket(packet,{lens,payloadHash,sha,finding
 export async function verifyIndependentReview({authorSession,reviewSession,ticketCreatedAt,
   reviewerClientRequired=false},verifyActor){
   if(!own(authorSession)||!own(reviewSession)||!str(authorSession.id)||!str(reviewSession.id)||
-    authorSession.id===reviewSession.id||reviewSession.wrote===true)
+    authorSession.id===reviewSession.id||reviewSession.wrote!==false)
     fail('REVIEWER_NOT_INDEPENDENT','Misma sesión autora o revisión con escrituras');
   const ticketTime=Date.parse(ticketCreatedAt),reviewTime=Date.parse(reviewSession.createdAt);
   if(!Number.isFinite(ticketTime)||!Number.isFinite(reviewTime)||reviewTime<=ticketTime)

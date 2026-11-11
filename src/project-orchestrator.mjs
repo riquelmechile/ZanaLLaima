@@ -3,6 +3,7 @@
 import {validateBootstrapPlan} from './project-bootstrap.mjs';
 const SHA=/^[0-9a-f]{40}$/;
 const ID=/^[a-z][a-z0-9-]{0,47}$/;
+const MISSION_ID=/^(?:[a-z][a-z0-9-]{0,47}|[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i;
 const fail=(code,msg)=>{const e=new Error(code+': '+msg);e.code=code;throw e;};
 const freeze=x=>{if(x&&typeof x==='object'){Object.values(x).forEach(freeze);Object.freeze(x);}return x;};
 const copy=x=>structuredClone(x);
@@ -37,7 +38,7 @@ export function readyMilestones(state){
 export function claimMilestone(state,{expectedRevision,milestoneId,missionId,headSha}){
   check(state);
   if(expectedRevision!==state.revision)fail('STALE_REVISION','La revisión del proyecto cambió');
-  if(!ID.test(milestoneId)||!ID.test(missionId))fail('INVALID_ID','ID de hito o misión inválido');
+  if(!ID.test(milestoneId)||!MISSION_ID.test(missionId))fail('INVALID_ID','ID de hito o misión inválido');
   if(!SHA.test(headSha))fail('INVALID_SHA','El SHA de base debe ser exacto');
   if(!readyMilestones(state).some(m=>m.id===milestoneId))fail('MILESTONE_NOT_READY','Dependencias o misión activa');
   if(state.milestones.some(m=>m.missionId===missionId))fail('DUPLICATE_MISSION','La misión ya se utilizó');

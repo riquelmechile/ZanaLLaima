@@ -59,3 +59,11 @@ test('cancelación requiere revisión actual y motivo',()=>{
   assert.equal(b.status,'CANCELLED');assert.deepEqual(readyMilestones(b),[]);
   assert.throws(()=>cancelProjectRun(b,{expectedRevision:b.revision,reason:'Cancelado de nuevo'}),/INVALID_STATE/);
 });
+
+test('acepta missionId UUID real aunque comience por un dígito',async()=>{
+  const uuid='12345678-1234-4234-8234-123456789012';
+  const running=claim(init(),'discovery',uuid);
+  assert.equal(running.milestones[0].missionId,uuid);
+  const completed=await done(running,'discovery',uuid);
+  assert.equal(completed.milestones[0].status,'DONE');
+});

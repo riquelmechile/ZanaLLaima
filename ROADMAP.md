@@ -1,32 +1,33 @@
 ## 0.8.0: de una misión a un proyecto, primera parte (11 nov 2026)
 
-**Objetivo.** Que GPT pueda llevar un proyecto completo desde una idea: entrevista, plan aprobado, repositorio, misiones encadenadas, revisión 4R y entrega. Esta versión trae la base y lo que ya se puede usar; el resto queda como contrato probado, sin conectar.
+**Objetivo.** Que GPT pueda llevar un proyecto completo desde una idea: entrevista, plan aprobado por el operador, repositorio, misiones encadenadas, revisión 4R y entrega. Esta versión trae la base y lo que ya se puede usar; el resto queda como contrato probado, sin conectar.
 
 Hecho en esta versión:
 
-- [x] **Discovery.** Entrevista por rondas, alternativas con fuentes oficiales y plan con hitos, dependencias y criterios de aceptación (`zana_discovery_*`, `zana_project_plan_draft`). El plan es un borrador: no se aprueba solo.
+- [x] **Discovery.** Entrevista por rondas, alternativas con fuentes HTTPS fechadas y plan con hitos, dependencias y criterios de aceptación (`zana_discovery_*`, `zana_project_plan_draft`). El plan es un borrador: no se aprueba solo.
 - [x] **Borradores de proyecto** por cliente OAuth, con listado y archivado (`zana_workspace_*`): redactan credenciales antes de guardar y tienen tope de 50 por cliente.
 - [x] **CI por repositorio** (`ZANA_REPO_CHECKS_JSON`), aplicado en checks, entrega, merge y dispatch.
 - [x] **Repos permitidos por cuenta** (`owner/*` en `ZANA_GITHUB_REPOS`).
 - [x] Lecturas de archivos como texto, sin el aviso de "materializar archivos" de ChatGPT.
-- [x] Contratos con tests, **sin tool que los ejecute**: bootstrap de repositorios, orquestador de hitos con recuperación, paquetes 4R para subagentes, gate de entrega y eventos firmados.
+- [x] Contratos con tests, **sin tool que los ejecute**: creación de repositorios (del bootstrap solo está conectada la propuesta, `zana_bootstrap_prepare`), orquestador de hitos con recuperación, paquetes 4R para subagentes, gate de entrega de proyecto y eventos firmados.
 
 Lo que sigue:
 
+- [ ] Aprobación autenticada del plan por su huella exacta (hoy queda siempre pendiente).
 - [ ] Conectar al backend el bootstrap (crear el repo, instalar el CI, invitar a la revisora y proteger la rama), con autorización del operador registrada.
 - [ ] Conectar el orquestador: varias misiones por proyecto, estado guardado en el servidor.
 - [ ] 4R con subagentes nativos. Primero hay que comprobar si un subagente llega al servidor con una identidad distinta de la conversación que lo lanzó.
 - [ ] Revisión que converge: el revisor recibe los hallazgos de las rondas anteriores y el operador puede aceptar un riesgo.
 - [ ] Gate de entrega con evidencia definida para merge squash.
 - [ ] Borrado y recuperación de borradores; tabla propia en vez de `metadata`.
-- [ ] MCP Events para continuidad y panel MCP Apps.
+- [ ] MCP Events para continuidad entre misiones.
 - [ ] Rechazar al inicio una misión sobre un repo que no existe (`REPO_NOT_FOUND`).
 
 ## Versión anterior: MCP remoto para la app de ChatGPT, en uso real desde el 9 nov 2026
 
 **Cambio de rumbo.** ZanaLLaima dejó de ser solo un MCP stdio que vigila un worktree y pasó a ser un **MCP remoto** en el servidor del operador, conectado como conector de la app de ChatGPT. La verdad es el SHA en GitHub y los checks de Actions; GPT escribe por el downstream de GitHub solo en `zana/<missionId>`; la revisión la hace el mismo GPT en una conversación nueva y la publica la cuenta revisora.
 
-Hecho en esta versión:
+Hecho en esa versión:
 
 - [x] **ZL-020.** Streamable HTTP con sesiones, OAuth embebido con registro cerrado por ventana de alta, `/health`, `deploy/` y `docs/deploy-remote.md`.
 - [x] Downstream del GitHub MCP oficial y política allowlist propia sobre la lista real de tools v2.1.0 (`docs/downstream-github.md`).

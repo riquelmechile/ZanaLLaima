@@ -119,6 +119,7 @@ Edítalo con un editor en el servidor, nunca en el repo ni en un chat. **Rutas a
 | `ZANA_HTTP_PORT` | no | Puerto local, 8787 por defecto. |
 | `ZANA_REQUIRED_CHECKS` | no | Nombres de checks que deben estar verdes. Vacío = todos los check runs del SHA. |
 | `ZANA_CHECKS_WORKFLOW` | no | Nombre del workflow de checks, `zana-checks.yml` por defecto. |
+| `ZANA_REPO_CHECKS_JSON` | no | Workflow y checks requeridos distintos para repos concretos, en JSON. Formato y ejemplo en [checks-workflow.md](checks-workflow.md). |
 | `ZANA_MERGE_ENABLED`, `ZANA_MERGE_METHOD` | no | `true` y `squash` por defecto. |
 | `ZANA_DISTINCT_REVIEWER_CLIENT` | no | `true` exige otro cliente OAuth para revisar (ver abajo). `false` por defecto. |
 | `ZANA_TICKET_TTL_MINUTES`, `ZANA_TICKET_CLAIM_TTL_MINUTES`, `ZANA_TOOL_DEADLINE_MS` | no | Plazos; los valores por defecto están en el ejemplo. |

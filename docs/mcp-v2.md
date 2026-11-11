@@ -58,7 +58,7 @@ Desde el 9 nov 2026 hay una prueba con una cuenta ChatGPT real para el camino fe
 - **OAuth con registro cerrado** (`src/oauth.mjs`, adaptado de Panter-ai `embedded-oauth.ts`): DCR, `/authorize` y consentimiento solo durante la ventana que abre el operador con `node src/cli.mjs remote-enroll <minutos>` y con la clave del operador. Fuera de la ventana no entra nadie nuevo; las conexiones aprobadas siguen y rotan su refresh token. Cada conexión queda atada a una etiqueta de host que elige el operador. El ledger OAuth vive en su propio SQLite (un restore de misiones nunca revive credenciales).
 - `/health` responde sin autenticación con nombre, versión, modo, sesiones abiertas y estado del downstream.
 - Host y Origin en allowlist (`ZANA_ALLOWED_ORIGINS`, por defecto `https://chatgpt.com`), cuerpo máximo 4 MB, `no-store`.
-- Las `instructions` del servidor piden cargar `zana-odd` al empezar y `zana-4r` al recibir un ticket.
+- Las `instructions` del servidor piden cargar `zana-project-discovery` para una idea sin repositorio, `zana-odd` para una misión existente y `zana-4r` al recibir un ticket.
 
 ### Herramientas por modo
 

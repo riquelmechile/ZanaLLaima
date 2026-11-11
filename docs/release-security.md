@@ -4,7 +4,7 @@
 
 ## Qué es la release 0.8.0 y qué no
 
-Es una versión **alfa** para instalaciones de un solo operador, en uso real desde el 9 de noviembre de 2026. Se publica con el tag `v0.8.0` por decisión del operador. Respecto de la anterior agrega la entrevista y el plan de proyecto, los borradores por cliente, el CI por repositorio y los repos permitidos por cuenta; los módulos de bootstrap, orquestación, revisión delegada, entrega y eventos entran como contratos probados que ninguna tool ejecuta todavía. El resto de este documento es la auditoría de la fase 5, hecha antes del modo remoto: sus hallazgos sobre el modo stdio siguen valiendo para ese modo, que está congelado.
+Es una versión **alfa** para instalaciones de un solo operador. El modo remoto está en uso real desde el 9 de noviembre de 2026; la entrevista, el plan y los borradores se desplegaron y probaron el 11 de noviembre. Se publica con el tag `v0.8.0` por decisión del operador. Respecto de la anterior agrega la entrevista y el plan de proyecto, los borradores por cliente, el CI por repositorio y los repos permitidos por cuenta; de los módulos de bootstrap, orquestación, revisión delegada, entrega y eventos solo está conectada la propuesta de bootstrap (`zana_bootstrap_prepare`): el resto son contratos probados que ninguna tool ejecuta todavía. El resto de este documento es la auditoría de la fase 5, hecha antes del modo remoto: sus hallazgos sobre el modo stdio siguen valiendo para ese modo, que está congelado.
 
 | Puerta | Estado en esta versión |
 | --- | --- |

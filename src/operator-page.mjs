@@ -77,7 +77,7 @@ function repoForm(view,host,note=''){
     '<div class="box"><p><strong>Crear el repositorio:</strong> <code>'+esc(r.fullName)+'</code> ('+(r.visibility==='public'?'PÚBLICO':'privado')+')</p>'+
     '<p><strong>Proyecto:</strong> '+esc(view.idea)+'</p><p><strong>Plan aprobado:</strong> <code>'+esc(view.planDigest)+'</code></p>'+
     '<p><strong>Digest del intento:</strong> <code>'+esc(r.intentDigest)+'</code></p></div>'+
-    '<p>Autorizas solo crear ese repositorio, una vez y dentro de 24 horas. No autoriza fusionar ni desplegar.</p>'+
+    '<p>Autorizas solo crear ese repositorio, dentro de 24 horas. No autoriza fusionar ni desplegar.</p>'+
     (note?'<p><strong>'+esc(note)+'</strong></p>':'')+
     '<form method="post"><label>Contraseña del operador<input type="password" name="password" autocomplete="current-password"></label>'+
     '<button name="decision" value="allow">Autorizar la creación</button> <button name="decision" value="deny">Rechazar</button></form>'+
@@ -95,7 +95,8 @@ export function createOperatorPage({oauth,approvals}){
     if(view.status==='PENDING'&&repo)return send(res,status,'Autorizar repositorio',repoForm(view,host,note));
     if(view.status==='PENDING'&&view.plan)return send(res,status,'Aprobar plan',form(view,host,note));
     const text=(repo?REPO_CLOSED[view.status]:null)??CLOSED[view.status]??'Solicitud no disponible.';
-    const kept=repo?'<p>Repositorio: <code>'+esc(view.repository.fullName)+'</code></p>':'<p>Digest: <code>'+esc(view.planDigest)+'</code></p>'+
+    const kept=repo?'<p>Repositorio: <code>'+esc(view.repository.fullName)+'</code></p>'+
+      (view.status==='SUPERSEDED'?'<p>La autorización sigue guardada. Si el plan vigente cambió, vuelve a valer cuando el proyecto regrese a ese plan antes de que venza; si la aprobación del plan se revocó, ya no vuelve.</p>':''):'<p>Digest: <code>'+esc(view.planDigest)+'</code></p>'+
       (view.status==='APPROVED'?'':'<p>La aprobación de ese plan sigue guardada: si el proyecto vuelve a ese mismo plan, vuelve a valer.</p>');
     send(res,status,'Solicitud cerrada','<p>'+esc(text)+'</p>'+(view.revocable?kept+REVOKE:''));
   };
@@ -130,7 +131,7 @@ export function createOperatorPage({oauth,approvals}){
         send(res,200,'Plan aprobado','<p>Plan aprobado. Digest: <code>'+esc(result.planDigest)+'</code></p><p>Vuelve a ChatGPT para continuar.</p>');
       else if(result.status==='DENIED')send(res,200,'Plan rechazado','<p>Plan rechazado. No se aprobó nada.</p>');
       else if(result.status==='REVOKED')send(res,200,'Aprobación revocada','<p>Aprobación revocada. El plan ya no está aprobado.</p>');
-      else send(res,409,'Solicitud cerrada','<p>'+esc(CLOSED[result.status]??'Solicitud no disponible.')+'</p>');
+      else send(res,409,'Solicitud cerrada','<p>'+esc((result.effect==='CREATE_REPOSITORY'?REPO_CLOSED[result.status]:null)??CLOSED[result.status]??'Solicitud no disponible.')+'</p>');
     }catch(error){
       const known=ERRORS[error?.code];
       if(!known)throw error;

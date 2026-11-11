@@ -17,6 +17,7 @@ import {dirname,join,resolve,isAbsolute} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {WebStandardStreamableHTTPServerTransport,isInitializeRequest} from '@modelcontextprotocol/server';
 import {EmbeddedOAuth} from './oauth.mjs';
+import {createOperatorPage} from './operator-page.mjs';
 import {createRemoteRuntime} from './remote.mjs';
 import {registerSession} from './remote-state.mjs';
 import {ensureSchema,statePath} from './store.mjs';
@@ -105,6 +106,7 @@ export function createHttpServer({runtime,oauth,settings,log=console,maxSessions
   idleMs=IDLE_MS,conversationIdleMs=CONVERSATION_IDLE_MS,busyMs=(runtime?.config?.toolDeadlineMs??45_000)+BUSY_MARGIN_MS}){
   if(!Number.isInteger(maxSessions)||maxSessions<1)throw new Error('INVALID_MAX_SESSIONS: maxSessions debe ser un entero de al menos 1');
   const sessions=new Map();
+  const operatorPage=runtime?.planApproval?createOperatorPage({oauth,approvals:runtime.planApproval}):async()=>false;
   // En vuelo, pero con tope: si el cliente cancela y deja la conexión abierta el
   // SDK no cierra ese stream, y sin tope el transporte quedaría fijo para siempre.
   const busy=(s,now)=>s.inflight>0&&now-s.busyAt<busyMs;
@@ -212,6 +214,7 @@ export function createHttpServer({runtime,oauth,settings,log=console,maxSessions
         res.end(JSON.stringify(runtime.actorKeys()));return;
       }
       if(path!=='/mcp'){
+        if(await operatorPage(req,res))return;
         if(await oauth.handle(req,res))return;
         res.writeHead(404);res.end('Not found');return;
       }

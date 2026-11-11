@@ -73,7 +73,7 @@ async function body(req){
   for(const key of new Set(parsed.keys()))check(parsed.getAll(key).length===1,'Duplicate form field');
   return parsed;
 }
-const field=(input,name)=>{const v=input instanceof URLSearchParams?input.get(name):input[name];return typeof v==='string'?v:'';};
+export const field=(input,name)=>{const v=input instanceof URLSearchParams?input.get(name):input[name];return typeof v==='string'?v:'';};
 function validateResource(value){
   const url=new URL(value);
   check(url.protocol==='https:'&&!url.username&&!url.password&&!url.search&&!url.hash&&url.pathname==='/mcp','Invalid public MCP resource');
@@ -85,6 +85,8 @@ function validateRedirect(value){
   return u.toString();
 }
 const params=raw=>new URL(raw,'http://internal').searchParams;
+// Para la página del operador (src/operator-page.mjs): mismo lector de formularios.
+export const readForm=req=>body(req);
 function cookie(req,name){
   const part=String(req.headers.cookie??'').split(';').map(x=>x.trim()).find(x=>x.startsWith(name+'='));
   return part?.slice(name.length+1)??'';
@@ -182,6 +184,8 @@ export class EmbeddedOAuth{
   read(fn){return structuredClone(fn(this.ledger.read()));}
   change(fn){return this.ledger.mutate(fn);}
   enrollmentOpen(d){return (d.enrollment?.openUntil??0)>ts();}
+  // Comparación en tiempo constante contra la contraseña del operador.
+  operatorPassword(candidate){return validString(candidate,512)&&eq(candidate,this.password);}
   protectedResourceMetadata(){
     return {resource:this.resource,authorization_servers:[this.issuer],bearer_methods_supported:['header'],scopes_supported:[...ALLOWED_SCOPES]};
   }

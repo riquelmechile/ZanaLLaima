@@ -1,7 +1,7 @@
 // Aprobación del plan de un proyecto, ligada a su digest exacto.
-// El modelo solo puede pedirla y consultarla. La decisión es del operador y
-// la entrega la capa HTTP tras verificar su contraseña: aquí ningún argumento
-// de una tool aprueba nada. Aprobar el plan no concede
+// El modelo solo puede pedirla y consultarla. La decisión entra por la página
+// del operador (src/operator-page.mjs) con la contraseña del operador: aquí
+// ningún argumento de una tool aprueba nada. Aprobar el plan no concede
 // permiso para crear repositorios, fusionar ni desplegar.
 import {randomBytes} from 'node:crypto';
 import {getProjectWorkspace} from './project-workspace.mjs';

@@ -13,7 +13,7 @@ Hecho en esta versión:
 
 Lo que sigue:
 
-- [ ] Aprobación autenticada del plan por su huella exacta (hoy queda siempre pendiente).
+- [x] Aprobación autenticada del plan por su huella exacta: el modelo la pide (`zana_plan_approval_request`) y solo el operador la concede en `/operator/approve` con su contraseña. Hecho después de publicar esta versión; todavía ninguna tool consume la aprobación.
 - [ ] Conectar al backend el bootstrap (crear el repo, instalar el CI, invitar a la revisora y proteger la rama), con autorización del operador registrada.
 - [ ] Conectar el orquestador: varias misiones por proyecto, estado guardado en el servidor.
 - [ ] 4R con subagentes nativos. Primero hay que comprobar si un subagente llega al servidor con una identidad distinta de la conversación que lo lanzó.

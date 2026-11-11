@@ -4,7 +4,7 @@
 
 Esta implementación reemplaza el transporte MCP `stdio` construido manualmente por el **SDK oficial TypeScript v2**, fijado en `@modelcontextprotocol/server@2.4.0`. Usa `@modelcontextprotocol/client@2.4.0` en las pruebas y `zod@4.6.7` para definir y validar los argumentos. El modo **stdio** es local y sin HTTP. El modo **remoto** (Streamable HTTP + OAuth, ver abajo) sirve a la app de ChatGPT. Ninguno llama a proveedores de inferencia.
 
-El SDK soporta la especificación MCP 2026-07-28 y negociación con clientes compatibles con versiones anteriores. En stdio el catálogo tiene **24 herramientas**, incluyendo `zana_capability_status`; en remoto tiene 44 (tabla abajo). La conexión real con ChatGPT la ejecuta el operador (`docs/host-e2e-remote.md`).
+El SDK soporta la especificación MCP 2026-07-28 y negociación con clientes compatibles con versiones anteriores. En stdio el catálogo tiene **24 herramientas**, incluyendo `zana_capability_status`; en remoto tiene 46 (tabla abajo). La conexión real con ChatGPT la ejecuta el operador (`docs/host-e2e-remote.md`).
 
 Fuentes normativas del SDK:
 - https://ts.sdk.modelcontextprotocol.io/v2/

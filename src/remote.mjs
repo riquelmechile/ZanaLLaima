@@ -73,7 +73,7 @@ const NEW_TOOLS={
       plan:z.record(z.string(),z.unknown()).optional()}).strict()],
   zana_plan_approval_request:['Ask the operator to approve the stored plan of a workspace by its exact digest. Returns approvalUrl: give that link to the user. Only the operator approves, on that page with the operator password; never ask for the password in chat. No argument of any tool approves a plan',false,
     z.object({workspaceId:z.string().uuid(),expectedVersion:z.number().int().min(0)}).strict()],
-  zana_plan_approval_status:['Show whether the current plan of a workspace is approved by the operator (NONE, PENDING, APPROVED, DENIED, EXPIRED, LOCKED or SUPERSEDED when the plan changed)',true,
+  zana_plan_approval_status:['Show whether the current plan of a workspace is approved by the operator (NONE, PENDING, APPROVED, DENIED, REVOKED, EXPIRED, LOCKED, or SUPERSEDED when the plan changed)',true,
     z.object({workspaceId:z.string().uuid()}).strict()],
   zana_discovery_start:['Start a new in-chat project brief; no repository, mission or durable approval is created',true,
     z.object({idea:z.string().min(12).max(2000)}).strict()],
@@ -658,10 +658,10 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
   // Decisión del operador: la llama la página HTTP, nunca una tool. Queda auditada.
   const planApproval={
     describe:approvalId=>rr(db=>describePlanApproval(db,{approvalId})),
-    decide:({approvalId,decision,passwordOk})=>rw(db=>{
+    decide:({approvalId,decision,passwordOk,from=null})=>rw(db=>{
       const r=decidePlanApproval(db,{approvalId,decision,passwordOk});
       writeAudit(db,{caller:{host:'operator',sessionId:null},tool:'operator_plan_approval',
-        outcome:r.denied?'REFUSED':r.status,detail:{workspaceId:r.workspaceId,planDigest:r.planDigest},category:'operator'});
+        outcome:r.denied?'REFUSED':r.status,detail:{workspaceId:r.workspaceId,planDigest:r.planDigest,from},category:'operator'});
       return r;
     }),
   };

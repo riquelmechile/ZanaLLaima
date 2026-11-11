@@ -40,8 +40,8 @@ test('pedir la aprobación no aprueba: queda pendiente y ligada al digest exacto
       {status:'PENDING',approvalId:r.approvalId,planDigest:w.plan.digest});
     const view=describePlanApproval(db,{approvalId:r.approvalId,now:T0});
     assert.equal(view.status,'PENDING');
-    assert.deepEqual(view.plan.milestones,[{id:'core',objective:'Modelo',acceptance:'Tests'}]);
-    assert.equal(view.plan.selected.technology,'Node');
+    assert.equal(view.plan.milestones[0].objective,'Modelo');
+    assert.equal(view.plan.selectedId,'node');
     assert.ok(!JSON.stringify(view).includes(client),'la página no expone el cliente OAuth');
   }finally{db.close();}
 });
@@ -155,4 +155,80 @@ test('tools MCP: el modelo pide y consulta, pero ningún argumento suyo aprueba'
     assert.deepEqual(rows.map(x=>x.outcome).sort(),['APPROVED','REFUSED']);
     assert.deepEqual(f.api.state.pulls,[],'aprobar el plan no crea nada en GitHub');
   }finally{await f.cleanup();}
+});
+
+// Ronda de corrección tras la revisión 4R.
+test('el plan se guarda en su forma canónica: lo que se aprueba es lo que se ve',()=>{
+  const {db,w,at}=fixture();
+  try{
+    const sloppy=JSON.parse(JSON.stringify(w.plan));
+    sloppy.milestones[0].objective='   Modelo \n\n   ';
+    sloppy.alternatives[0].sources[0].url='https://NODEJS.org:443/docs/';
+    const stored=updateProjectWorkspace(db,{...at,expectedVersion:w.version,plan:sloppy});
+    assert.equal(stored.plan.digest,w.plan.digest,'mismo contenido, mismo digest');
+    assert.equal(stored.plan.milestones[0].objective,'Modelo','se guarda normalizado');
+    assert.equal(stored.plan.alternatives[0].sources[0].url,'https://nodejs.org/docs/');
+  }finally{db.close();}
+});
+
+test('la vista del operador trae todo lo que cubre el digest',()=>{
+  const {db,request}=fixture();
+  try{
+    const view=describePlanApproval(db,{approvalId:request().approvalId,now:T0});
+    assert.deepEqual(view.plan.answers,answers);
+    assert.deepEqual(view.plan.alternatives.map(x=>x.id),['node','go']);
+    assert.equal(view.plan.alternatives[1].tradeoffs,'Otro stack');
+    assert.equal(view.plan.alternatives[0].sources[0].url,'https://nodejs.org/docs/');
+    assert.deepEqual(view.plan.milestones,[{id:'core',objective:'Modelo',acceptance:'Tests',dependsOn:[]}]);
+    assert.equal(view.plan.selectedId,'node');
+  }finally{db.close();}
+});
+
+test('el estado no atribuye a un plan nuevo la decisión de otro; solo true aprueba',()=>{
+  const {db,w,at,request}=fixture();
+  try{
+    const r=request();
+    for(const fake of [1,'true',{},[],undefined])
+      assert.equal(decidePlanApproval(db,{approvalId:r.approvalId,decision:'allow',passwordOk:fake,now:T0}).denied,true);
+    assert.equal(approvedPlanDigest(db,at),null);
+    const r2=request(T0+1);
+    decidePlanApproval(db,{approvalId:r.approvalId,decision:'deny',passwordOk:false,now:T0});
+    assert.equal(r2.approvalId,r.approvalId);
+    assert.equal(planApprovalStatus(db,{...at,now:T0}).status,'DENIED');
+    updateProjectWorkspace(db,{...at,expectedVersion:w.version,plan:draft(w.brief,'Otro modelo')});
+    assert.equal(planApprovalStatus(db,{...at,now:T0}).status,'SUPERSEDED','nadie rechazó el plan nuevo');
+    // Filas fabricadas o de otro esquema no aprueban ni rompen la lectura.
+    db.prepare('INSERT INTO metadata(key,value) VALUES(?,?)').run('zana:approval:basura','{no json');
+    db.prepare('INSERT INTO metadata(key,value) VALUES(?,?)').run('zana:approval:otra',JSON.stringify({schema:'x',ownerClient:client,
+      workspaceId:w.workspaceId,status:'APPROVED',planDigest:w.plan.digest}));
+    assert.equal(approvedPlanDigest(db,at),null);
+  }finally{db.close();}
+});
+
+test('el operador puede revocar una aprobación; después hay que pedirla de nuevo',()=>{
+  const {db,w,at,request}=fixture();
+  try{
+    const r=request();
+    assert.throws(()=>decidePlanApproval(db,{approvalId:r.approvalId,decision:'revoke',passwordOk:false,now:T0}),/APPROVAL_NOT_APPROVED/);
+    decidePlanApproval(db,{approvalId:r.approvalId,decision:'allow',passwordOk:true,now:T0});
+    const s=planApprovalStatus(db,{...at,now:T0});
+    assert.deepEqual({status:s.status,approvalId:s.approvalId},{status:'APPROVED',approvalId:r.approvalId});
+    assert.equal(request(T0+1).approvalId,r.approvalId,'el enlace de una aprobación vigente sirve para revocarla');
+    assert.equal(decidePlanApproval(db,{approvalId:r.approvalId,decision:'revoke',passwordOk:false,now:T0+2}).status,'REVOKED');
+    assert.equal(approvedPlanDigest(db,at),null);
+    assert.equal(planApprovalStatus(db,{...at,now:T0+2}).status,'REVOKED');
+    const again=request(T0+3);
+    assert.deepEqual({status:again.status,same:again.approvalId===r.approvalId,digest:again.planDigest},
+      {status:'PENDING',same:false,digest:w.plan.digest});
+  }finally{db.close();}
+});
+
+test('el origen público solo se arma con https',async()=>{
+  const {remoteConfig}=await import('../src/remote-config.mjs');
+  const origin=env=>remoteConfig({ZANA_GITHUB_REPOS:'o/r',...env}).publicOrigin;
+  assert.equal(origin({ZANA_PUBLIC_HOST:'zana.test'}),'https://zana.test');
+  assert.equal(origin({ZANA_PUBLIC_MCP_URL:'https://zana.test/mcp'}),'https://zana.test');
+  assert.equal(origin({ZANA_PUBLIC_MCP_URL:'foo://zana.test/mcp'}),null);
+  assert.equal(origin({ZANA_PUBLIC_MCP_URL:'http://zana.test/mcp'}),null);
+  assert.equal(origin({}),null);
 });

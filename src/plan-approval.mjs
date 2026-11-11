@@ -5,7 +5,7 @@
 // permiso para crear repositorios, fusionar ni desplegar.
 import {randomBytes} from 'node:crypto';
 import {getProjectWorkspace} from './project-workspace.mjs';
-import {validateBootstrapPlan} from './project-bootstrap.mjs';
+import {canonicalPlan} from './project-bootstrap.mjs';
 
 export const APPROVAL_ID=/^[A-Za-z0-9_-]{43}$/;
 const PREFIX='zana:approval:';
@@ -32,8 +32,9 @@ function read(db,approvalId){
 }
 // Digest del plan vigente; null si no hay plan o el proyecto está archivado.
 const liveDigest=ws=>ws.archivedAt?null:ws.plan?.digest??null;
-// Estado que ve el exterior: una solicitud caducada, bloqueada o de un plan
-// que ya cambió no cuenta como pendiente ni como aprobada.
+// Estado de UNA solicitud visto desde fuera. Precedencia: EXPIRED, luego
+// LOCKED, luego SUPERSEDED (su plan ya no es el vigente); los estados finales
+// (DENIED, REVOKED, REPLACED) se devuelven tal cual.
 function effective(row,digest,now){
   if(row.status==='PENDING'&&now>=Date.parse(row.expiresAt))return 'EXPIRED';
   if(row.status==='PENDING'&&row.failures>=MAX_FAILURES)return 'LOCKED';
@@ -48,12 +49,12 @@ export function requestPlanApproval(db,{clientId,workspaceId,expectedVersion,now
   if(expectedVersion!==ws.version)fail('STALE_REVISION','Pide la aprobación sobre la versión vigente del proyecto');
   if(ws.archivedAt)fail('WORKSPACE_ARCHIVED','Restaura el proyecto antes de pedir su aprobación');
   if(!ws.plan)fail('PLAN_REQUIRED','Guarda un plan en el proyecto antes de pedir su aprobación');
-  const planDigest=validateBootstrapPlan(ws.plan);
+  const planDigest=canonicalPlan(ws.plan).digest;
   let rows=ownRows(db,clientId);
   for(const old of rows.filter(x=>x.status!=='APPROVED'&&now-Date.parse(x.createdAt)>=DAY_MS))drop(db,old);
   rows=rows.filter(x=>x.status==='APPROVED'||now-Date.parse(x.createdAt)<DAY_MS);
   const approved=approvedRow(rows,workspaceId,planDigest);
-  if(approved)return {approvalId:null,status:'APPROVED',planDigest,expiresAt:null};
+  if(approved)return {approvalId:approved.approvalId,status:'APPROVED',planDigest,expiresAt:null};
   const mine=rows.filter(x=>x.workspaceId===workspaceId&&x.status==='PENDING');
   const open=mine.find(x=>effective(x,planDigest,now)==='PENDING');
   if(open)return {approvalId:open.approvalId,status:'PENDING',planDigest,expiresAt:open.expiresAt};
@@ -79,25 +80,28 @@ export function planApprovalStatus(db,{clientId,workspaceId,now=Date.now()}){
   const digest=liveDigest(ws);
   const rows=ownRows(db,clientId).filter(x=>x.workspaceId===workspaceId)
     .sort((a,b)=>Date.parse(b.createdAt)-Date.parse(a.createdAt));
-  const row=approvedRow(rows,workspaceId,digest)??rows.find(x=>x.status!=='REPLACED')??null;
-  const status=row?effective(row,digest,now):'NONE';
+  // Solo cuentan las solicitudes del plan vigente: la decisión sobre otro plan
+  // no se le atribuye a este.
+  const current=digest===null?[]:rows.filter(x=>x.planDigest===digest&&x.status!=='REPLACED');
+  const row=current.find(x=>x.status==='APPROVED')??current[0]??null;
+  const status=row?effective(row,digest,now):rows.length?'SUPERSEDED':'NONE';
+  const open=['PENDING','APPROVED'].includes(status);
   return {workspaceId,version:ws.version,planDigest:ws.plan?.digest??null,status,
-    approvalId:status==='PENDING'?row.approvalId:null,
-    expiresAt:status==='PENDING'?row.expiresAt:null,decidedAt:row?.decidedAt??null};
+    approvalId:open?row.approvalId:null,expiresAt:status==='PENDING'?row.expiresAt:null,decidedAt:row?.decidedAt??null};
 }
 
-// Vista para la página del operador: sin identidad OAuth, y con el contenido
-// del plan solo cuando el plan vigente es el mismo que se pidió aprobar.
+// Vista para la página del operador: sin identidad OAuth, y con el plan
+// completo (todo lo que cubre el digest) solo cuando el plan vigente es el
+// mismo que se pidió aprobar.
 export function describePlanApproval(db,{approvalId,now=Date.now()}){
   const row=read(db,approvalId);
   const ws=getProjectWorkspace(db,{clientId:row.ownerClient,workspaceId:row.workspaceId});
-  const status=effective(row,liveDigest(ws),now);
-  const same=ws.plan?.digest===row.planDigest,plan=ws.plan;
-  return {approvalId,status,planDigest:row.planDigest,expiresAt:row.expiresAt,decidedAt:row.decidedAt,
-    attemptsLeft:Math.max(0,MAX_FAILURES-row.failures),
-    plan:same?{idea:plan.brief.idea,
-      selected:{id:plan.selectedId,technology:plan.alternatives.find(x=>x.id===plan.selectedId)?.technology??''},
-      milestones:plan.milestones.map(m=>({id:m.id,objective:m.objective,acceptance:m.acceptance}))}:null};
+  let plan=null;
+  try{plan=ws.plan?.digest===row.planDigest?canonicalPlan(ws.plan):null;}catch{}
+  return {approvalId,status:effective(row,liveDigest(ws),now),planDigest:row.planDigest,
+    expiresAt:row.expiresAt,decidedAt:row.decidedAt,attemptsLeft:Math.max(0,MAX_FAILURES-row.failures),
+    plan:plan&&{idea:plan.brief.idea,answers:plan.brief.answers,selectedId:plan.selectedId,
+      alternatives:plan.alternatives,milestones:plan.milestones}};
 }
 
 // passwordOk lo calcula la capa HTTP contra la contraseña del operador; nunca
@@ -105,11 +109,18 @@ export function describePlanApproval(db,{approvalId,now=Date.now()}){
 // devuelven (no se lanzan) para que el fallo quede guardado.
 export function decidePlanApproval(db,{approvalId,decision,passwordOk,now=Date.now()}){
   const row=read(db,approvalId);
+  const out=status=>({status,workspaceId:row.workspaceId,planDigest:row.planDigest});
+  // Revocar retira una aprobación ya dada. Como rechazar, va hacia el lado
+  // seguro y no pide contraseña: basta el enlace de la solicitud.
+  if(decision==='revoke'){
+    if(row.status!=='APPROVED')fail('APPROVAL_NOT_APPROVED','Solo se revoca una aprobación vigente');
+    save(db,{...row,status:'REVOKED',decidedAt:iso(now)});
+    return out('REVOKED');
+  }
   if(row.status!=='PENDING')fail('APPROVAL_NOT_PENDING','Esta solicitud ya fue decidida o reemplazada');
   if(now>=Date.parse(row.expiresAt))fail('APPROVAL_EXPIRED','La solicitud caducó; pide una nueva');
   if(row.failures>=MAX_FAILURES)fail('APPROVAL_LOCKED','Solicitud bloqueada por intentos fallidos; pide una nueva');
-  if(!['allow','deny'].includes(decision))fail('INVALID_DECISION','La decisión debe ser allow o deny');
-  const out=status=>({status,workspaceId:row.workspaceId,planDigest:row.planDigest});
+  if(!['allow','deny'].includes(decision))fail('INVALID_DECISION','La decisión debe ser allow, deny o revoke');
   if(decision==='deny'){
     save(db,{...row,status:'DENIED',decidedAt:iso(now)});
     return out('DENIED');

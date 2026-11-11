@@ -2,7 +2,7 @@
 // No guarda aprobaciones, credenciales ni permisos para crear repositorios.
 import {randomUUID} from 'node:crypto';
 import {startDiscovery,answerDiscovery} from './project-discovery.mjs';
-import {validateBootstrapPlan} from './project-bootstrap.mjs';
+import {canonicalPlan} from './project-bootstrap.mjs';
 import {redactStored,envSecrets} from './redact.mjs';
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const PREFIX='zana:workspace:';
@@ -72,13 +72,15 @@ export function updateProjectWorkspace(db,{clientId,workspaceId,expectedVersion,
     // Nunca reescribir un plan firmado tras redactar: cambiaría su digest.
     // Debe regenerarse a partir de un brief ya saneado.
     if(different(plan,redactValue(plan)))fail('WORKSPACE_SECRET_DETECTED','Regenera el plan sin credenciales');
-    validateBootstrapPlan(plan);
-    const brief=plan.brief,current=row.brief;
+    // Se guarda la forma canónica: variantes equivalentes (espacios, NFC, forma
+    // de una URL) comparten digest y no deben quedar almacenadas tal cual.
+    const canonical=canonicalPlan(plan);
+    const brief=canonical.brief,current=row.brief;
     const norm=o=>JSON.stringify(Object.entries(o).sort(([a],[b])=>a.localeCompare(b)));
     if(brief.idea!==current.idea||brief.revision!==current.revision||
       norm(brief.answers)!==norm(current.answers))
       fail('PLAN_BRIEF_MISMATCH','El plan no corresponde al briefing vigente');
-    row.plan=plan;
+    row.plan=canonical;
   }
   row.version++;row.updatedAt=new Date().toISOString();
   db.prepare('UPDATE metadata SET value=? WHERE key=?').run(safe(row),key(workspaceId));

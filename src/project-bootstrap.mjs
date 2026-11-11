@@ -11,7 +11,10 @@ const own=(o,keys)=>o!==null&&typeof o==='object'&&!Array.isArray(o)&&
   [Object.prototype,null].includes(Object.getPrototypeOf(o))&&Object.keys(o).every(k=>keys.includes(k));
 const validPart=value=>typeof value==='string'&&REPO_PART.test(value)&&!['.','..'].includes(value)&&!value.endsWith('.lock');
 
-export function validateBootstrapPlan(plan){
+// Forma canónica del plan: la que produce draftProjectPlan con el mismo
+// contenido. El digest se calcula sobre ella, así que es la única que se guarda
+// y se muestra; valida de paso que el digest declarado corresponda.
+export function canonicalPlan(plan){
   if(!own(plan,['schema','brief','alternatives','selectedId','milestones','digest','approval'])||
     plan.schema!=='zana.project-plan.v1'||!SHA.test(plan.digest)||plan.approval!=='PENDING_AUTHENTICATED_USER')
     fail('INVALID_PLAN','Se requiere un plan Discovery íntegro y sin aprobación declarada');
@@ -19,8 +22,9 @@ export function validateBootstrapPlan(plan){
   const recalculated=draftProjectPlan({brief:{...plan.brief,schema:'zana.discovery.v1',status:'READY_FOR_PLAN'},
     alternatives:plan.alternatives,selectedId:plan.selectedId,milestones:plan.milestones});
   if(recalculated.digest!==plan.digest)fail('PLAN_TAMPERED','El digest no corresponde al contenido');
-  return plan.digest;
+  return recalculated;
 }
+export const validateBootstrapPlan=plan=>canonicalPlan(plan).digest;
 
 export function prepareBootstrap(plan,{owner,name,visibility='private',provider='github'}={}){
   const planDigest=validateBootstrapPlan(plan);

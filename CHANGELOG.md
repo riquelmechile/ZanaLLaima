@@ -2,6 +2,8 @@
 
 ## [Sin publicar]
 
+- **Borradores OAuth más seguros:** redacción de credenciales antes de almacenar ideas y respuestas, rechazo de planes con secretos (sin invalidar silenciosamente su digest), redacción defensiva al leer datos antiguos y cuota dura de 50 workspaces por cliente incluyendo archivados. Pendiente la migración a tabla propia, recuperación administrativa tras nuevo OAuth y limpieza operator-only de filas legadas.
+
 - **Corrección de gate de Delivery:** la entrega ya no exige `mergeable:true` en un PR `merged:true` (GitHub responde `null` tras el merge) ni asume que el último hito del arreglo es el último integrado. El verificador GitHub del backend ahora debe acreditar la integración de todos los SHA de hitos y el CI/4R del SHA final.
 
 - **CI por repositorio, gate de entrega y política downstream coherentes.** `ZANA_REPO_CHECKS_JSON` permite definir workflow y checks requeridos por repo autorizado; `zana_checks_status`, `zana_delivery_status` y `zana_merge` evalúan la misma política de ese repo sobre el SHA exacto. `actions_run_trigger` solo admite el workflow efectivo del repositorio. Pruebas adversariales cubren los dos fallos del gate y el merge.

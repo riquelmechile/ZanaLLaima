@@ -3,14 +3,27 @@
 import {randomUUID} from 'node:crypto';
 import {startDiscovery,answerDiscovery} from './project-discovery.mjs';
 import {validateBootstrapPlan} from './project-bootstrap.mjs';
+import {redactStored,envSecrets} from './redact.mjs';
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const PREFIX='zana:workspace:';
 const MAX_BYTES=60000;
+const MAX_WORKSPACES_PER_CLIENT=50;
+const redactValue=value=>typeof value==='string'?redactStored(value,envSecrets()):
+  Array.isArray(value)?value.map(redactValue):
+  value&&typeof value==='object'?Object.fromEntries(
+    Object.entries(value).map(([k,v])=>[k,redactValue(v)])):value;
+const different=(a,b)=>JSON.stringify(a)!==JSON.stringify(b);
 const fail=(code,msg)=>{const e=new Error(code+': '+msg);e.code=code;throw e;};
 const validActor=clientId=>typeof clientId==='string'&&clientId.length>=3&&clientId.length<=200;
-const view=row=>({workspaceId:row.workspaceId,version:row.version,
-  brief:row.brief,plan:row.plan,createdAt:row.createdAt,updatedAt:row.updatedAt,
-  archivedAt:row.archivedAt??null});
+const view=row=>{
+  const brief=redactValue(row.brief),plan=redactValue(row.plan);
+  // Legacy rows may contain secrets: never echo them, or a plan whose
+  // content changed but whose digest still describes the unredacted version.
+  return {workspaceId:row.workspaceId,version:row.version,brief,
+    plan:different(plan,row.plan)?null:plan,
+    createdAt:row.createdAt,updatedAt:row.updatedAt,
+    archivedAt:row.archivedAt??null};
+};
 const safe=v=>{
   const size=Buffer.byteLength(JSON.stringify(v));
   if(size>MAX_BYTES)fail('WORKSPACE_TOO_LARGE','El borrador supera el límite permitido');
@@ -32,9 +45,15 @@ function readRaw(db,{workspaceId,clientId}){
 }
 export function createProjectWorkspace(db,{clientId,idea}){
   if(!validActor(clientId))fail('WORKSPACE_ACTOR_REQUIRED','Se requiere un cliente OAuth autenticado');
+  // Hard quota includes archived rows; no unlimited accumulation from model loops.
+  const count=db.prepare(`SELECT COUNT(*) AS n FROM metadata
+    WHERE key LIKE 'zana:workspace:%' AND
+    (CASE WHEN json_valid(value) THEN json_extract(value,'$.ownerClient') END)=?`).get(clientId)?.n??0;
+  if(count>=MAX_WORKSPACES_PER_CLIENT)fail('WORKSPACE_QUOTA_EXCEEDED','Máximo 50 borradores por cliente OAuth');
+  const brief=startDiscovery(redactValue(idea));
   const now=new Date().toISOString(),workspaceId=randomUUID();
   const row={schema:'zana.workspace.v1',workspaceId,ownerClient:clientId,version:0,
-    brief:startDiscovery(idea),plan:null,createdAt:now,updatedAt:now};
+    brief,plan:null,createdAt:now,updatedAt:now};
   db.prepare('INSERT INTO metadata(key,value) VALUES(?,?)').run(key(workspaceId),safe(row));
   return view(row);
 }
@@ -47,9 +66,12 @@ export function updateProjectWorkspace(db,{clientId,workspaceId,expectedVersion,
   if((answers===undefined)===(plan===undefined))
     fail('INVALID_WORKSPACE_UPDATE','Enviar respuestas o plan, pero no ambos');
   if(answers!==undefined){
-    row.brief=answerDiscovery(row.brief,answers);
+    row.brief=answerDiscovery(row.brief,redactValue(answers));
     row.plan=null; // cualquier nueva respuesta invalida el plan anterior
   }else{
+    // Nunca reescribir un plan firmado tras redactar: cambiaría su digest.
+    // Debe regenerarse a partir de un brief ya saneado.
+    if(different(plan,redactValue(plan)))fail('WORKSPACE_SECRET_DETECTED','Regenera el plan sin credenciales');
     validateBootstrapPlan(plan);
     const brief=plan.brief,current=row.brief;
     const norm=o=>JSON.stringify(Object.entries(o).sort(([a],[b])=>a.localeCompare(b)));
@@ -83,7 +105,7 @@ export function listProjectWorkspaces(db,{clientId,limit=10,cursor=null,includeA
       !Number.isSafeInteger(row.version)||row.version<0||
       typeof row.brief?.idea!=='string'||typeof row.updatedAt!=='string')
       fail('WORKSPACE_CORRUPT','Borrador propio inválido');
-    return {workspaceId:row.workspaceId,version:row.version,idea:row.brief.idea,
+    return {workspaceId:row.workspaceId,version:row.version,idea:redactValue(row.brief.idea),
       briefStatus:row.brief.status,planDigest:row.plan?.digest??null,
       archivedAt:row.archivedAt??null,updatedAt:row.updatedAt};
   });

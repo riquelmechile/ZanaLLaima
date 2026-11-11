@@ -101,3 +101,47 @@ test('filas corruptas de otro OAuth no bloquean listados propios',()=>{
    assert.deepEqual(listProjectWorkspaces(db,{clientId:client}).items.map(x=>x.workspaceId),[w.workspaceId]);
  }finally{db.close();}
 });
+
+test('redacta secretos antes de guardar ideas y respuestas, sin exponerlos al recuperar',()=>{
+ const db=fixture();try{
+   const secret='sk-'+ 'K'.repeat(28);
+   const w=createProjectWorkspace(db,{clientId:client,idea:id+' token='+secret});
+   const row=db.prepare('SELECT value FROM metadata WHERE key=?').get('zana:workspace:'+w.workspaceId);
+   assert.ok(!row.value.includes(secret));
+   assert.ok(!JSON.stringify(w).includes(secret));
+   const v=update(db,w,{answers:{...answers(),goal:'Gestionar acceso db_password='+secret}});
+   assert.ok(!JSON.stringify(v).includes(secret));
+   assert.ok(!db.prepare('SELECT value FROM metadata WHERE key=?').get('zana:workspace:'+w.workspaceId).value.includes(secret));
+   assert.ok(!JSON.stringify(getProjectWorkspace(db,{clientId:client,workspaceId:w.workspaceId})).includes(secret));
+   const p=plan(v.brief);
+   const injected={...p,alternatives:p.alternatives.map((a,i)=>i===0?{...a,rationale:'clave api_key='+secret}:a)};
+   assert.throws(()=>update(db,v,{plan:injected}),/WORKSPACE_SECRET_DETECTED/);
+   assert.equal(getProjectWorkspace(db,{clientId:client,workspaceId:w.workspaceId}).plan,null);
+ }finally{db.close();}
+});
+test('legacy: no devuelve secreto previo en get ni lista y no expone digest adulterado',()=>{
+ const db=fixture();try{
+   const secret='sk-'+ 'P'.repeat(27);
+   let w=createProjectWorkspace(db,{clientId:client,idea:id});
+   w=update(db,w,{answers:answers()});
+   w=update(db,w,{plan:plan(w.brief)});
+   const key='zana:workspace:'+w.workspaceId;
+   const raw=JSON.parse(db.prepare('SELECT value FROM metadata WHERE key=?').get(key).value);
+   raw.brief.idea=id+' password='+secret;
+   raw.plan.alternatives[0].benefits='password='+secret;
+   db.prepare('UPDATE metadata SET value=? WHERE key=?').run(JSON.stringify(raw),key);
+   const fetched=getProjectWorkspace(db,{clientId:client,workspaceId:w.workspaceId});
+   assert.ok(!JSON.stringify(fetched).includes(secret));
+   assert.equal(fetched.plan,null);
+   assert.ok(!JSON.stringify(listProjectWorkspaces(db,{clientId:client})).includes(secret));
+ }finally{db.close();}
+});
+test('cuota dura de borradores por OAuth incluye archivados y excluye otros clientes',()=>{
+ const db=fixture();try{
+   const created=[];
+   for(let i=0;i<50;i++)created.push(createProjectWorkspace(db,{clientId:client,idea:id+' '+i}));
+   const a=created[0];setProjectWorkspaceArchived(db,{clientId:client,workspaceId:a.workspaceId,expectedVersion:0,archived:true});
+   assert.throws(()=>createProjectWorkspace(db,{clientId:client,idea:id+' extra'}),/WORKSPACE_QUOTA_EXCEEDED/);
+   assert.equal(createProjectWorkspace(db,{clientId:'oauth-other',idea:id}).version,0);
+ }finally{db.close();}
+});

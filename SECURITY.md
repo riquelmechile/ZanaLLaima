@@ -6,12 +6,13 @@ ZanaLLaima es software experimental para **una instancia por operador**. No est�
 
 No publiques detalles de explotación, credenciales, llaves ni logs sensibles en issues públicos. Contacta al dueño del repositorio por un canal privado o usa el reporte privado de vulnerabilidades de GitHub si el repositorio lo tiene activo.
 
-## Modo remoto (0.7.0)
+## Modo remoto (0.8.0)
 
 - **Transporte:** MCP Streamable HTTP que escucha solo en la interfaz loopback IPv4 (`src/http.mjs`). Lo publica un túnel saliente (por ejemplo Cloudflare); el servidor no necesita puertos abiertos.
 - **Autenticación:** servidor OAuth 2.1 propio (`src/oauth.mjs`) con registro **cerrado**. El operador abre una ventana de alta de hasta 60 minutos (`node src/cli.mjs remote-enroll <minutos>`); fuera de ella no se registran clientes. Cada conexión nueva exige la clave de consentimiento del operador (`ZANA_OAUTH_CONSENT_PASSWORD`, al menos 32 caracteres). Hay un tope de 50 clientes registrados; `remote-clients` y `remote-revoke` los listan y revocan.
 - **Tokens:** viven solo en el entorno del servidor (`ZANA_DOWNSTREAM_GITHUB_TOKEN` para la cuenta autora, `ZANA_REVIEWER_TOKEN` para la revisora). Nunca se piden al modelo, no viajan en argumentos ni respuestas, se redactan de resultados, errores y auditoría, y no se commitean. El repositorio solo trae ejemplos sin valores.
 - **Auditoría:** cada llamada queda en SQLite con un HMAC de sus argumentos, no los argumentos en claro.
+- **Borradores de proyecto:** `zana_workspace_*` guarda en SQLite, en claro, la idea, las respuestas y el plan, ligados al cliente OAuth que los creó; otro cliente recibe `WORKSPACE_NOT_FOUND`, también un cliente nuevo del mismo operador. La redacción de credenciales al guardar es de mejor esfuerzo: no pongas secretos en un borrador. Hay tope de 50 por cliente y todavía no hay borrado, solo archivado.
 
 ## Decisiones del operador
 

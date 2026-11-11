@@ -2,9 +2,9 @@
 
 Motor de misiones para **una sola cuenta GPT**, sin llamadas propias a APIs de inferencia, sin trabajo entre cuentas y sin dependencias de otros coordinadores. Usar solamente herramientas y subagentes nativos realmente disponibles en el anfitrión.
 
-## Modo remoto (app de ChatGPT, 0.7.0)
+## Modo remoto (app de ChatGPT, 0.8.0)
 
-1. Al empezar, cargar `zana-odd` con `zana_skill_load` y seguirla. Al recibir un ticket `ZR-...`, cargar `zana-4r` en esa conversación.
+1. Para una idea sin repositorio, cargar `zana-project-discovery`; para una misión sobre un repo existente, cargar `zana-odd` con `zana_skill_load` y seguirla. Al recibir un ticket `ZR-...`, cargar `zana-4r` en esa conversación.
 2. La verdad es el SHA en GitHub y sus checks de Actions; lo que el anfitrión pruebe en un entorno propio no es evidencia. Escribir **solo** con `zana_ds_github`, solo en `zana/<missionId>` y solo con una unidad `RUNNING` de la propia sesión. Nunca en la rama default ni en `.github/workflows/**`.
 3. Orden: con la unidad de código RUNNING escribir, abrir el PR y correr checks hasta verde (`zana_checks_start`/`zana_checks_status`); luego `zana_complete_unit` (exige check verde sobre el head actual) y recién después `zana_review_request` (con una unidad de código RUNNING responde `UNIT_STILL_RUNNING`). `leaseSeconds` igual a `maxLeaseSeconds` en `zana_start_batch` y en cada `zana_unit_heartbeat`. Si la review pide cambios, `zana_correction_start` y un ticket nuevo. Si el lease venció: `zana_recover_expired` → `zana_unit_retry` → `zana_start_batch`. `zana_session_rebind` solo sirve con el lease vigente. Después del merge, `zana_mission_close` (exige `summary`, si no `SUMMARY_REQUIRED`) y `zana_mission_archive`.
 4. La revisión la hace el mismo GPT en una **conversación nueva**, cuya primera tool es `zana_review_claim`; la sesión revisora queda en solo lectura y debe leer todo el diff (`zana_review_diff`). No reclamar el propio ticket ni rodear un rechazo (`AUTHOR_SESSION`, `SESSION_WROTE`, `SESSION_PREDATES_TICKET`, `REVIEWER_READ_ONLY`).

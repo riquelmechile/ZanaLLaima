@@ -1,8 +1,33 @@
-## 0.7.0: MCP remoto para la app de ChatGPT, en uso real desde el 9 nov 2026
+## 0.8.0: de una misión a un proyecto, primera parte (11 nov 2026)
+
+**Objetivo.** Que GPT pueda llevar un proyecto completo desde una idea: entrevista, plan aprobado por el operador, repositorio, misiones encadenadas, revisión 4R y entrega. Esta versión trae la base y lo que ya se puede usar; el resto queda como contrato probado, sin conectar.
+
+Hecho en esta versión:
+
+- [x] **Discovery.** Entrevista por rondas, alternativas con fuentes HTTPS fechadas y plan con hitos, dependencias y criterios de aceptación (`zana_discovery_*`, `zana_project_plan_draft`). El plan es un borrador: no se aprueba solo.
+- [x] **Borradores de proyecto** por cliente OAuth, con listado y archivado (`zana_workspace_*`): redactan credenciales antes de guardar y tienen tope de 50 por cliente.
+- [x] **CI por repositorio** (`ZANA_REPO_CHECKS_JSON`), aplicado en checks, entrega, merge y dispatch.
+- [x] **Repos permitidos por cuenta** (`owner/*` en `ZANA_GITHUB_REPOS`).
+- [x] Lecturas de archivos como texto, sin el aviso de "materializar archivos" de ChatGPT.
+- [x] Contratos con tests, **sin tool que los ejecute**: creación de repositorios (del bootstrap solo está conectada la propuesta, `zana_bootstrap_prepare`), orquestador de hitos con recuperación, paquetes 4R para subagentes, gate de entrega de proyecto y eventos firmados.
+
+Lo que sigue:
+
+- [ ] Aprobación autenticada del plan por su huella exacta (hoy queda siempre pendiente).
+- [ ] Conectar al backend el bootstrap (crear el repo, instalar el CI, invitar a la revisora y proteger la rama), con autorización del operador registrada.
+- [ ] Conectar el orquestador: varias misiones por proyecto, estado guardado en el servidor.
+- [ ] 4R con subagentes nativos. Primero hay que comprobar si un subagente llega al servidor con una identidad distinta de la conversación que lo lanzó.
+- [ ] Revisión que converge: el revisor recibe los hallazgos de las rondas anteriores y el operador puede aceptar un riesgo.
+- [ ] Gate de entrega con evidencia definida para merge squash.
+- [ ] Borrado y recuperación de borradores; tabla propia en vez de `metadata`.
+- [ ] MCP Events para continuidad entre misiones.
+- [ ] Rechazar al inicio una misión sobre un repo que no existe (`REPO_NOT_FOUND`).
+
+## Versión anterior: MCP remoto para la app de ChatGPT, en uso real desde el 9 nov 2026
 
 **Cambio de rumbo.** ZanaLLaima dejó de ser solo un MCP stdio que vigila un worktree y pasó a ser un **MCP remoto** en el servidor del operador, conectado como conector de la app de ChatGPT. La verdad es el SHA en GitHub y los checks de Actions; GPT escribe por el downstream de GitHub solo en `zana/<missionId>`; la revisión la hace el mismo GPT en una conversación nueva y la publica la cuenta revisora.
 
-Hecho en esta versión:
+Hecho en esa versión:
 
 - [x] **ZL-020.** Streamable HTTP con sesiones, OAuth embebido con registro cerrado por ventana de alta, `/health`, `deploy/` y `docs/deploy-remote.md`.
 - [x] Downstream del GitHub MCP oficial y política allowlist propia sobre la lista real de tools v2.1.0 (`docs/downstream-github.md`).
@@ -17,7 +42,7 @@ Hecho en esta versión:
 Lo que sigue:
 
 - [ ] **ZL-018 (parcial).** Observado: el camino feliz, una ronda de corrección y la sesión por conversación (`examples/host-e2e-remote.json`). Falta: los casos negativos en vivo (la revisora intenta escribir, la autora reclama su ticket, push después del ticket, merge por el downstream) y recibos de modelo, esfuerzo y subagentes, que siguen siendo palabra del host.
-- [ ] Workflow de checks configurable por repo (hoy `ZANA_CHECKS_WORKFLOW` y `ZANA_REQUIRED_CHECKS` son globales).
+- [x] Workflow de checks configurable por repo (hecho en la versión siguiente con `ZANA_REPO_CHECKS_JSON`).
 - [ ] Escritura por archivo adjunto (`openai/fileParams`) para cambios grandes sin pasar el contenido por el chat.
 - [ ] Panel MCP Apps con el estado de la misión y la memoria del proyecto.
 - [ ] Cerco de merge entre procesos: solo si se corre más de un proceso.
@@ -43,7 +68,8 @@ El código queda y sigue probado en stdio, pero **no se toca más**:
 - 0.5.0: verificación Git del worktree y diario SQLite por UUID.
 - 0.5.1: gramática autoignore exacta, adopt con fusión de revocaciones y repos anidados fail-closed.
 - 0.5.2: presupuesto monótono en restore y adopt (`CONSUMED_BUDGET`) y congelamiento de la línea local.
-- 0.6.0: MCP remoto para la app de ChatGPT. No se publicó por separado: quedó dentro de la versión vigente.
+- 0.6.0: MCP remoto para la app de ChatGPT. No se publicó por separado: quedó dentro de la 0.7.0.
+- 0.7.0: primera versión publicada. MCP remoto en uso real, sesión por conversación de ChatGPT y una corrida de Actions por SHA.
 <!-- HISTORICAL_VERSIONS_END -->
 
 # Roadmap técnico de ZanaLLaima

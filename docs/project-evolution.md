@@ -1,6 +1,6 @@
 # ZanaLLaima: desarrollo integral de proyectos — contrato de implementación
 
-Estado: **diseño aprobado conceptualmente; implementación incremental pendiente de CI/4R**.
+Estado: **primera parte integrada en `main`**. Están conectadas como tools la entrevista, el plan, la propuesta de bootstrap y los borradores por cliente; el resto son contratos con tests que ninguna tool ejecuta todavía. Las secciones de abajo conservan el diseño y las notas de cuando se escribió.
 Objetivo: GPT-6 Astra (configuración solicitada, esfuerzo `max`) coordina subagentes nativos cuando existan, sin inferencia externa, y ZanaLLaima aplica política, estado durable y revisión 4R sobre GitHub.
 
 ## Principios inmutables
@@ -18,7 +18,9 @@ Objetivo: GPT-6 Astra (configuración solicitada, esfuerzo `max`) coordina subag
 
 `src/project-discovery.mjs` implementa un contrato **puro** y local, sin estado en servidor ni efectos: `zana.discovery.v1` (idea, respuestas, revisión y estado) y `zana.project-plan.v1` (brief, alternativas documentadas, elección, hitos, digest SHA-256, aprobación pendiente). Validación estricta de campos, fechas, URLs y DAG de hitos. `skills/zana-project-discovery/SKILL.md` describe el flujo conversacional.
 
-### Integración pendiente
+### Integración (hecha después de escribir esta sección)
+
+Los dos puntos siguientes ya existen como `zana_workspace_create`, `_get`, `_update`, `_list` y `_set_archived` (`src/project-workspace.mjs`), con las limitaciones que describe `SECURITY.md`.
 
 - API de borradores en servidor con `projectId` provisional y persistencia SQLite por operador, revisionado optimista por `expectedVersion`, límites y redacción. Nunca usar `memory.context` como fuente de autoridad.
 - Tools MCP de lectura/escritura del borrador con identidad y alcance del usuario; evitar que un tercero recupere planes sensibles.
@@ -72,4 +74,4 @@ Objetivo: GPT-6 Astra (configuración solicitada, esfuerzo `max`) coordina subag
 - La sesión MCP rechazó `zana_mission_init` para `riquelmechile/ZanaLLaima`: `REPO_NOT_ALLOWED`. Debe habilitarse explícitamente en `ZANA_GITHUB_REPOS`, preservando los repos actualmente permitidos. En esta evolución el usuario autorizó expresamente crear ramas y PR mediante el conector GitHub, **sin afirmar cobertura del gate de misión ZanaLLaima**; los PR requieren 4R independiente antes de integración.
 - `zana_capability_status` indicó `executionMode: INLINE` y `verifiedNativeLaunches: 0` para esta sesión. No afirmar que se lanzaron cuatro subagentes.
 - Xanxito confirmó después la autonomía `IMPLEMENT_AND_VERIFY` para un contrato de trabajo local. No se usa para delegar trabajos a otros hosts ni como sustituto de las garantías de ZanaLLaima.
-- El código D1 está aislado; pasar pruebas locales **no acredita** CI de GitHub, revisión 4R, aprobación de usuario, integración MCP ni despliegue.
+- Cuando se escribió esta sección el código D1 estaba aislado. Después pasó CI y revisión con la cuenta revisora y se conectó como tools; la aprobación del plan por el usuario sigue sin implementarse.

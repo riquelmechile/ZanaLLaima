@@ -58,7 +58,7 @@ Desde el 9 nov 2026 hay una prueba con una cuenta ChatGPT real para el camino fe
 - **OAuth con registro cerrado** (`src/oauth.mjs`, adaptado de Panter-ai `embedded-oauth.ts`): DCR, `/authorize` y consentimiento solo durante la ventana que abre el operador con `node src/cli.mjs remote-enroll <minutos>` y con la clave del operador. Fuera de la ventana no entra nadie nuevo; las conexiones aprobadas siguen y rotan su refresh token. Cada conexión queda atada a una etiqueta de host que elige el operador. El ledger OAuth vive en su propio SQLite (un restore de misiones nunca revive credenciales).
 - `/health` responde sin autenticación con nombre, versión, modo, sesiones abiertas y estado del downstream.
 - Host y Origin en allowlist (`ZANA_ALLOWED_ORIGINS`, por defecto `https://chatgpt.com`), cuerpo máximo 4 MB, `no-store`.
-- Las `instructions` del servidor piden cargar `zana-odd` al empezar y `zana-4r` al recibir un ticket.
+- Las `instructions` del servidor piden cargar `zana-project-discovery` para una idea sin repositorio, `zana-odd` para una misión existente y `zana-4r` al recibir un ticket.
 
 ### Herramientas por modo
 
@@ -115,7 +115,7 @@ La herramienta no garantiza que otras capacidades del host hayan sido deshabilit
 
 ## Emisor de atestación CI (workflow_run, main-only)
 
-**Versión del proyecto: ZanaLLaima 0.7.0.** El sobre Ed25519 `CI_RESULT` es producido por `scripts/ci-attest.mjs`, ejecutado por `.github/workflows/ci-attestation.yml` mediante `workflow_run` una vez que concluye `CI`. El script confiable se carga exclusivamente desde `main` (policy **main-only**) y consulta la API de GitHub para verificar los jobs, SHA, árbol, base, runId y conclusión. Jamás se ejecuta código o dependencias del HEAD del PR con `ZANA_CI_SIGNING_KEY`.
+**Versión del proyecto: ZanaLLaima 0.8.0.** El sobre Ed25519 `CI_RESULT` es producido por `scripts/ci-attest.mjs`, ejecutado por `.github/workflows/ci-attestation.yml` mediante `workflow_run` una vez que concluye `CI`. El script confiable se carga exclusivamente desde `main` (policy **main-only**) y consulta la API de GitHub para verificar los jobs, SHA, árbol, base, runId y conclusión. Jamás se ejecuta código o dependencias del HEAD del PR con `ZANA_CI_SIGNING_KEY`.
 
 El environment `ci-attestation` exige como reviewer requerido la cuenta revisora (`ZANA_CI_REVIEWER` en `scripts/setup-ci-signing.sh`). Si pertenece al mismo dueño que la cuenta autora, la separación de cuentas no constituye independencia organizacional. La configuración debe impedir self-review y mantener solo `main` como deployment policy. El workflow permanece desactivado hasta configurar el secreto, la llave pública real y `ZANA_CI_ATTESTATION_READY=true` con controles humanos. La llave `keys/ci-verifier.pub` sigue siendo placeholder hasta entonces.
 

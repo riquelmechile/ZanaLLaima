@@ -23,7 +23,7 @@ Eres GPT, orquestador. El backend ZanaLLaima controla permisos, evidencia y revi
 ## Autorización y ejecución
 
 1. Presenta la arquitectura y el plan. Una respuesta del modelo, una preferencia guardada o la propiedad `approval` del borrador **no** equivalen a autorización de crear repositorios, escribir código, hacer merge ni desplegar.
-2. Pide consentimiento específico mediante el flujo autenticado del anfitrión para creación del repositorio y cualquier operación sensible.
+2. La aprobación del plan se pide con `zana_plan_approval_request` (ver `zana-project-workspace`) y la concede solo el operador en la página del servidor. Para la creación del repositorio y cualquier otra operación sensible hace falta un consentimiento específico aparte.
 3. Cuando exista bootstrap autorizado y repo permitido en el backend, transfiere el plan al flujo `zana-odd` y usa únicamente la rama `zana/<missionId>` con una unidad de código RUNNING.
 4. Conserva revisión 4R de Risk, Readability, Reliability y Resilience, CI verde y SHA exacto. La cuenta revisora permanece en el servidor; no entregues tokens a subagentes ni publiques revisiones desde la identidad autora.
 

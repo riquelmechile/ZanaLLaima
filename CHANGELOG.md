@@ -1,5 +1,10 @@
 # Registro de cambios
 
+## [Sin publicar]
+
+- **Aprobación del plan por el operador.** Dos tools nuevas: `zana_plan_approval_request` pide aprobar el plan guardado en un borrador y devuelve un enlace; `zana_plan_approval_status` dice si el plan vigente está aprobado. La decisión se toma en la página `/operator/approve` del propio servidor, con la clave de consentimiento del operador, y la página muestra el plan completo. La aprobación vale para el digest exacto del plan: otro contenido no está aprobado, y volver al contenido aprobado la recupera. El operador puede revocarla desde la misma página. Solicitudes con vencimiento de una hora, bloqueo a los 6 fallos, máximo de 20 al día por cliente y auditoría de cada decisión. Todavía ninguna tool consume la aprobación; aprobar el plan no crea repositorios, no fusiona y no despliega.
+- **Borradores: el plan se guarda en su forma canónica.** `zana_workspace_update` guarda el plan normalizado (el mismo contenido sobre el que se calcula el digest), no el texto tal como llegó.
+
 ## [0.8.0] - 2026-11-11
 
 Segunda versión publicada (tag `v0.8.0`). Primer paso de "una misión" a "un proyecto completo desde una idea".

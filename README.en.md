@@ -83,6 +83,7 @@ Your real values (domain, accounts, tokens and operator password) live **only** 
 | Checks, tickets, lenses, review by the reviewer account, delivery and merge | In real use: 3 complete missions. In one, the reviewer conversation found a critical bug, requested changes, and another conversation approved the fix |
 | Per-project memory, PR size limits and bounded correction rounds | Implemented and tested; in use |
 | Project interview, plan with alternatives and per-client drafts (`zana_discovery_*`, `zana_project_plan_draft`, `zana_workspace_*`) | Deployed and tested by the operator on November 11, 2026. They are drafts: they create no repositories and authorize nothing |
+| Operator approval of the plan (`zana_plan_approval_request`, `zana_plan_approval_status`, page `/operator/approve`) | Implemented and tested. Approves one plan by its exact digest with the operator password; the operator sees the whole plan and can revoke it; it creates no repositories, merges nothing and deploys nothing |
 | Per-repository CI (`ZANA_REPO_CHECKS_JSON`) and account-wide allowed repositories (`owner/*`) | Implemented and tested |
 | Repository creation (bootstrap), milestone orchestrator, 4R delegated to subagents, project delivery gate and events | Contracts with tests only: **no tool runs them yet**. `zana_bootstrap_prepare` only builds the repository proposal and creates nothing (see [docs/project-evolution.md](docs/project-evolution.md)) |
 | One Actions run per SHA | Observed: a mission with one CI fix and one review correction round used 3 runs, one per SHA |
@@ -127,7 +128,7 @@ CI runs on Node 22.16.0, 22.23.4 and 24, with multi-process stress, coverage (â‰
 ### Modules
 
 - **Remote:**
-  - `src/http.mjs`, `src/oauth.mjs`, `src/remote.mjs`: Streamable HTTP with sessions, OAuth with closed registration, and the 44 remote tools.
+  - `src/http.mjs`, `src/oauth.mjs`, `src/remote.mjs`: Streamable HTTP with sessions, OAuth with closed registration, and the 46 remote tools.
   - `src/downstream.mjs`, `src/github-policy.mjs`, `src/github-api.mjs`: GitHub MCP gateway, allowlist and REST client with a breaker.
   - `src/checks.mjs`, `src/remote-review.mjs`, `src/github-delivery.mjs`, `src/skills.mjs`: Actions checks, tickets and paged diff, delivery and merge, skills.
   - `src/remote-state.mjs`, `src/remote-config.mjs`, `src/deadline.mjs`, `src/redact.mjs`, `src/actor-assertion.mjs`: sessions, audit and retention, configuration, per-tool deadlines, secret redaction and actor assertion.
@@ -148,7 +149,7 @@ export ZANA_REVIEW_TARGET_REF=refs/heads/main
 node src/mcp.mjs
 ```
 
-In stdio mode the server exposes 24 MCP tools, and `tests/sdk-mcp.test.mjs` checks the catalog against that number. Remote mode exposes 44 (see [docs/mcp-v2.md](docs/mcp-v2.md)). Storage administration (restore, adopt, cleanup) remains operator-only CLI: [docs/sqlite-storage.md](docs/sqlite-storage.md). The guide for the human steps is [docs/operator-checklist.md](docs/operator-checklist.md).
+In stdio mode the server exposes 24 MCP tools, and `tests/sdk-mcp.test.mjs` checks the catalog against that number. Remote mode exposes 46 (see [docs/mcp-v2.md](docs/mcp-v2.md)). Storage administration (restore, adopt, cleanup) remains operator-only CLI: [docs/sqlite-storage.md](docs/sqlite-storage.md). The guide for the human steps is [docs/operator-checklist.md](docs/operator-checklist.md).
 
 </details>
 

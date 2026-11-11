@@ -38,7 +38,15 @@ export function remoteConfig(env=process.env){
   if(!allowedUrl(apiUrl))throw new Error('ZANA_GITHUB_API_URL must be https (or http to a private address)');
   const distinct=env.ZANA_DISTINCT_REVIEWER_CLIENT??'false';
   if(!['true','false'].includes(distinct))throw new Error('ZANA_DISTINCT_REVIEWER_CLIENT must be true or false');
-  return Object.freeze({repos,reviewerLogin,distinctReviewerClient:distinct==='true',
+  // Origen público del servidor, para armar enlaces a la página del operador.
+  // src/http.mjs valida el valor completo al arrancar; aquí un valor ilegible es null.
+  const publicHost=String(env.ZANA_PUBLIC_HOST??'').trim();
+  let publicOrigin=null;
+  try{
+    const url=new URL(env.ZANA_PUBLIC_MCP_URL||(publicHost?'https://'+publicHost:''));
+    if(url.protocol==='https:')publicOrigin=url.origin;
+  }catch{}
+  return Object.freeze({repos,reviewerLogin,publicOrigin,distinctReviewerClient:distinct==='true',
     claimTtlMinutes:int(env.ZANA_TICKET_CLAIM_TTL_MINUTES,240,10,10080,'ZANA_TICKET_CLAIM_TTL_MINUTES'),
     toolDeadlineMs:int(env.ZANA_TOOL_DEADLINE_MS,45000,5000,300000,'ZANA_TOOL_DEADLINE_MS'),checksWorkflow,requiredChecks,repoChecks,mergeEnabled:merge==='true',mergeMethod,
     ticketTtlMinutes:int(env.ZANA_TICKET_TTL_MINUTES,120,5,1440,'ZANA_TICKET_TTL_MINUTES'),

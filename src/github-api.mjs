@@ -27,6 +27,21 @@ export class GitHubApiError extends Error{
 export function validRepo(repo){
   return typeof repo==='string'&&REPO.test(repo)&&!repo.split('/').some(p=>p==='.'||p==='..');
 }
+// Una entrada de la lista de repos permitidos: `owner/repo` exacto u `owner/*`
+// (todos los repos de esa cuenta). No hay `*`, `*/*` ni prefijos: el comodín
+// solo vale como nombre completo del repo y la cuenta va nombrada con un login de GitHub válido.
+const OWNER_LOGIN=/^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
+export function validRepoPattern(pattern){
+  if(typeof pattern!=='string')return false;
+  return pattern.endsWith('/*')?OWNER_LOGIN.test(pattern.slice(0,-2)):validRepo(pattern);
+}
+// ¿Algún patrón de la lista cubre este repo? El repo tiene que ser un
+// `owner/repo` válido por sí mismo; la comparación no distingue mayúsculas.
+export function repoMatches(patterns,repo){
+  if(!validRepo(repo))return false;
+  const name=repo.toLowerCase(),owner=name.slice(0,name.indexOf('/')+1);
+  return patterns.some(p=>{const q=String(p).toLowerCase();return q.endsWith('/*')?q.slice(0,-1)===owner:q===name;});
+}
 // A git branch name per check-ref-format, without anything a URL parser could
 // reinterpret. Copied from panter-ai github-workforce.ts validRefName.
 export function validRefName(name){

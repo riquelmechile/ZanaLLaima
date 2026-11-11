@@ -257,7 +257,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     zana_next_batch:args=>operations.next(args),
     zana_mission_history:args=>operations.missionHistory(args),
     async zana_mission_init({spec,github:target},session){
-      if(!repoAllowed(config,target.repo))throw new Error('REPO_NOT_ALLOWED: '+target.repo+' is not in ZANA_GITHUB_REPOS');
+      if(!repoAllowed(config,target.repo))throw new Error('REPO_NOT_ALLOWED: '+String(target.repo).slice(0,120)+' is not allowed by ZANA_GITHUB_REPOS (operator setting: owner/repo or owner/*)');
       if(!validRefName(target.base))throw new Error('Invalid base branch');
       const units=Array.isArray(spec?.units)?spec.units:[];
       if(units.some(u=>u?.effect==='WRITE'))

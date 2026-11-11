@@ -1,7 +1,7 @@
 // Remote-mode configuration from the server environment. Fails closed on
 // anything unclear. Secrets are referenced by variable name only; their values
 // stay in the environment file outside the repository.
-import {validRepo,validRefName} from './github-api.mjs';
+import {validRepoPattern,repoMatches,validRefName} from './github-api.mjs';
 import {allowedUrl} from './downstream.mjs';
 import {parseRepoChecks} from './checks-policy.mjs';
 
@@ -16,7 +16,7 @@ const int=(v,def,min,max,name)=>{
 
 export function remoteConfig(env=process.env){
   const repos=list(env.ZANA_GITHUB_REPOS);
-  for(const r of repos)if(!validRepo(r))throw new Error('ZANA_GITHUB_REPOS has an invalid repository: '+r);
+  for(const r of repos)if(!validRepoPattern(r))throw new Error('ZANA_GITHUB_REPOS has an invalid repository: '+r+' (use owner/repo or owner/*)');
   // No default: the reviewer account is the operator's own and is set only in
   // the server env. Missing → null: the server refuses to start, /health is
   // degraded and delivery is never ready; read-only operator CLI still works.
@@ -49,5 +49,6 @@ export function remoteConfig(env=process.env){
     downstreamTimeoutMs:int(env.ZANA_DOWNSTREAM_TIMEOUT_MS,30000,1000,300000,'ZANA_DOWNSTREAM_TIMEOUT_MS'),
     authorToken:env.ZANA_DOWNSTREAM_GITHUB_TOKEN||null,reviewerToken:env.ZANA_REVIEWER_TOKEN||null});
 }
-export const repoAllowed=(config,repo)=>config.repos.some(r=>r.toLowerCase()===String(repo).toLowerCase());
+// Exacto u `owner/*`; lo que no es un owner/repo válido nunca está permitido.
+export const repoAllowed=(config,repo)=>repoMatches(config.repos,repo);
 export {validRefName};

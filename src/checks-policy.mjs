@@ -1,5 +1,6 @@
 // Configuración de CI por repositorio. El operador la define en el servidor;
 // ni la misión ni el modelo pueden modificarla mediante una tool MCP.
+import {repoMatches} from './github-api.mjs';
 const WORKFLOW=/^[A-Za-z0-9._-]{1,100}\.ya?ml$/;
 const REPO=/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
 const plain=o=>o!==null&&typeof o==='object'&&!Array.isArray(o)&&
@@ -14,11 +15,10 @@ export function parseRepoChecks(raw,allowedRepos=[]){
   let data;
   try{data=JSON.parse(raw);}catch{fail('JSON mal formado');}
   if(!plain(data)||Object.keys(data).length>100)fail('se requiere un objeto acotado');
-  const allowed=new Set(allowedRepos.map(r=>String(r).toLowerCase()));
   for(const [repo,entry] of Object.entries(data)){
     const name=repo.toLowerCase();
     if(!REPO.test(repo)||repo.split('/').some(s=>s==='.'||s==='..')||
-      !allowed.has(name)||Object.hasOwn(result,name))
+      !repoMatches(allowedRepos,repo)||Object.hasOwn(result,name))
       fail('repositorio desconocido o duplicado: '+repo);
     if(!plain(entry)||Object.keys(entry).sort().join(',')!=='requiredChecks,workflow'||
       typeof entry.workflow!=='string'||!WORKFLOW.test(entry.workflow))

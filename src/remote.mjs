@@ -634,13 +634,17 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
   // Lo que el cliente MCP declaró al conectarse (nombre, versión y capacidades).
   // Sirve para saber qué se le puede pedir, por ejemplo sampling. Son datos del
   // cliente: se acotan y no deciden ningún permiso.
-  function clientInfo(server,ctx){
-    const text=v=>typeof v==='string'?v.slice(0,100):null,keys=o=>o&&typeof o==='object'?Object.keys(o).slice(0,20).map(k=>k.slice(0,80)).sort():[];
-    let caps=null,who=null;
-    try{caps=server.server.getClientCapabilities()??null;who=server.server.getClientVersion()??null;}catch{}
-    return {name:text(who?.name),version:text(who?.version),era:ctx?.mcpReq?.envelope?'2026-07-28':'initialize',
-      capabilities:{declared:keys(caps),sampling:Boolean(caps?.sampling),samplingTools:Boolean(caps?.sampling?.tools),
-        elicitation:Boolean(caps?.elicitation),roots:Boolean(caps?.roots),tasks:Boolean(caps?.tasks),extensions:keys(caps?.extensions)}};
+  function clientInfo(server){
+    // Sin caracteres de control ni de dirección de texto; acotado.
+    const text=v=>typeof v==='string'?v.replace(/[\p{Cc}\p{Cf}]/gu,'').slice(0,100):null;
+    const keys=o=>o&&typeof o==='object'?Object.keys(o).map(k=>text(k).slice(0,80)).sort().slice(0,20):[];
+    try{
+      const caps=server.server.getClientCapabilities()??null,who=server.server.getClientVersion()??null;
+      // La versión negociada en initialize: lo que una llamada diga en su _meta no la cambia.
+      return {name:text(who?.name),version:text(who?.version),protocolVersion:text(server.server.getNegotiatedProtocolVersion()),
+        capabilities:{declared:keys(caps),sampling:Boolean(caps?.sampling),samplingTools:Boolean(caps?.sampling?.tools),
+          elicitation:Boolean(caps?.elicitation),roots:Boolean(caps?.roots),tasks:Boolean(caps?.tasks),extensions:keys(caps?.extensions)}};
+    }catch{return null;}
   }
   // Un McpServer por sesión MCP. getSession(ctx) da la identidad de cada llamada:
   // la conversación de ChatGPT si la llamada la trae, si no la del transporte.
@@ -654,7 +658,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         let session;
         try{session=await getSession(ctx);}
         catch(error){return {isError:true,content:[{type:'text',text:'SESSION_UNAVAILABLE: '+clean(error,secrets())}]};}
-        return dispatch(name,args,session,{client:clientInfo(server,ctx)});
+        return dispatch(name,args,session,name==='zana_session_status'?{client:clientInfo(server)}:undefined);
       });
     for(const name of REUSED){const [,description,readOnly]=TOOL_DESCRIPTIONS[name];register(name,description,readOnly,schemas[name]);}
     for(const [name,[description,readOnly,schema]] of Object.entries(NEW_TOOLS))register(name,description,readOnly,schema);

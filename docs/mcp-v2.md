@@ -79,7 +79,7 @@ Desde el 9 nov 2026 hay una prueba con una cuenta ChatGPT real para el camino fe
 | `zana_storage_status`, `zana_storage_history`, `zana_storage_reviews`, `zana_permission_status` | sí | **no** | Administración local: CLI del operador en el servidor |
 | `zana_memory_context`, `zana_memory_search` | no | sí | Lectura de la memoria por proyecto, también para la revisora |
 | `zana_memory_save`, `zana_memory_resolve` | no | sí | Escritura de cualquier sesión de la misión que no sea la revisora, con la misión activa; la revisora recibe `REVIEWER_READ_ONLY` |
-| `zana_session_status` | no | sí | Sesión, host, `createdAt`, lo que el cliente MCP declaró al conectarse (nombre, versión, capacidades) y rol en la misión activa |
+| `zana_session_status` | no | sí | Sesión, host, `createdAt`, lo que el cliente MCP declaró al conectarse (nombre, versión, protocolo negociado, capacidades) y rol en la misión activa |
 | `zana_skill_list`, `zana_skill_load` | no | sí | Skills de `skills/`: `zana-odd` y `zana-pr` (autora), `zana-4r` (revisora), `review-discipline` y los cuatro `review-*` (lentes) |
 | `zana_checks_start`, `zana_checks_status` | no | sí | Checks en GitHub Actions por SHA exacto |
 | `zana_review_request`, `zana_review_claim`, `zana_review_diff`, `zana_review_lens_submit`, `zana_review_finalize` | no | sí | Ticket, conversación nueva, diff paginado completo y cuenta revisora |

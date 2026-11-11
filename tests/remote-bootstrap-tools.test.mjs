@@ -29,7 +29,7 @@ test('zana_bootstrap_execute crea el repositorio con el token de bootstrap, una 
     const done=await t.f.call('zana_bootstrap_execute',t.args,t.s);
     assert.deepEqual({state:done.state,reused:done.reused,auth:done.authorization.status,name:done.created.fullName,priv:done.created.private},
       {state:'DONE',reused:false,auth:'CONSUMED',name:'O/gestor',priv:true});
-    assert.deepEqual(t.creates().map(x=>[x.token===BOOTSTRAP_TOKEN,JSON.parse(x.body)]),[[true,{name:'gestor',private:true,auto_init:true}]]);
+    assert.deepEqual(t.creates().map(x=>[x.token===BOOTSTRAP_TOKEN,JSON.parse(x.body)]),[[true,{name:'gestor',private:true,auto_init:true,description:'Creado por ZanaLLaima (operación '+t.op.operationId+')'}]]);
     assert.ok(t.f.api.state.requests.every(x=>x.path!=='/user/repos'||x.token!==AUTHOR_TOKEN),'el token de misiones no crea repositorios');
     assert.equal((await t.f.call('zana_bootstrap_execute',t.args,t.s)).reused,true);
     assert.equal(t.creates().length,1);
@@ -60,24 +60,48 @@ test('sin token de bootstrap o sin autorización del operador no se crea nada',a
 test('rechazo claro, resultado incierto y reconciliación por las tools, sin filtrar el token',async()=>{
   const t=await ready();
   try{
-    t.f.api.state.failCreate={status:422,message:'Repository creation failed for token '+BOOTSTRAP_TOKEN};
+    t.f.api.state.failCreate={status:422,message:'Repository creation failed.',errors:[{code:'custom',field:'name',message:'name is reserved '+BOOTSTRAP_TOKEN}]};
     const rejected=await t.f.call('zana_bootstrap_execute',t.args,t.s);
     assert.match(rejected.error,/CREATE_REJECTED: GitHub HTTP 422/);
     assert.ok(!JSON.stringify(rejected).includes(BOOTSTRAP_TOKEN),'el token nunca sale en un resultado');
     const st=await t.f.call('zana_bootstrap_status',t.args,t.s);
     assert.deepEqual([st.state,st.authorization.status],['AWAITING_AUTHORIZATION','CONSUMED']);
     assert.ok(st.lastError&&!st.lastError.includes(BOOTSTRAP_TOKEN));
+    assert.match(st.lastError,/name is reserved/,'la causa real viene en errors[].message');
     // Nueva autorización; ahora GitHub falla sin responder claro, pero el repositorio sí quedó creado.
     await t.authorize();
-    t.f.api.state.failCreate={status:502,message:'bad gateway',createAnyway:body=>({id:9001,full_name:'O/'+body.name,private:true,
+    t.f.api.state.failCreate={status:502,message:'bad gateway',createAnyway:body=>({id:9001,full_name:'O/'+body.name,private:true,description:body.description,
       html_url:'https://github.test/O/'+body.name,default_branch:'main',created_at:new Date().toISOString(),owner:{login:'O'}})};
     assert.match((await t.f.call('zana_bootstrap_execute',t.args,t.s)).error,/OUTCOME_UNKNOWN/);
     assert.match((await t.f.call('zana_bootstrap_execute',t.args,t.s)).error,/RECONCILIATION_REQUIRED/);
     assert.equal(t.creates().length,2,'el intento incierto no se repite');
     const adopted=await t.f.call('zana_bootstrap_reconcile',t.args,t.s);
     assert.deepEqual([adopted.state,adopted.created.id],['DONE',9001]);
+    const made=(await t.f.runtime.readAudit({limit:80})).filter(x=>x.tool==='bootstrap_repository');
+    assert.deepEqual(made.map(x=>[x.outcome,x.detail.fullName,x.detail.id,x.detail.operationId]),[['ADOPTED','O/gestor',9001,t.op.operationId]],'la auditoría nombra lo que se creó');
     const audit=(await t.f.runtime.readAudit({limit:80})).filter(x=>x.tool.startsWith('zana_bootstrap_'));
     assert.ok(audit.some(x=>x.tool==='zana_bootstrap_execute')&&audit.some(x=>x.tool==='zana_bootstrap_reconcile'));
     assert.ok(!JSON.stringify(audit).includes(BOOTSTRAP_TOKEN));
+  }finally{await t.f.cleanup();}
+});
+
+// Ronda de corrección tras la revisión 4R.
+test('el token de bootstrap no puede ser el de misiones, y pedir de nuevo un repo ya creado no abre otra operación',async()=>{
+  const shared=await remoteFixture({envExtra:{ZANA_GITHUB_REPOS:'O/*',ZANA_BOOTSTRAP_GITHUB_TOKEN:AUTHOR_TOKEN}});
+  try{
+    const s=await shared.session('zana-chatgpt','oauth-one');
+    assert.match((await shared.call('zana_bootstrap_execute',{operationId:'11111111-1111-4111-8111-111111111111'},s)).error,/BOOTSTRAP_TOKEN_SHARED/);
+    const health=await shared.runtime.health();
+    assert.ok(health.problems.some(x=>/ZANA_BOOTSTRAP_GITHUB_TOKEN/.test(x)),'el /health avisa la mala configuración');
+  }finally{await shared.cleanup();}
+  const t=await ready();
+  try{
+    const done=await t.f.call('zana_bootstrap_execute',t.args,t.s);
+    assert.equal(done.state,'DONE');
+    const created=(await t.f.runtime.readAudit({limit:80})).filter(x=>x.tool==='bootstrap_repository');
+    assert.deepEqual(created.map(x=>[x.outcome,x.detail.fullName,x.detail.private]),[['CREATED','O/gestor',true]]);
+    const again=await t.ask();
+    assert.deepEqual([again.operationId,again.state,again.created.fullName,again.authorization.approvalUrl],[t.op.operationId,'DONE','O/gestor',null],
+      'devuelve la operación hecha, sin pedir otra autorización');
   }finally{await t.f.cleanup();}
 });

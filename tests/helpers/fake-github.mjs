@@ -34,10 +34,10 @@ export async function fakeGitHubApi(){
     if(url.pathname==='/user'&&req.method==='GET')return send(200,{login:token===BOOTSTRAP_TOKEN?state.bootstrapLogin:AUTHOR_LOGIN});
     if(url.pathname==='/user/repos'&&req.method==='POST'){
       if(token!==BOOTSTRAP_TOKEN)return send(403,{message:'Resource not accessible by this token'});
-      if(state.failCreate){const f=state.failCreate;state.failCreate=null;if(f.createAnyway)state.created[(state.bootstrapLogin+'/'+JSON.parse(body).name).toLowerCase()]=f.createAnyway(JSON.parse(body));return send(f.status,{message:f.message});}
+      if(state.failCreate){const f=state.failCreate;state.failCreate=null;if(f.createAnyway)state.created[(state.bootstrapLogin+'/'+JSON.parse(body).name).toLowerCase()]=f.createAnyway(JSON.parse(body));return send(f.status,{message:f.message,...(f.errors?{errors:f.errors}:{})});}
       const input=JSON.parse(body),full=state.bootstrapLogin+'/'+input.name;
-      if(state.created[full.toLowerCase()])return send(422,{message:'name already exists on this account'});
-      const made={id:++state.repoId,full_name:full,private:input.private===true,html_url:'https://github.test/'+full,
+      if(state.created[full.toLowerCase()])return send(422,{message:'Repository creation failed.',errors:[{resource:'Repository',code:'custom',field:'name',message:'name already exists on this account'}]});
+      const made={id:++state.repoId,full_name:full,private:input.private===true,description:input.description??null,html_url:'https://github.test/'+full,
         default_branch:'main',created_at:new Date().toISOString(),owner:{login:state.bootstrapLogin}};
       state.created[full.toLowerCase()]=made;
       return send(201,made);

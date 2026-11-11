@@ -127,7 +127,7 @@ CI runs on Node 22.16.0, 22.23.4 and 24, with multi-process stress, coverage (â‰
 ### Modules
 
 - **Remote:**
-  - `src/http.mjs`, `src/oauth.mjs`, `src/remote.mjs`: Streamable HTTP with sessions, OAuth with closed registration, and the 44 remote tools.
+  - `src/http.mjs`, `src/oauth.mjs`, `src/remote.mjs`: Streamable HTTP with sessions, OAuth with closed registration, and the 46 remote tools.
   - `src/downstream.mjs`, `src/github-policy.mjs`, `src/github-api.mjs`: GitHub MCP gateway, allowlist and REST client with a breaker.
   - `src/checks.mjs`, `src/remote-review.mjs`, `src/github-delivery.mjs`, `src/skills.mjs`: Actions checks, tickets and paged diff, delivery and merge, skills.
   - `src/remote-state.mjs`, `src/remote-config.mjs`, `src/deadline.mjs`, `src/redact.mjs`, `src/actor-assertion.mjs`: sessions, audit and retention, configuration, per-tool deadlines, secret redaction and actor assertion.
@@ -148,7 +148,7 @@ export ZANA_REVIEW_TARGET_REF=refs/heads/main
 node src/mcp.mjs
 ```
 
-In stdio mode the server exposes 24 MCP tools, and `tests/sdk-mcp.test.mjs` checks the catalog against that number. Remote mode exposes 44 (see [docs/mcp-v2.md](docs/mcp-v2.md)). Storage administration (restore, adopt, cleanup) remains operator-only CLI: [docs/sqlite-storage.md](docs/sqlite-storage.md). The guide for the human steps is [docs/operator-checklist.md](docs/operator-checklist.md).
+In stdio mode the server exposes 24 MCP tools, and `tests/sdk-mcp.test.mjs` checks the catalog against that number. Remote mode exposes 46 (see [docs/mcp-v2.md](docs/mcp-v2.md)). Storage administration (restore, adopt, cleanup) remains operator-only CLI: [docs/sqlite-storage.md](docs/sqlite-storage.md). The guide for the human steps is [docs/operator-checklist.md](docs/operator-checklist.md).
 
 </details>
 

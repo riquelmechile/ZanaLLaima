@@ -24,6 +24,7 @@ import {listSkills,loadSkill} from './skills.mjs';
 import {startDiscovery,answerDiscovery,nextDiscoveryQuestions,draftProjectPlan} from './project-discovery.mjs';
 import {prepareBootstrap} from './project-bootstrap.mjs';
 import {createProjectWorkspace,getProjectWorkspace,updateProjectWorkspace,listProjectWorkspaces,setProjectWorkspaceArchived} from './project-workspace.mjs';
+import {requestPlanApproval,planApprovalStatus,describePlanApproval,decidePlanApproval} from './plan-approval.mjs';
 import {ActorSigner} from './actor-assertion.mjs';
 import {lineBudget,lineLimit,EXTEND_MAX,correctionLimit} from './line-budget.mjs';
 import {nowIso,recordActivity,remoteMission,sessionReviews,sessionWrote,sessionIsMissionAuthor,writeAudit,readAudit} from './remote-state.mjs';
@@ -70,6 +71,10 @@ const NEW_TOOLS={
     z.object({workspaceId:z.string().uuid(),expectedVersion:z.number().int().min(0),
       answers:z.record(z.string(),z.unknown()).optional(),
       plan:z.record(z.string(),z.unknown()).optional()}).strict()],
+  zana_plan_approval_request:['Ask the operator to approve the stored plan of a workspace by its exact digest. Returns approvalUrl: give that link to the user. Only the operator approves, on that page with the operator password; never ask for the password in chat. No argument of any tool approves a plan',false,
+    z.object({workspaceId:z.string().uuid(),expectedVersion:z.number().int().min(0)}).strict()],
+  zana_plan_approval_status:['Show whether the current plan of a workspace is approved by the operator (NONE, PENDING, APPROVED, DENIED, EXPIRED, LOCKED or SUPERSEDED when the plan changed)',true,
+    z.object({workspaceId:z.string().uuid()}).strict()],
   zana_discovery_start:['Start a new in-chat project brief; no repository, mission or durable approval is created',true,
     z.object({idea:z.string().min(12).max(2000)}).strict()],
   zana_discovery_questions:['Return outstanding questions for a project brief; no state change',true,
@@ -246,6 +251,12 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       setProjectWorkspaceArchived(db,{clientId:session.clientId,workspaceId,expectedVersion,archived})),
     zana_workspace_update:({workspaceId,expectedVersion,answers,plan},session)=>rw(db=>
       updateProjectWorkspace(db,{clientId:session.clientId,workspaceId,expectedVersion,answers,plan})),
+    zana_plan_approval_request:({workspaceId,expectedVersion},session)=>rw(db=>{
+      const r=requestPlanApproval(db,{clientId:session.clientId,workspaceId,expectedVersion});
+      const approvalPath=r.approvalId?'/operator/approve?aid='+r.approvalId:null;
+      return {...r,approvalPath,approvalUrl:approvalPath&&config.publicOrigin?config.publicOrigin+approvalPath:null};
+    }),
+    zana_plan_approval_status:({workspaceId},session)=>rr(db=>planApprovalStatus(db,{clientId:session.clientId,workspaceId})),
     zana_discovery_start:({idea})=>startDiscovery(idea),
     zana_discovery_questions:({brief,limit,includeOptional})=>nextDiscoveryQuestions(brief,{limit,includeOptional}),
     zana_discovery_answer:({brief,answers})=>answerDiscovery(brief,answers),
@@ -644,7 +655,17 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       authorToken:config.authorToken?'configured':'missing',reviewerToken:config.reviewerToken?'configured':'missing',
       downstream:gateway.status().state};
   }
-  return {config,github,reviewerGithub,gateway,checks,review,ops,dispatch,createServer,missionContext,health,
+  // Decisión del operador: la llama la página HTTP, nunca una tool. Queda auditada.
+  const planApproval={
+    describe:approvalId=>rr(db=>describePlanApproval(db,{approvalId})),
+    decide:({approvalId,decision,passwordOk})=>rw(db=>{
+      const r=decidePlanApproval(db,{approvalId,decision,passwordOk});
+      writeAudit(db,{caller:{host:'operator',sessionId:null},tool:'operator_plan_approval',
+        outcome:r.denied?'REFUSED':r.status,detail:{workspaceId:r.workspaceId,planDigest:r.planDigest},category:'operator'});
+      return r;
+    }),
+  };
+  return {config,github,reviewerGithub,gateway,checks,review,ops,dispatch,createServer,missionContext,health,planApproval,
     actorKeys:()=>({keys:[signer.jwk()]}),readAudit:opts=>readAudit(opts),
     close:()=>gateway.close()};
 }

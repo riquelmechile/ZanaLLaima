@@ -66,6 +66,7 @@ Desde el 9 nov 2026 hay una prueba con una cuenta ChatGPT real para el camino fe
 | --- | --- | --- | --- |
 | `zana_profile`, `zana_capability_status` | sí | sí | |
 | `zana_workspace_create`, `zana_workspace_get`, `zana_workspace_update`, `zana_workspace_list`, `zana_workspace_set_archived` | no | sí | Borradores SQLite por cliente OAuth, control de versión, sin aprobar ni crear repositorios |
+| `zana_plan_approval_request`, `zana_plan_approval_status` | no | sí | Piden y consultan la aprobación del plan guardado, por su digest exacto. No aprueban: la decisión es del operador y no entra por ninguna tool |
 | `zana_discovery_start`, `zana_discovery_questions`, `zana_discovery_answer`, `zana_project_plan_draft` | no | sí | Fase de idea y plan sin repositorio; toda respuesta es borrador no persistido |
 | `zana_bootstrap_prepare` | no | sí | Propuesta no persistida, no ejecuta create_repository ni concede autorización |
 | `zana_mission_init` | sí | sí | En remoto exige `github: {repo, base}`, unidades `READ` y `code: true` en las que cambian código, y responde `memory` (contexto del proyecto y puntero, ver `docs/memory.md`) |
@@ -89,7 +90,7 @@ Desde el 9 nov 2026 hay una prueba con una cuenta ChatGPT real para el camino fe
 | `zana_merge` | no | sí | Solo con todo verde sobre un mismo head; `ZANA_MERGE_ENABLED=false` lo apaga |
 | `zana_ds_github` | no | sí | Router del GitHub MCP oficial, ver `docs/downstream-github.md` |
 
-Total: 24 en stdio y 44 en remoto. La restauración, la adopción de cuarentenas, la ventana de alta OAuth, la revocación de clientes, la auditoría (`remote-audit`), la salud con detalle (`remote-health`), los tickets (`remote-tickets`, `remote-ticket-abandon`) y el merge del operador (`remote-merge`) son solo CLI en el servidor.
+Total: 24 en stdio y 46 en remoto. La restauración, la adopción de cuarentenas, la ventana de alta OAuth, la revocación de clientes, la auditoría (`remote-audit`), la salud con detalle (`remote-health`), los tickets (`remote-tickets`, `remote-ticket-abandon`) y el merge del operador (`remote-merge`) son solo CLI en el servidor.
 
 ### Plazos
 

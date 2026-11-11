@@ -158,6 +158,8 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
   const reviewerGithub=new GitHubApi({baseUrl:config.apiUrl,token:config.reviewerToken,fetcher});
   // Cliente aparte para crear repositorios: el token de misiones no lleva ese permiso.
   const bootstrapGithub=new GitHubApi({baseUrl:config.apiUrl,token:config.bootstrapToken,fetcher});
+  // Mismo token para misiones y bootstrap: el agente que escribe heredaría el permiso de crear repositorios.
+  const bootstrapShared=Boolean(config.bootstrapToken)&&config.bootstrapToken===config.authorToken;
   const secrets=()=>[...envSecrets(env),...[config.authorToken,config.reviewerToken,config.bootstrapToken].filter(Boolean)];
   const rw=fn=>remoteWrite(fn),rr=fn=>remoteRead(fn);
   const audit=entry=>rw(db=>writeAudit(db,entry));
@@ -263,7 +265,15 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
   const withApprovalUrl=r=>({...r,authorization:approvalLink(r.authorization)});
   const bootstrapDeps=(session,operationId)=>{
     if(!bootstrapGithub.configured)throw new Error('BOOTSTRAP_TOKEN_MISSING: ZANA_BOOTSTRAP_GITHUB_TOKEN is not set on the server');
+    if(bootstrapShared)throw new Error('BOOTSTRAP_TOKEN_SHARED: ZANA_BOOTSTRAP_GITHUB_TOKEN must not be the missions token');
     return {rw,rr,github:bootstrapGithub,allowed:repo=>repoAllowed(config,repo),clientId:session.clientId,operationId};
+  };
+  // El efecto externo queda en la auditoría con lo que se creó o adoptó, no solo como una tool exitosa.
+  const bootstrapDone=async(session,before,run,outcome)=>{
+    const r=await run();
+    if(r.state==='DONE'&&before!=='DONE'&&r.reused!==true)await rw(db=>writeAudit(db,{caller:session,tool:'bootstrap_repository',outcome,category:'write',
+      detail:{operationId:r.operationId,fullName:r.created.fullName,id:r.created.id,private:r.created.private}}));
+    return withApprovalUrl(r);
   };
   const ops={
     zana_workspace_create:({idea},session)=>rw(db=>createProjectWorkspace(db,{clientId:session.clientId,idea})),
@@ -279,8 +289,8 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     zana_plan_approval_status:({workspaceId},session)=>rr(db=>planApprovalStatus(db,{clientId:session.clientId,workspaceId})),
     zana_bootstrap_request:({workspaceId,expectedVersion,owner,name,visibility},session)=>rw(db=>withApprovalUrl(
       requestBootstrap(db,{clientId:session.clientId,workspaceId,expectedVersion,owner,name,visibility,allowed:repo=>repoAllowed(config,repo)}))),
-    zana_bootstrap_execute:async({operationId},session)=>withApprovalUrl(await runBootstrap(bootstrapDeps(session,operationId))),
-    zana_bootstrap_reconcile:async({operationId},session)=>withApprovalUrl(await reconcileBootstrap(bootstrapDeps(session,operationId))),
+    zana_bootstrap_execute:({operationId},session)=>bootstrapDone(session,null,()=>runBootstrap(bootstrapDeps(session,operationId)),'CREATED'),
+    zana_bootstrap_reconcile:({operationId},session)=>bootstrapDone(session,null,()=>reconcileBootstrap(bootstrapDeps(session,operationId)),'ADOPTED'),
     zana_bootstrap_status:({operationId},session)=>rr(db=>withApprovalUrl(bootstrapStatus(db,{clientId:session.clientId,operationId}))),
     zana_discovery_start:({idea})=>startDiscovery(idea),
     zana_discovery_questions:({brief,limit,includeOptional})=>nextDiscoveryQuestions(brief,{limit,includeOptional}),
@@ -692,6 +702,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     if(!config.authorToken)problems.push('ZANA_DOWNSTREAM_GITHUB_TOKEN missing');
     if(!config.reviewerToken)problems.push('ZANA_REVIEWER_TOKEN missing');
     if(!config.reviewerLogin)problems.push('ZANA_REVIEWER_LOGIN missing');
+    if(bootstrapShared)problems.push('ZANA_BOOTSTRAP_GITHUB_TOKEN is the same as ZANA_DOWNSTREAM_GITHUB_TOKEN');
     return {status:problems.length?'degraded':'ok',problems,schemaVersion,staleTickets,
       authorToken:config.authorToken?'configured':'missing',reviewerToken:config.reviewerToken?'configured':'missing',
       bootstrapToken:config.bootstrapToken?'configured':'missing',

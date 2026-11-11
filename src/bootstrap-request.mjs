@@ -45,6 +45,9 @@ export function requestBootstrap(db,{clientId,workspaceId,expectedVersion,owner,
   // Una operación sin ejecutar se borra a los dos días de su último uso.
   const idle=x=>x.state==='AWAITING_AUTHORIZATION'&&now-Date.parse(x.updatedAt)>=2*DAY_MS;
   for(const old of ops)if(idle(old))db.prepare('DELETE FROM metadata WHERE key=?').run(PREFIX+old.operationId);
+  // Ese repositorio ya se creó o tiene un intento en curso para este proyecto: se devuelve esa operación, sin pedir otra autorización.
+  const started=ops.find(x=>x.workspaceId===workspaceId&&x.state!=='AWAITING_AUTHORIZATION'&&repoOf(x.intent).toLowerCase()===repo.toLowerCase());
+  if(started)return view(started,approvalState(db,{clientId,approvalId:started.approvalId,now})??{status:'EXPIRED'});
   const same=x=>x.workspaceId===workspaceId&&x.state==='AWAITING_AUTHORIZATION'&&!idle(x)&&
     x.intent.planDigest===planDigest&&repoOf(x.intent).toLowerCase()===repo.toLowerCase()&&x.intent.visibility===intent.visibility;
   const op=ops.find(same)??{schema:'zana.bootstrap-op.v1',operationId:intent.operationId,ownerClient:clientId,workspaceId,

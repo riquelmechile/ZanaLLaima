@@ -54,6 +54,16 @@ async function login(base,{host='zana-chatgpt',password=PASSWORD}={}){
     body:form({grant_type:'authorization_code',code,code_verifier:verifier,redirect_uri:REDIRECT,client_id})});
   return {status:token.status,client_id,...await token.json()};
 }
+// JSON-RPC crudo, para mandar lo que un SDK cliente no dejaría.
+async function rpc(base,token,body,sessionId,protocolVersion){
+  const res=await fetch(base+'/mcp',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json',
+    accept:'application/json, text/event-stream',...(sessionId?{'mcp-session-id':sessionId,'mcp-protocol-version':protocolVersion}:{})},
+    body:JSON.stringify(body)});
+  const text=await res.text();
+  const data=text.split('\n').filter(l=>l.startsWith('data:')).map(l=>l.slice(5).trim()).pop()??text;
+  let json=null;try{json=JSON.parse(data);}catch{}
+  return {status:res.status,json};
+}
 async function connect(base,token,options){
   const client=new Client({name:'chatgpt-like',version:'1.0.0'},options);
   const transport=new StreamableHTTPClientTransport(new URL(base+'/mcp'),{requestInit:{headers:{authorization:'Bearer '+token}}});
@@ -134,9 +144,11 @@ test('Streamable HTTP sessions: two conversations get two sessions; the reviewer
       // La versión es la negociada en initialize, no algo que una llamada pueda afirmar en su _meta.
       const negotiated=sc.protocolVersion;
       assert.match(negotiated,/^20\d\d-\d\d-\d\d$/);
-      const claimed=await capable.client.callTool({name:'zana_session_status',arguments:{},
-        _meta:{'io.modelcontextprotocol/protocolVersion':'2026-07-28'}}).catch(()=>null);
-      if(claimed&&!claimed.isError)assert.equal(JSON.parse(claimed.content[0].text).client.protocolVersion,negotiated);
+      // JSON-RPC crudo sobre la misma sesión: el cliente del SDK no deja mandar este _meta.
+      const claimed=await rpc(s.base,token,{jsonrpc:'2.0',id:77,method:'tools/call',params:{name:'zana_session_status',arguments:{},
+        _meta:{'io.modelcontextprotocol/protocolVersion':'2026-07-28'}}},capable.transport.sessionId,negotiated);
+      assert.equal(claimed.status,200);
+      assert.equal(claimed.json.result.structuredContent.client.protocolVersion,negotiated);
       assert.equal('era' in sc,false);
     }finally{await capable.client.close();}
     const skills=await a.call('zana_skill_list');
@@ -502,4 +514,33 @@ test('transportes: los de conversación se sueltan a los minutos; uno con una ll
     release();
     await c2.client.close().catch(()=>{});
   }finally{release();if(s)await s.close();await f.cleanup();}
+});
+
+test('los intentos del protocolo 2026-07-28 se rechazan, pero quedan contados en el /health local',async()=>{
+  const f=await remoteFixture();
+  const s=await server(f);
+  try{
+    setEnrollment(s.settings.oauthDb,5);
+    const {access_token:token}=await login(s.base);
+    const health=async(headers={})=>(await fetch(s.base+'/health',{headers})).json();
+    assert.deepEqual((await health()).protocol,{served:'2025 (initialize, con sesiones)',modernRejected:{count:0,last:null,versions:{},methods:{}}});
+    const modern=(method,version)=>rpc(s.base,token,{jsonrpc:'2.0',id:1,method,params:{_meta:{'io.modelcontextprotocol/protocolVersion':version}}});
+    assert.equal((await modern('server/discover','2026-07-28')).status,400);
+    assert.equal((await modern('tools/list','2026-07-28')).status,400);
+    assert.equal((await modern('tools/call','x'.repeat(500)+'\u0000')).status,400);
+    for(let i=0;i<12;i++)await modern('m'+i,'v'+i);
+    assert.equal((await rpc(s.base,token,{jsonrpc:'2.0',id:2,method:'tools/list'})).status,400,'sin sobre no es un intento moderno');
+    const seen=(await health()).protocol.modernRejected;
+    assert.equal(seen.count,15);
+    assert.match(seen.last,/^20\d\d-/);
+    assert.equal(seen.versions['2026-07-28'],2);
+    assert.deepEqual([seen.methods['server/discover'],seen.methods['tools/list']],[1,1]);
+    assert.ok(Object.keys(seen.versions).length<=10&&Object.keys(seen.methods).length<=10,'acotado: valores del cliente no crecen sin tope');
+    assert.ok(Object.keys(seen.versions).every(k=>k.length<=40&&!k.includes('\u0000')));
+    assert.equal((await health({'cf-connecting-ip':'203.0.113.9'})).protocol,undefined,'por el túnel no se publica');
+    // Sin autenticación no se cuenta nada: el contador no lo puede inflar un tercero.
+    await fetch(s.base+'/mcp',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({jsonrpc:'2.0',id:1,method:'x',params:{_meta:{'io.modelcontextprotocol/protocolVersion':'2026-07-28'}}})});
+    assert.equal((await health()).protocol.modernRejected.count,15);
+  }finally{await s.close();await f.cleanup();}
 });

@@ -5,6 +5,7 @@
 // returns the redacted tail of the failed job logs.
 import {randomUUID} from 'node:crypto';
 import {createDeadline,LOG_BUDGET_MS} from './deadline.mjs';
+import {checksForRepo} from './checks-policy.mjs';
 
 const OK=new Set(['success','neutral','skipped']);
 const MAX_FAILED_LOGS=3;
@@ -50,14 +51,14 @@ export async function actionsJobId(github,repo,run){
 
 export function createChecks({github,config,remoteWrite,remoteRead,missionContext,recordActivity}){
   async function verdict(repo,sha){
-    return evaluateRuns(await github.checkRuns(repo,sha),sha,config.requiredChecks);
+    return evaluateRuns(await github.checkRuns(repo,sha),sha,checksForRepo(config,repo).requiredChecks);
   }
   return {
     verdict,
     async start(missionId,session){
       const ctx=await missionContext(missionId,session.sessionId,{write:true});
       const sha=await github.branchHead(ctx.repo,ctx.branch);
-      const workflow=config.checksWorkflow;
+      const workflow=checksForRepo(config,ctx.repo).workflow;
       const runs=(await github.workflowRuns(ctx.repo,sha)).filter(r=>r.head_sha===sha&&
         (String(r.path??'').endsWith('/'+workflow)||String(r.path??'')===workflow));
       let dispatched=false;
@@ -77,6 +78,8 @@ export function createChecks({github,config,remoteWrite,remoteRead,missionContex
       const row=await remoteRead(db=>db?.prepare('SELECT * FROM remote_checks WHERE check_id=?').get(checkId)??null);
       if(!row)throw new Error('Unknown checkId');
       const ctx=await missionContext(row.mission_id,null,{allowInactive:true});
+      if(row.workflow!==checksForRepo(config,ctx.repo).workflow)
+        throw new Error('CHECKS_POLICY_CHANGED: workflow changed since checks_start; start a new check');
       const deadline=createDeadline(config.toolDeadlineMs);
       const result=await deadline.step(()=>verdict(ctx.repo,row.sha),'check-runs',
         {fallback:{state:'UNKNOWN',sha:row.sha,missing:[],runs:[]}});

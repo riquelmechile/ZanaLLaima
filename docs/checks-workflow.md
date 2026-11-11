@@ -1,6 +1,6 @@
 # Plantilla del workflow de checks para repos administrados
 
-Los tests que cuentan corren en GitHub Actions. Cada repo de `ZANA_GITHUB_REPOS` necesita un workflow llamado como `ZANA_CHECKS_WORKFLOW` (por defecto `zana-checks.yml`) que se pueda disparar con `workflow_dispatch`. Con eso basta: `zana_checks_start` lo dispara **una vez por SHA**, cuando la autora terminó de escribir. Así una misión gasta una corrida, y no una por cada push.
+Los tests que cuentan corren en GitHub Actions. Cada repo de `ZANA_GITHUB_REPOS` necesita un workflow `workflow_dispatch`. Por defecto se llama como `ZANA_CHECKS_WORKFLOW` (`zana-checks.yml`), salvo que el operador configure un override explícito por repositorio mediante `ZANA_REPO_CHECKS_JSON`. Con eso basta: `zana_checks_start` lo dispara **una vez por SHA**, cuando la autora terminó de escribir. Así una misión gasta una corrida, y no una por cada push.
 
 **Lo agrega el operador.** ZanaLLaima nunca escribe en `.github/workflows/**` de otro repo (la política lo deniega) y esta plantilla no se instala sola.
 
@@ -32,11 +32,24 @@ jobs:
 Adaptar los pasos al lenguaje del repo. Reglas:
 
 - El job debe producir check runs sobre el SHA del commit (`zana_checks_status` lee `GET /commits/{sha}/check-runs`).
-- Si se configura `ZANA_REQUIRED_CHECKS`, esos nombres de check deben existir; si no, cuentan todos los check runs del SHA.
+- Si se configura `ZANA_REQUIRED_CHECKS`, esos nombres deben existir; si no, cuentan todos los check runs del SHA. En overrides por repo, `requiredChecks` es obligatorio y no vacío.
 - Sin secretos en el workflow; `permissions: contents: read`.
 - **Costo.** En un repo privado cada corrida se paga. No agregues `push` ni `pull_request` a este workflow: con `push` corre en cada commit de la rama, y con `pull_request` corre otra vez sobre el mismo SHA.
 - **Si el repo ya tiene su propio CI en `pull_request`**, sáltalo en las ramas de ZanaLLaima con `if: ${{ !startsWith(github.head_ref, 'zana/') }}` en el job (un job saltado no se cobra). Para ZanaLLaima un check saltado no prueba nada: un SHA que solo tiene checks saltados queda `PENDING` hasta que corra el workflow de checks. Tres cosas a saber:
   - GitHub cuenta un check requerido saltado como aprobado. Lo que exige la corrida real es ZanaLLaima, que pide al menos un check exitoso sobre el SHA; un PR `zana/**` aprobado a mano por fuera de ZanaLLaima no tiene esa red.
-  - Si en las ramas `zana/**` corren otros workflows (lint, CodeQL), su éxito también cuenta como "un check exitoso". Para que solo valga el de checks, pon el nombre de su job en `ZANA_REQUIRED_CHECKS`. Es una sola lista para todos los repos, así que ese job tiene que llamarse igual en todos.
+  - Si en las ramas `zana/**` corren otros workflows (lint, CodeQL), su éxito también cuenta como "un check exitoso". Para que solo valga el de checks, pon el nombre de su job en `ZANA_REQUIRED_CHECKS`. En la configuración global es una sola lista; con `ZANA_REPO_CHECKS_JSON` cada repo puede exigir sus propios jobs.
   - Los PR que no son de ZanaLLaima (personas, Dependabot) siguen probándose con el CI propio del repo. Si la protección de la rama exige un check que solo produce este workflow, esos PR quedan esperando: usa en el CI propio el mismo nombre de job, o dispara este workflow a mano en esa rama.
 - `zana_checks_start` dispara `workflow_dispatch` sobre la rama de la misión solo si ese SHA no tiene ya un run de este workflow. El run disparado corre sobre el head de la rama en ese momento; el estado siempre se lee por SHA exacto.
+
+
+## CI específico por repositorio (opcional)
+
+En el entorno **del servidor** (no en el código ni en herramientas del modelo):
+
+~~~sh
+ZANA_REPO_CHECKS_JSON='{"operador/frontend":{"workflow":"zana-node.yml","requiredChecks":["test","lint"]},"operador/backend":{"workflow":"zana-python.yml","requiredChecks":["pytest"]}}'
+~~~
+
+Ambos repositorios deben estar en `ZANA_GITHUB_REPOS` y tener sus workflows instalados previamente por el operador. Los nombres de workflow son archivos, no rutas, y cada entrada debe contener exactamente `workflow` y `requiredChecks` (1 a 20 nombres distintos). Errores o repositorios desconocidos impiden iniciar el servidor. En ausencia de la variable, se mantiene el comportamiento global anterior.
+
+`zana_checks_start` utiliza el workflow definido para el repositorio de la misión y `zana_checks_status` verifica los jobs correspondientes sobre el SHA exacto. Un cambio de nombre de workflow después del dispatch invalida ese checkId y exige iniciar otro. La configuración no otorga acceso a nuevos repositorios, no instala CI y no permite escribir `.github/workflows/**`.

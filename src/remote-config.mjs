@@ -42,7 +42,10 @@ export function remoteConfig(env=process.env){
   // src/http.mjs valida el valor completo al arrancar; aquí un valor ilegible es null.
   const publicHost=String(env.ZANA_PUBLIC_HOST??'').trim();
   let publicOrigin=null;
-  try{publicOrigin=new URL(env.ZANA_PUBLIC_MCP_URL||(publicHost?'https://'+publicHost:'')).origin;}catch{}
+  try{
+    const url=new URL(env.ZANA_PUBLIC_MCP_URL||(publicHost?'https://'+publicHost:''));
+    if(url.protocol==='https:')publicOrigin=url.origin;
+  }catch{}
   return Object.freeze({repos,reviewerLogin,publicOrigin,distinctReviewerClient:distinct==='true',
     claimTtlMinutes:int(env.ZANA_TICKET_CLAIM_TTL_MINUTES,240,10,10080,'ZANA_TICKET_CLAIM_TTL_MINUTES'),
     toolDeadlineMs:int(env.ZANA_TOOL_DEADLINE_MS,45000,5000,300000,'ZANA_TOOL_DEADLINE_MS'),checksWorkflow,requiredChecks,repoChecks,mergeEnabled:merge==='true',mergeMethod,

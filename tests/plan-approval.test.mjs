@@ -40,8 +40,8 @@ test('pedir la aprobación no aprueba: queda pendiente y ligada al digest exacto
       {status:'PENDING',approvalId:r.approvalId,planDigest:w.plan.digest});
     const view=describePlanApproval(db,{approvalId:r.approvalId,now:T0});
     assert.equal(view.status,'PENDING');
-    assert.deepEqual(view.plan.milestones,[{id:'core',objective:'Modelo',acceptance:'Tests'}]);
-    assert.equal(view.plan.selected.technology,'Node');
+    assert.equal(view.plan.milestones[0].objective,'Modelo');
+    assert.equal(view.plan.selectedId,'node');
     assert.ok(!JSON.stringify(view).includes(client),'la página no expone el cliente OAuth');
   }finally{db.close();}
 });

@@ -10,7 +10,7 @@ const allowed=repo=>repo.toLowerCase().startsWith('acme/');
 // GitHub de mentira: lo justo para crear y consultar un repositorio.
 function github({login='acme',existing=null,create}={}){
   const calls=[];
-  const made=body=>({id:77,full_name:login+'/'+body.name,private:body.private,html_url:'https://github.test/'+login+'/'+body.name,
+  const made=body=>({id:77,full_name:login+'/'+body.name,private:body.private,description:body.description,html_url:'https://github.test/'+login+'/'+body.name,
     default_branch:'main',created_at:new Date(T0).toISOString(),owner:{login}});
   return {calls,posts:()=>calls.filter(x=>x[0]==='POST'),
     async request(method,path,{body}={}){
@@ -40,7 +40,7 @@ test('crea el repositorio una sola vez y gasta la autorización',async()=>{
     const done=await t.run();
     assert.deepEqual({state:done.state,reused:done.reused,auth:done.authorization.status,repo:done.created},
       {state:'DONE',reused:false,auth:'CONSUMED',repo:{id:77,fullName:'acme/gestor',private:true,htmlUrl:'https://github.test/acme/gestor',defaultBranch:'main'}});
-    assert.deepEqual(t.gh.posts(),[['POST','/user/repos',{name:'gestor',private:true,auto_init:true}]]);
+    assert.deepEqual(t.gh.posts(),[['POST','/user/repos',{name:'gestor',private:true,auto_init:true,description:'Creado por ZanaLLaima (operación '+t.r.operationId+')'}]]);
     assert.equal(t.authorizedNow(),false,'una autorización vale para un intento');
     const again=await t.run();
     assert.deepEqual([again.state,again.reused],['DONE',true]);
@@ -97,7 +97,7 @@ test('un resultado incierto nunca se reintenta: se reconcilia contra GitHub',asy
       assert.equal(t.status().state,'UNCERTAIN');
       // El repositorio sí quedó creado por este intento: se adopta.
       existing={id:91,full_name:'acme/gestor',private:true,html_url:'https://github.test/acme/gestor',default_branch:'main',
-        created_at:new Date(T0+61_000).toISOString(),owner:{login:'acme'}};
+        description:'Creado por ZanaLLaima (operación '+t.r.operationId+')',created_at:new Date(T0+61_000).toISOString(),owner:{login:'acme'}};
       const adopted=await t.reconcile();
       assert.deepEqual([adopted.state,adopted.created.id],['DONE',91]);
       assert.equal(gh.posts().length,1);
@@ -106,17 +106,26 @@ test('un resultado incierto nunca se reintenta: se reconcilia contra GitHub',asy
 });
 
 test('la reconciliación no adopta un repositorio ajeno ni inventa uno que no existe',async()=>{
-  const old={id:9,full_name:'acme/gestor',private:true,created_at:'2020-01-01T00:00:00Z',owner:{login:'acme'}};
-  const publicOne={...old,private:false,created_at:new Date(T0+61_000).toISOString()};
-  for(const [found,error] of [[old,/REPO_ALREADY_EXISTS/],[publicOne,/REPO_ALREADY_EXISTS/],[null,null]]){
+  const mark=id=>'Creado por ZanaLLaima (operación '+id+')';
+  const old=id=>({id:9,full_name:'acme/gestor',private:true,description:mark(id),created_at:'2020-01-01T00:00:00Z',owner:{login:'acme'}});
+  const publicOne=id=>({...old(id),private:false,created_at:new Date(T0+61_000).toISOString()});
+  // Mismo nombre, fecha y visibilidad, pero lo creó otra operación: no lleva la marca de este intento.
+  const foreign=()=>({...old('99999999-9999-4999-8999-999999999999'),created_at:new Date(T0+61_000).toISOString()});
+  for(const [make,error] of [[old,/REPO_ALREADY_EXISTS/],[publicOne,/REPO_ALREADY_EXISTS/],[foreign,/REPO_ALREADY_EXISTS/],[()=>null,null]]){
     let existing=null;
     const gh=github({create:()=>{throw new GitHubApiError(502,'GitHub unreachable');},existing:()=>existing});
     const t=setup({gh});
     try{
       await assert.rejects(t.run(),/OUTCOME_UNKNOWN/);
-      existing=found;
-      if(error)await assert.rejects(t.reconcile(),error);
-      else assert.equal((await t.reconcile()).state,'AWAITING_AUTHORIZATION');
+      existing=make(t.r.operationId);
+      // Recién hecho el intento todavía no se puede saber: GitHub puede estar terminando de crear.
+      if(!error){
+        await assert.rejects(t.reconcile(),/RECONCILE_TOO_EARLY/);
+        assert.equal(t.status().state,'UNCERTAIN','reconciliar pronto no libera la operación');
+      }
+      const later={now:()=>T0+60_000+120_000};
+      if(error)await assert.rejects(t.reconcile(later),error);
+      else assert.equal((await t.reconcile(later)).state,'AWAITING_AUTHORIZATION');
       const st=t.status();
       assert.deepEqual([st.state,st.created,st.authorization.status],['AWAITING_AUTHORIZATION',null,'CONSUMED']);
       assert.ok(st.lastError);
@@ -149,5 +158,37 @@ test('una autorización de formato antiguo, sin plan aprobado, se muestra cerrad
     decidePlanApproval(t.f.db,{approvalId:t.f.planApprovalId,decision:'revoke',passwordOk:false,now:T0});
     assert.equal(describePlanApproval(t.f.db,{approvalId:t.r.authorization.approvalId,now:T0}).status,'SUPERSEDED');
     assert.equal(t.authorizedNow(),false);
+  }finally{t.f.db.close();}
+});
+
+// Ronda de corrección tras la revisión 4R.
+test('un 4xx con el repositorio creado se adopta; el circuito abierto no cuenta como intento; la reserva revalida',async()=>{
+  let created=null;
+  const gh=github({create:(body,made)=>{created=made(body);throw new GitHubApiError(422,'GitHub HTTP 422: Repository creation failed.');},existing:()=>created});
+  const partial=setup({gh});
+  try{
+    // Antes de crear el nombre está libre; después del 422 el repositorio existe con la marca del intento.
+    const done=await partial.run();
+    assert.deepEqual([done.state,done.created.fullName,done.lastError],['DONE','acme/gestor',null]);
+  }finally{partial.f.db.close();}
+  const open=setup({gh:github({create:()=>{throw new GitHubApiError(503,'GitHub REST circuit open until 2026-11-11T12:01:30.000Z after 5 failures');}})});
+  try{
+    await assert.rejects(open.run(),/CREATE_REJECTED: GitHub REST circuit open/);
+    assert.equal(open.status().state,'AWAITING_AUTHORIZATION','no salió ninguna petición: no hay nada que reconciliar');
+  }finally{open.f.db.close();}
+  const t=setup();
+  try{
+    // La operación pasa a apuntar a la autorización del plan entre la comprobación y la reserva.
+    const key='zana:bootstrap:'+t.r.operationId;
+    const real=t.gh.request.bind(t.gh);
+    t.gh.request=async(method,path,options)=>{
+      if(method==='GET'&&path==='/user'){
+        const row=JSON.parse(t.f.db.prepare('SELECT value FROM metadata WHERE key=?').get(key).value);
+        t.f.db.prepare('UPDATE metadata SET value=? WHERE key=?').run(JSON.stringify({...row,approvalId:t.f.planApprovalId}),key);
+      }
+      return real(method,path,options);
+    };
+    await assert.rejects(t.run(),/AUTHORIZATION_REQUIRED/);
+    assert.equal(t.gh.posts().length,0,'la reserva vuelve a comprobar que la autorización sea de esta operación');
   }finally{t.f.db.close();}
 });

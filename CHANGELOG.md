@@ -1,6 +1,12 @@
 # Registro de cambios
 
-## [Sin publicar]
+## [0.8.0] - 2026-11-11
+
+Segunda versión publicada (tag `v0.8.0`). Primer paso de "una misión" a "un proyecto completo desde una idea".
+
+- **Entrevista y plan de proyecto.** Cinco tools de solo lectura: `zana_discovery_start`, `zana_discovery_questions`, `zana_discovery_answer`, `zana_project_plan_draft` y `zana_bootstrap_prepare`. Arman un brief por rondas, exigen al menos dos alternativas con fuentes HTTPS fechadas, validan hitos y dependencias y dejan el plan como borrador con huella; no crean repos, no escriben y no autorizan nada. Skills nuevas `zana-project-discovery`, `zana-project-bootstrap`, `zana-project-orchestrator`, `zana-project-review-delegation`, `zana-project-delivery` y `zana-project-workspace`.
+- **Borradores de proyecto.** `zana_workspace_create`, `_get`, `_update`, `_list` y `_set_archived` guardan brief y plan por cliente OAuth, con control de versión optimista. Otro cliente recibe `WORKSPACE_NOT_FOUND`.
+- **Contratos sin conectar.** `project-bootstrap`, `project-orchestrator`, `project-review-delegation`, `project-delivery` y `project-events` entran con sus tests, pero ninguna tool los ejecuta todavía.
 
 - **Repos permitidos por cuenta.** `ZANA_GITHUB_REPOS` acepta `owner/*` además de `owner/repo`: todos los repos de esa cuenta quedan permitidos, incluidos los que se creen después, sin editar el servidor ni reiniciarlo por cada repo nuevo. El comodín solo vale para una cuenta nombrada con un login válido (no hay `*` ni `*/*`), y lo que no es un `owner/repo` válido nunca está permitido. `ZANA_REPO_CHECKS_JSON` acepta overrides para repos cubiertos por el comodín. No cambia ningún otro gate: escritura solo en `zana/<missionId>`, CI sobre el SHA exacto, revisión y merge. `SECURITY.md` explica qué CI cuenta y que el servidor no verifica la protección de rama.
 

@@ -6,7 +6,7 @@ ZanaLLaima es software experimental para **una instancia por operador**. No est�
 
 No publiques detalles de explotación, credenciales, llaves ni logs sensibles en issues públicos. Contacta al dueño del repositorio por un canal privado o usa el reporte privado de vulnerabilidades de GitHub si el repositorio lo tiene activo.
 
-## Modo remoto (0.7.0)
+## Modo remoto (0.8.0)
 
 - **Transporte:** MCP Streamable HTTP que escucha solo en la interfaz loopback IPv4 (`src/http.mjs`). Lo publica un túnel saliente (por ejemplo Cloudflare); el servidor no necesita puertos abiertos.
 - **Autenticación:** servidor OAuth 2.1 propio (`src/oauth.mjs`) con registro **cerrado**. El operador abre una ventana de alta de hasta 60 minutos (`node src/cli.mjs remote-enroll <minutos>`); fuera de ella no se registran clientes. Cada conexión nueva exige la clave de consentimiento del operador (`ZANA_OAUTH_CONSENT_PASSWORD`, al menos 32 caracteres). Hay un tope de 50 clientes registrados; `remote-clients` y `remote-revoke` los listan y revocan.

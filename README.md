@@ -73,7 +73,7 @@ Tus valores reales (dominio, cuentas, tokens y clave del operador) viven **solo*
 
 ## Estado del proyecto
 
-**Versión 0.7.0, alfa.** Es software experimental para **una instancia por operador**. Está en uso real desde el 9 de noviembre de 2026, conectado a la app de ChatGPT.
+**Versión 0.8.0, alfa.** Es software experimental para **una instancia por operador**. Está en uso real desde el 9 de noviembre de 2026, conectado a la app de ChatGPT.
 
 | Componente | Estado |
 | --- | --- |
@@ -82,6 +82,9 @@ Tus valores reales (dominio, cuentas, tokens y clave del operador) viven **solo*
 | Downstream GitHub MCP y política allowlist (v2.1.0) | En uso real contra el MCP oficial de GitHub |
 | Checks, tickets, lentes, review con cuenta revisora, delivery y merge | En uso real: 3 misiones completas. En una, la conversación revisora encontró un error crítico y pidió cambios, y otra conversación aprobó la corrección |
 | Memoria por proyecto, límites de tamaño del PR y rondas de corrección acotadas | Implementado y probado; en uso |
+| Entrevista de proyecto, plan con alternativas y borradores por cliente (`zana_discovery_*`, `zana_project_plan_draft`, `zana_workspace_*`) | En uso desde el 11 de noviembre de 2026. Son borradores: no crean repos ni autorizan nada |
+| CI por repositorio (`ZANA_REPO_CHECKS_JSON`) y repos permitidos por cuenta (`owner/*`) | Implementado y probado |
+| Bootstrap de repos, orquestador de hitos, 4R delegada a subagentes, gate de entrega y eventos | Solo contratos con tests: **ninguna tool los ejecuta todavía** (ver [docs/project-evolution.md](docs/project-evolution.md)) |
 | Una corrida de Actions por SHA | Observado: una misión con una corrección de CI y una ronda de corrección de la revisión gastó 3 corridas, una por SHA |
 | Casos negativos en vivo (la revisora intenta escribir, la autora reclama su ticket, push después del ticket) | Probados contra servidores falsos; **sin observar en vivo** |
 | SQLite WAL, leases, reintentos y recuperación | Implementado y probado |

@@ -29,7 +29,7 @@ test('discovery y plan MCP funcionan sin misión ni repositorio',async()=>{
     assert.equal(proposal.visibility,'private');
     assert.deepEqual(f.api.state.dispatches,[],'no CI or external write');
     assert.deepEqual(f.api.state.pulls,[],'no PR or repository created');
-    assert.equal(REMOTE_TOOL_NAMES.length,42);
+    assert.equal(REMOTE_TOOL_NAMES.length,44);
   }finally{await f.cleanup();}
 });
 test('tampers y documentos sin fuente no crean propuesta',async()=>{
@@ -66,5 +66,38 @@ test('workspace OAuth persiste entre sesiones, rechaza versiones obsoletas y cli
     const stored=await f.call('zana_workspace_update',{workspaceId:w.workspaceId,expectedVersion:1,plan:p},same);
     assert.equal(stored.plan.digest,p.digest);
     assert.deepEqual(f.api.state.dispatches,[]);
+  }finally{await f.cleanup();}
+});
+
+test('workspace MCP: lista paginada, archiva, restaura y aísla OAuth',async()=>{
+  const f=await remoteFixture();
+  try{
+    const owner=await f.session('zana-chatgpt','oauth-owner');
+    const other=await f.session('zana-chatgpt','oauth-other');
+    const created=[];
+    for(let i=0;i<3;i++)created.push(await f.call('zana_workspace_create',{
+      idea:'Proyecto privado de trabajo y gestión número '+i},owner));
+    await f.call('zana_workspace_create',{idea:'Proyecto de otro cliente distinto'},other);
+    const page1=await f.call('zana_workspace_list',{limit:2},owner);
+    assert.equal(page1.items.length,2);assert.ok(page1.nextCursor);
+    const page2=await f.call('zana_workspace_list',{limit:2,cursor:page1.nextCursor},owner);
+    assert.equal(page2.items.length,1);assert.equal(page2.nextCursor,null);
+    const all=[...page1.items,...page2.items];
+    assert.deepEqual(all.map(x=>x.workspaceId).sort(),created.map(x=>x.workspaceId).sort());
+    assert.ok(all.every(x=>!('brief' in x)&&!('plan' in x)&&!('ownerClient' in x)));
+    assert.equal((await f.call('zana_workspace_list',{},other)).items.length,1);
+    const target=created[0];
+    assert.match((await f.call('zana_workspace_set_archived',{
+      workspaceId:target.workspaceId,expectedVersion:0,archived:true},other)).error,/WORKSPACE_NOT_FOUND/);
+    const archived=await f.call('zana_workspace_set_archived',{
+      workspaceId:target.workspaceId,expectedVersion:0,archived:true},owner);
+    assert.ok(archived.archivedAt);assert.equal(archived.version,1);
+    assert.equal((await f.call('zana_workspace_list',{},owner)).items.length,2);
+    assert.equal((await f.call('zana_workspace_list',{includeArchived:true},owner)).items.length,3);
+    assert.match((await f.call('zana_workspace_set_archived',{
+      workspaceId:target.workspaceId,expectedVersion:0,archived:false},owner)).error,/STALE_REVISION/);
+    const restored=await f.call('zana_workspace_set_archived',{
+      workspaceId:target.workspaceId,expectedVersion:1,archived:false},owner);
+    assert.equal(restored.version,2);assert.equal(restored.archivedAt,null);
   }finally{await f.cleanup();}
 });

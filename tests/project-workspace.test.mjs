@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
-import {createProjectWorkspace,getProjectWorkspace,updateProjectWorkspace} from '../src/project-workspace.mjs';
+import {createProjectWorkspace,getProjectWorkspace,updateProjectWorkspace,listProjectWorkspaces,setProjectWorkspaceArchived} from '../src/project-workspace.mjs';
 import {draftProjectPlan} from '../src/project-discovery.mjs';
 const client='oauth-operator-one',id='Crear un sitio de gestión de proyectos extensible';
 function fixture(){const db=new DatabaseSync(':memory:');db.exec('CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)');return db;}
@@ -51,5 +51,53 @@ test('un valor almacenado corrupto falla cerrado',()=>{
  const db=fixture();try{const w=createProjectWorkspace(db,{clientId:client,idea:id});
  db.prepare('UPDATE metadata SET value=? WHERE key=?').run('not JSON','zana:workspace:'+w.workspaceId);
  assert.throws(()=>getProjectWorkspace(db,{clientId:client,workspaceId:w.workspaceId}),/WORKSPACE_CORRUPT/);
+ }finally{db.close();}
+});
+
+test('listado paginado: solo metadatos del mismo OAuth',()=>{
+ const db=fixture();try{
+   const own=Array.from({length:5},(_,i)=>createProjectWorkspace(db,{clientId:client,idea:id+' '+i}));
+   const other=createProjectWorkspace(db,{clientId:'oauth-other',idea:id+' secreto'});
+   const seen=[];let cursor=null;
+   do{const page=listProjectWorkspaces(db,{clientId:client,cursor,limit:2});
+     assert.ok(page.items.length<=2);seen.push(...page.items);
+     assert.ok(page.items.every(x=>!('brief' in x)&&!('plan' in x)&&!('ownerClient' in x)));
+     cursor=page.nextCursor;
+   }while(cursor);
+   assert.deepEqual(seen.map(x=>x.workspaceId).sort(),own.map(x=>x.workspaceId).sort());
+   assert.ok(!seen.some(x=>x.workspaceId===other.workspaceId));
+ }finally{db.close();}
+});
+test('archivar y restaurar sin pérdida y con revisionado',()=>{
+ const db=fixture();try{
+   const w=createProjectWorkspace(db,{clientId:client,idea:id});
+   const archived=setProjectWorkspaceArchived(db,{clientId:client,workspaceId:w.workspaceId,expectedVersion:0,archived:true});
+   assert.equal(archived.version,1);assert.ok(archived.archivedAt);
+   assert.equal(listProjectWorkspaces(db,{clientId:client}).items.length,0);
+   assert.equal(listProjectWorkspaces(db,{clientId:client,includeArchived:true}).items.length,1);
+   assert.throws(()=>updateProjectWorkspace(db,{clientId:client,workspaceId:w.workspaceId,expectedVersion:1,answers:answers()}),/WORKSPACE_ARCHIVED/);
+   assert.throws(()=>setProjectWorkspaceArchived(db,{clientId:client,workspaceId:w.workspaceId,expectedVersion:0,archived:false}),/STALE_REVISION/);
+   const restored=setProjectWorkspaceArchived(db,{clientId:client,workspaceId:w.workspaceId,expectedVersion:1,archived:false});
+   assert.equal(restored.version,2);assert.equal(restored.archivedAt,null);
+   assert.equal(getProjectWorkspace(db,{clientId:client,workspaceId:w.workspaceId}).brief.idea,id);
+   assert.equal(listProjectWorkspaces(db,{clientId:client}).items.length,1);
+ }finally{db.close();}
+});
+test('operaciones de listado y archivo rechazan identidad ajena, cursor y límites',()=>{
+ const db=fixture();try{
+   const w=createProjectWorkspace(db,{clientId:client,idea:id});
+   assert.throws(()=>listProjectWorkspaces(db,{clientId:'x'}),/WORKSPACE_ACTOR_REQUIRED/);
+   assert.throws(()=>listProjectWorkspaces(db,{clientId:client,cursor:'../etc/passwd'}),/INVALID_CURSOR/);
+   assert.throws(()=>listProjectWorkspaces(db,{clientId:client,limit:31}),/INVALID_WORKSPACE_LIST/);
+   assert.throws(()=>listProjectWorkspaces(db,{clientId:client,includeArchived:'true'}),/INVALID_WORKSPACE_LIST/);
+   assert.throws(()=>setProjectWorkspaceArchived(db,{clientId:'oauth-other',workspaceId:w.workspaceId,expectedVersion:0,archived:true}),/WORKSPACE_NOT_FOUND/);
+   assert.throws(()=>setProjectWorkspaceArchived(db,{clientId:client,workspaceId:w.workspaceId,expectedVersion:0,archived:'true'}),/INVALID_WORKSPACE_UPDATE/);
+ }finally{db.close();}
+});
+test('filas corruptas de otro OAuth no bloquean listados propios',()=>{
+ const db=fixture();try{
+   const w=createProjectWorkspace(db,{clientId:client,idea:id});
+   db.prepare('INSERT INTO metadata(key,value) VALUES(?,?)').run('zana:workspace:12345678-1234-4234-8234-123456789012','not JSON');
+   assert.deepEqual(listProjectWorkspaces(db,{clientId:client}).items.map(x=>x.workspaceId),[w.workspaceId]);
  }finally{db.close();}
 });

@@ -23,7 +23,7 @@ import {deliveryStatus,mergeMission,ticketView} from './github-delivery.mjs';
 import {listSkills,loadSkill} from './skills.mjs';
 import {startDiscovery,answerDiscovery,nextDiscoveryQuestions,draftProjectPlan} from './project-discovery.mjs';
 import {prepareBootstrap} from './project-bootstrap.mjs';
-import {createProjectWorkspace,getProjectWorkspace,updateProjectWorkspace} from './project-workspace.mjs';
+import {createProjectWorkspace,getProjectWorkspace,updateProjectWorkspace,listProjectWorkspaces,setProjectWorkspaceArchived} from './project-workspace.mjs';
 import {ActorSigner} from './actor-assertion.mjs';
 import {lineBudget,lineLimit,EXTEND_MAX,correctionLimit} from './line-budget.mjs';
 import {nowIso,recordActivity,remoteMission,sessionReviews,sessionWrote,sessionIsMissionAuthor,writeAudit,readAudit} from './remote-state.mjs';
@@ -60,6 +60,12 @@ const NEW_TOOLS={
     z.object({idea:z.string().min(12).max(2000)}).strict()],
   zana_workspace_get:['Retrieve a project brief or plan only for the same OAuth client',true,
     z.object({workspaceId:z.string().uuid()}).strict()],
+  zana_workspace_list:['List the caller OAuth client project briefs with paginated metadata, never full plans',true,
+    z.object({limit:z.number().int().min(1).max(30).optional(),cursor:z.string().uuid().nullable().optional(),
+      includeArchived:z.boolean().optional()}).strict()],
+  zana_workspace_set_archived:['Archive or restore one of the caller OAuth workspaces with expectedVersion; never deletes it',false,
+    z.object({workspaceId:z.string().uuid(),expectedVersion:z.number().int().min(0),
+      archived:z.boolean()}).strict()],
   zana_workspace_update:['Update answers or plan with an exact expectedVersion; never grants approval',false,
     z.object({workspaceId:z.string().uuid(),expectedVersion:z.number().int().min(0),
       answers:z.record(z.string(),z.unknown()).optional(),
@@ -234,6 +240,10 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
   const ops={
     zana_workspace_create:({idea},session)=>rw(db=>createProjectWorkspace(db,{clientId:session.clientId,idea})),
     zana_workspace_get:({workspaceId},session)=>rr(db=>getProjectWorkspace(db,{workspaceId,clientId:session.clientId})),
+    zana_workspace_list:({limit,cursor,includeArchived},session)=>rr(db=>
+      listProjectWorkspaces(db,{clientId:session.clientId,limit,cursor,includeArchived})),
+    zana_workspace_set_archived:({workspaceId,expectedVersion,archived},session)=>rw(db=>
+      setProjectWorkspaceArchived(db,{clientId:session.clientId,workspaceId,expectedVersion,archived})),
     zana_workspace_update:({workspaceId,expectedVersion,answers,plan},session)=>rw(db=>
       updateProjectWorkspace(db,{clientId:session.clientId,workspaceId,expectedVersion,answers,plan})),
     zana_discovery_start:({idea})=>startDiscovery(idea),

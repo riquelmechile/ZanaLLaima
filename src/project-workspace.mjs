@@ -9,7 +9,8 @@ const MAX_BYTES=60000;
 const fail=(code,msg)=>{const e=new Error(code+': '+msg);e.code=code;throw e;};
 const validActor=clientId=>typeof clientId==='string'&&clientId.length>=3&&clientId.length<=200;
 const view=row=>({workspaceId:row.workspaceId,version:row.version,
-  brief:row.brief,plan:row.plan,createdAt:row.createdAt,updatedAt:row.updatedAt});
+  brief:row.brief,plan:row.plan,createdAt:row.createdAt,updatedAt:row.updatedAt,
+  archivedAt:row.archivedAt??null});
 const safe=v=>{
   const size=Buffer.byteLength(JSON.stringify(v));
   if(size>MAX_BYTES)fail('WORKSPACE_TOO_LARGE','El borrador supera el límite permitido');
@@ -42,6 +43,7 @@ export function updateProjectWorkspace(db,{clientId,workspaceId,expectedVersion,
   const row=readRaw(db,{clientId,workspaceId});
   if(!Number.isSafeInteger(expectedVersion)||expectedVersion!==row.version)
     fail('STALE_REVISION','Otro cambio actualizó el borrador');
+  if(row.archivedAt)fail('WORKSPACE_ARCHIVED','Restaura el proyecto antes de editarlo');
   if((answers===undefined)===(plan===undefined))
     fail('INVALID_WORKSPACE_UPDATE','Enviar respuestas o plan, pero no ambos');
   if(answers!==undefined){
@@ -56,6 +58,46 @@ export function updateProjectWorkspace(db,{clientId,workspaceId,expectedVersion,
       fail('PLAN_BRIEF_MISMATCH','El plan no corresponde al briefing vigente');
     row.plan=plan;
   }
+  row.version++;row.updatedAt=new Date().toISOString();
+  db.prepare('UPDATE metadata SET value=? WHERE key=?').run(safe(row),key(workspaceId));
+  return view(row);
+}
+
+// Página ordenada por UUID: no devuelve respuestas ni planes completos.
+// La búsqueda filtra por identidad OAuth dentro de SQLite antes de devolver
+// metadatos. Una fila corrupta de otro cliente nunca altera su respuesta.
+export function listProjectWorkspaces(db,{clientId,limit=10,cursor=null,includeArchived=false}={}){
+  if(!validActor(clientId))fail('WORKSPACE_ACTOR_REQUIRED','Se requiere un cliente OAuth autenticado');
+  if(!Number.isInteger(limit)||limit<1||limit>30||typeof includeArchived!=='boolean')
+    fail('INVALID_WORKSPACE_LIST','Parámetros de lista inválidos');
+  if(cursor!==null&&!UUID.test(String(cursor)))fail('INVALID_CURSOR','Cursor inválido');
+  const rows=db.prepare(`SELECT key,value FROM metadata
+    WHERE key LIKE 'zana:workspace:%' AND key > ?
+      AND (CASE WHEN json_valid(value) THEN json_extract(value,'$.ownerClient') END)=?
+      AND (?=1 OR (CASE WHEN json_valid(value) THEN json_extract(value,'$.archivedAt') END) IS NULL)
+    ORDER BY key LIMIT ?`).all(cursor?key(cursor):PREFIX,clientId,includeArchived?1:0,limit+1);
+  const visible=rows.slice(0,limit).map(entry=>{
+    let row;try{row=JSON.parse(entry.value);}catch{fail('WORKSPACE_CORRUPT','Borrador propio ilegible');}
+    if(row?.schema!=='zana.workspace.v1'||!UUID.test(String(row.workspaceId))||
+      key(row.workspaceId)!==entry.key||row.ownerClient!==clientId||
+      !Number.isSafeInteger(row.version)||row.version<0||
+      typeof row.brief?.idea!=='string'||typeof row.updatedAt!=='string')
+      fail('WORKSPACE_CORRUPT','Borrador propio inválido');
+    return {workspaceId:row.workspaceId,version:row.version,idea:row.brief.idea,
+      briefStatus:row.brief.status,planDigest:row.plan?.digest??null,
+      archivedAt:row.archivedAt??null,updatedAt:row.updatedAt};
+  });
+  return {items:visible,nextCursor:rows.length>limit?visible.at(-1).workspaceId:null};
+}
+
+// Archivado reversible, con control optimista y sin eliminar datos.
+export function setProjectWorkspaceArchived(db,{clientId,workspaceId,expectedVersion,archived}){
+  const row=readRaw(db,{clientId,workspaceId});
+  if(!Number.isSafeInteger(expectedVersion)||expectedVersion!==row.version)
+    fail('STALE_REVISION','Otro cambio actualizó el borrador');
+  if(typeof archived!=='boolean')fail('INVALID_WORKSPACE_UPDATE','archived debe ser booleano');
+  if(Boolean(row.archivedAt)===archived)return view(row);
+  row.archivedAt=archived?new Date().toISOString():null;
   row.version++;row.updatedAt=new Date().toISOString();
   db.prepare('UPDATE metadata SET value=? WHERE key=?').run(safe(row),key(workspaceId));
   return view(row);

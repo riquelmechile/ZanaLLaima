@@ -46,6 +46,8 @@ function effective(row,digest,now){
   if(['PENDING','APPROVED'].includes(row.status)&&row.planDigest!==digest)return 'SUPERSEDED';
   return row.status;
 }
+// Plazo que informa una solicitud: para decidirla, o para usarla una vez autorizada.
+const deadline=row=>row.effect===REPO&&row.status==='APPROVED'?iso(Date.parse(row.decidedAt)+DAY_MS):row.expiresAt;
 const approvedRow=(rows,workspaceId,digest)=>digest===null?null:
   rows.find(x=>x.effect===PLAN&&x.workspaceId===workspaceId&&x.status==='APPROVED'&&x.planDigest===digest)??null;
 // Poda lo que ya no sirve del cliente y devuelve el resto. Una aprobación de
@@ -83,14 +85,16 @@ export function requestPlanApproval(db,{clientId,workspaceId,expectedVersion,now
 }
 
 // Autorización para crear el repositorio de una operación de bootstrap.
-// subject: {operationId,intentDigest,repo,visibility}. Va atada al plan
-// aprobado: si esa aprobación cae o el plan cambia, esta deja de valer.
-export function requestRepositoryApproval(db,{clientId,workspaceId,planDigest,subject,now=Date.now()}){
+// subject: {operationId,intentDigest,repo,visibility}. Va atada a la aprobación
+// vigente del plan (plan: {approvalId,planDigest}): mientras esa aprobación no
+// valga, esta tampoco; si se revoca, esta no vuelve.
+export function requestRepositoryApproval(db,{clientId,workspaceId,plan,subject,now=Date.now()}){
   const rows=prune(db,clientId,now);
   const mine=rows.filter(x=>x.effect===REPO&&x.subject?.operationId===subject.operationId);
-  const live=mine.find(x=>['PENDING','APPROVED'].includes(effective(x,planDigest,now)));
-  if(live)return {approvalId:live.approvalId,status:live.status,expiresAt:live.expiresAt};
-  const row=create(db,rows,{ownerClient:clientId,effect:REPO,workspaceId,planDigest,subject},now);
+  const live=mine.find(x=>['PENDING','APPROVED'].includes(effective(x,anchor(db,x),now)));
+  if(live)return {approvalId:live.approvalId,status:live.status,expiresAt:deadline(live)};
+  const row=create(db,rows,{ownerClient:clientId,effect:REPO,workspaceId,planDigest:plan.planDigest,
+    planApprovalId:plan.approvalId,subject},now);
   for(const old of mine)if(old.status==='PENDING')save(db,{...old,status:'REPLACED'});
   return {approvalId:row.approvalId,status:'PENDING',expiresAt:row.expiresAt};
 }
@@ -100,22 +104,30 @@ export function approvalState(db,{clientId,approvalId,now=Date.now()}){
   try{row=read(db,approvalId);}catch{return null;}
   if(row.ownerClient!==clientId)return null;
   return {effect:row.effect,subject:row.subject??null,planDigest:row.planDigest,approvalId,
-    status:effective(row,anchor(db,row),now),expiresAt:row.expiresAt};
+    status:effective(row,anchor(db,row),now),expiresAt:deadline(row)};
 }
 
 // Ancla de una solicitud: el digest que debe seguir vigente para que valga.
 function anchor(db,row){
   const at={clientId:row.ownerClient,workspaceId:row.workspaceId};
-  if(row.effect===REPO)return approvedPlanDigest(db,at);
+  // Crear el repositorio cuelga de UNA aprobación del plan: si esa se revoca,
+  // una aprobación nueva del mismo plan no la revive.
+  if(row.effect===REPO){
+    const plan=approvedPlan(db,at);
+    return plan?.approvalId===row.planApprovalId?plan.planDigest:null;
+  }
   try{return liveDigest(getProjectWorkspace(db,at));}catch{return null;}
 }
 
-// Lo que consumen las fases siguientes: el digest aprobado, o null.
-export function approvedPlanDigest(db,{clientId,workspaceId}){
+// Lo que consumen las fases siguientes: la aprobación vigente del plan
+// ({approvalId,planDigest}) o null, y su digest.
+export function approvedPlan(db,{clientId,workspaceId}){
   let ws;
   try{ws=getProjectWorkspace(db,{clientId,workspaceId});}catch{return null;}
-  return approvedRow(ownRows(db,clientId),workspaceId,liveDigest(ws))?.planDigest??null;
+  const row=approvedRow(ownRows(db,clientId),workspaceId,liveDigest(ws));
+  return row&&{approvalId:row.approvalId,planDigest:row.planDigest};
 }
+export const approvedPlanDigest=(db,at)=>approvedPlan(db,at)?.planDigest??null;
 
 export function planApprovalStatus(db,{clientId,workspaceId,now=Date.now()}){
   const ws=getProjectWorkspace(db,{clientId,workspaceId});
@@ -156,7 +168,7 @@ export function describePlanApproval(db,{approvalId,now=Date.now()}){
 // devuelven (no se lanzan) para que el fallo quede guardado.
 export function decidePlanApproval(db,{approvalId,decision,passwordOk,now=Date.now()}){
   const row=read(db,approvalId);
-  const out=status=>({status,effect:row.effect,workspaceId:row.workspaceId,planDigest:row.planDigest});
+  const out=status=>({status,effect:row.effect,workspaceId:row.workspaceId,planDigest:row.planDigest,subject:row.subject??null});
   // Revocar retira una aprobación ya dada. Como rechazar, va hacia el lado
   // seguro y no pide contraseña: basta el enlace de la solicitud.
   if(decision==='revoke'){

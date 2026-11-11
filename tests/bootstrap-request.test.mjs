@@ -146,9 +146,6 @@ test('la autorización informa su vencimiento real, queda auditable y no vale pa
     const st=bootstrapStatus(f.db,{...op,now:T0+10*HOUR});
     assert.deepEqual([st.authorization.status,st.authorization.expiresAt],['APPROVED','2026-11-12T12:30:00.000Z']);
     assert.equal(ask(f,{now:T0+10*HOUR}).authorization.expiresAt,'2026-11-12T12:30:00.000Z');
-    // Volver a pedir mantiene viva la operación: no se poda con una autorización vigente.
-    assert.equal(ask(f,{name:'otro',now:T0+49*HOUR}).state,'AWAITING_AUTHORIZATION');
-    assert.equal(bootstrapStatus(f.db,{...op,now:T0+49*HOUR}).operationId,r.operationId);
     // Una operación fabricada no hereda la aprobación del plan ni la de otro intento.
     const key='zana:bootstrap:'+r.operationId,row=JSON.parse(f.db.prepare('SELECT value FROM metadata WHERE key=?').get(key).value);
     const put=v=>f.db.prepare('UPDATE metadata SET value=? WHERE key=?').run(JSON.stringify(v),key);
@@ -158,5 +155,8 @@ test('la autorización informa su vencimiento real, queda auditable y no vale pa
     assert.equal(bootstrapAuthorized(f.db,{...op,now:T0+HOUR}),false,'un intento alterado no vale');
     put(row);
     assert.equal(bootstrapAuthorized(f.db,{...op,now:T0+HOUR}),true);
+    // Volver a pedir mantiene viva la operación: se poda por su último uso, no por su creación.
+    assert.equal(ask(f,{name:'otro',now:T0+49*HOUR}).state,'AWAITING_AUTHORIZATION');
+    assert.equal(bootstrapStatus(f.db,{...op,now:T0+49*HOUR}).operationId,r.operationId);
   }finally{f.db.close();}
 });

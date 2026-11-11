@@ -54,7 +54,9 @@ export function remoteConfig(env=process.env){
     prLineBudget:int(env.ZANA_PR_LINE_BUDGET,400,50,5000,'ZANA_PR_LINE_BUDGET'),
     apiUrl,downstreamUrl,toolsets,
     downstreamTimeoutMs:int(env.ZANA_DOWNSTREAM_TIMEOUT_MS,30000,1000,300000,'ZANA_DOWNSTREAM_TIMEOUT_MS'),
-    authorToken:env.ZANA_DOWNSTREAM_GITHUB_TOKEN||null,reviewerToken:env.ZANA_REVIEWER_TOKEN||null});
+    authorToken:env.ZANA_DOWNSTREAM_GITHUB_TOKEN||null,reviewerToken:env.ZANA_REVIEWER_TOKEN||null,
+    // Opcional y aparte del de misiones: solo crea repositorios (bootstrap).
+    bootstrapToken:env.ZANA_BOOTSTRAP_GITHUB_TOKEN||null});
 }
 // Exacto u `owner/*`; lo que no es un owner/repo válido nunca está permitido.
 export const repoAllowed=(config,repo)=>repoMatches(config.repos,repo);

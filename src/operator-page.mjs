@@ -13,7 +13,7 @@ const CLOSED={APPROVED:'Este plan ya fue aprobado.',DENIED:'Este plan fue rechaz
   SUPERSEDED:'El plan cambió o el proyecto se archivó después de pedir la aprobación. Pide una nueva desde ChatGPT.',
   REPLACED:'Esta solicitud fue reemplazada por una más nueva.'};
 const REPO_CLOSED={APPROVED:'La creación de este repositorio ya fue autorizada.',DENIED:'La creación de este repositorio fue rechazada.',
-  REVOKED:'La autorización de crear este repositorio fue revocada.',EXPIRED:'La autorización caducó. Pide una nueva desde ChatGPT.',
+  REVOKED:'La autorización de crear este repositorio fue revocada.',CONSUMED:'Esta autorización ya se usó: valía para un solo intento.',EXPIRED:'La autorización caducó. Pide una nueva desde ChatGPT.',
   SUPERSEDED:'El plan aprobado cambió o su aprobación se retiró. Pide una nueva autorización desde ChatGPT.'};
 const DONE_REPO={APPROVED:['Creación autorizada','<p>Autorizaste crear el repositorio. Vuelve a ChatGPT para continuar.</p>'],
   DENIED:['Creación rechazada','<p>No se autorizó crear el repositorio.</p>'],
@@ -77,7 +77,7 @@ function repoForm(view,host,note=''){
     '<div class="box"><p><strong>Crear el repositorio:</strong> <code>'+esc(r.fullName)+'</code> ('+(r.visibility==='public'?'PÚBLICO':'privado')+')</p>'+
     '<p><strong>Proyecto:</strong> '+esc(view.idea)+'</p><p><strong>Plan aprobado:</strong> <code>'+esc(view.planDigest)+'</code></p>'+
     '<p><strong>Digest del intento:</strong> <code>'+esc(r.intentDigest)+'</code></p></div>'+
-    '<p>Autorizas solo crear ese repositorio, dentro de 24 horas. No autoriza fusionar ni desplegar.</p>'+
+    '<p>Autorizas solo crear ese repositorio, una vez y dentro de 24 horas. No autoriza fusionar ni desplegar.</p>'+
     (note?'<p><strong>'+esc(note)+'</strong></p>':'')+
     '<form method="post"><label>Contraseña del operador<input type="password" name="password" autocomplete="current-password"></label>'+
     '<button name="decision" value="allow">Autorizar la creación</button> <button name="decision" value="deny">Rechazar</button></form>'+

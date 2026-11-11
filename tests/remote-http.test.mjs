@@ -119,7 +119,7 @@ test('Streamable HTTP sessions: two conversations get two sessions; the reviewer
     const a=await connect(s.base,token);
     const tools=(await a.client.listTools()).tools.map(t=>t.name).sort();
     assert.deepEqual(tools,[...REMOTE_TOOL_NAMES]);
-    assert.equal(tools.length,48);
+    assert.equal(tools.length,50);
     for(const local of ['zana_apply_write','zana_review_open','zana_review_submit','zana_storage_status','zana_permission_status'])
       assert.equal(tools.includes(local),false,local+' is stdio-only');
     assert.match(a.client.getInstructions(),/zana-odd/);

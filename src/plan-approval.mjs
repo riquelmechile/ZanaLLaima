@@ -37,7 +37,7 @@ function read(db,approvalId){
 const liveDigest=ws=>ws.archivedAt?null:ws.plan?.digest??null;
 // Estado de UNA solicitud visto desde fuera. Precedencia: EXPIRED, luego
 // LOCKED, luego SUPERSEDED (su plan ya no es el vigente); los estados finales
-// (DENIED, REVOKED, REPLACED) se devuelven tal cual. `digest` es el ancla:
+// (DENIED, REVOKED, REPLACED, CONSUMED) se devuelven tal cual. `digest` es el ancla:
 // el plan vigente (PROJECT_PLAN) o el plan vigente y aprobado (CREATE_REPOSITORY).
 function effective(row,digest,now){
   if(row.status==='PENDING'&&now>=Date.parse(row.expiresAt))return 'EXPIRED';
@@ -98,6 +98,14 @@ export function requestRepositoryApproval(db,{clientId,workspaceId,plan,subject,
   for(const old of mine)if(old.status==='PENDING')save(db,{...old,status:'REPLACED'});
   return {approvalId:row.approvalId,status:'PENDING',expiresAt:row.expiresAt};
 }
+// Gasta la autorización de crear un repositorio: vale para un solo intento.
+// Va en la misma transacción que reserva la operación.
+export function consumeRepositoryApproval(db,{clientId,approvalId,now=Date.now()}){
+  const row=read(db,approvalId);
+  if(row.ownerClient!==clientId||row.effect!==REPO||effective(row,anchor(db,row),now)!=='APPROVED')
+    fail('AUTHORIZATION_REQUIRED','No hay una autorización vigente del operador para crear este repositorio');
+  save(db,{...row,status:'CONSUMED',consumedAt:iso(now)});
+}
 // Estado de una aprobación para quien la pidió; null si no existe o es de otro.
 export function approvalState(db,{clientId,approvalId,now=Date.now()}){
   let row;
@@ -114,7 +122,7 @@ function anchor(db,row){
   // una aprobación nueva del mismo plan no la revive.
   if(row.effect===REPO){
     const plan=approvedPlan(db,at);
-    return plan?.approvalId===row.planApprovalId?plan.planDigest:null;
+    return plan&&plan.approvalId===row.planApprovalId?plan.planDigest:null;
   }
   try{return liveDigest(getProjectWorkspace(db,at));}catch{return null;}
 }

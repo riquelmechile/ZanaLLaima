@@ -212,7 +212,7 @@ test('la página de repo no promete uso único, marca privado y usa sus propios 
     const aid=op.authorization.approvalId;
     const html=await (await fetch(t.base+'/operator/approve?aid='+aid)).text();
     assert.ok(html.includes('<code>o/r</code> (privado)'));
-    assert.doesNotMatch(html,/una vez/,'el uso único lo hará cumplir la ejecución; hoy no se promete');
+    assert.match(html,/una vez y dentro de 24 horas/,'el uso único lo hace cumplir la ejecución');
     assert.equal((await t.post(aid,{decision:'allow',password:PASSWORD})).status,200);
     // El operador revoca la aprobación del plan: la autorización del repo queda dormida.
     await t.post(plan.approvalId,{decision:'revoke'});

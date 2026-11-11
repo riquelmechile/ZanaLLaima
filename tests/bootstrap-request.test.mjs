@@ -118,3 +118,45 @@ test('tools MCP: se pide y se consulta, sin crear nada en GitHub',async()=>{
     assert.deepEqual(f.api.state.pulls,[],'autorizar no crea nada en GitHub');
   }finally{await f.cleanup();}
 });
+
+// Ronda de corrección tras la revisión 4R.
+test('revocar el plan mata la autorización del repo aunque el plan se apruebe de nuevo',()=>{
+  const f=planFixture({approved:true});
+  try{
+    const r=ask(f),op={clientId:f.client,operationId:r.operationId,now:T0};
+    decide(f,r.authorization.approvalId);
+    decide(f,f.planApprovalId,'revoke');
+    const again=requestPlanApproval(f.db,{...f.at,expectedVersion:f.w.version,now:T0});
+    decide(f,again.approvalId);
+    assert.equal(approvedPlanDigest(f.db,f.at),f.w.plan.digest,'el plan vuelve a estar aprobado, con otra aprobación');
+    assert.equal(bootstrapAuthorized(f.db,op),false,'la autorización colgaba de la aprobación revocada');
+    assert.equal(bootstrapStatus(f.db,op).authorization.status,'SUPERSEDED');
+    const fresh=ask(f);
+    assert.deepEqual([fresh.operationId,fresh.authorization.status],[r.operationId,'PENDING'],'hay que autorizar otra vez');
+  }finally{f.db.close();}
+});
+
+test('la autorización informa su vencimiento real, queda auditable y no vale para un intento fabricado',()=>{
+  const f=planFixture({approved:true});
+  try{
+    const r=ask(f),op={clientId:f.client,operationId:r.operationId};
+    const done=decide(f,r.authorization.approvalId,'allow',T0+30*60_000);
+    assert.deepEqual(done.subject,{operationId:r.operationId,intentDigest:r.intentDigest,repo:'acme/gestor',visibility:'private'},
+      'la decisión lleva el repositorio para la auditoría');
+    const st=bootstrapStatus(f.db,{...op,now:T0+10*HOUR});
+    assert.deepEqual([st.authorization.status,st.authorization.expiresAt],['APPROVED','2026-11-12T12:30:00.000Z']);
+    assert.equal(ask(f,{now:T0+10*HOUR}).authorization.expiresAt,'2026-11-12T12:30:00.000Z');
+    // Volver a pedir mantiene viva la operación: no se poda con una autorización vigente.
+    assert.equal(ask(f,{name:'otro',now:T0+49*HOUR}).state,'AWAITING_AUTHORIZATION');
+    assert.equal(bootstrapStatus(f.db,{...op,now:T0+49*HOUR}).operationId,r.operationId);
+    // Una operación fabricada no hereda la aprobación del plan ni la de otro intento.
+    const key='zana:bootstrap:'+r.operationId,row=JSON.parse(f.db.prepare('SELECT value FROM metadata WHERE key=?').get(key).value);
+    const put=v=>f.db.prepare('UPDATE metadata SET value=? WHERE key=?').run(JSON.stringify(v),key);
+    put({...row,approvalId:f.planApprovalId});
+    assert.equal(bootstrapAuthorized(f.db,{...op,now:T0+HOUR}),false,'la aprobación del plan no autoriza el repo');
+    put({...row,intent:{...row.intent,visibility:'public'}});
+    assert.equal(bootstrapAuthorized(f.db,{...op,now:T0+HOUR}),false,'un intento alterado no vale');
+    put(row);
+    assert.equal(bootstrapAuthorized(f.db,{...op,now:T0+HOUR}),true);
+  }finally{f.db.close();}
+});

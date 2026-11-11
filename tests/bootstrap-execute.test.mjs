@@ -84,7 +84,7 @@ test('un rechazo claro de GitHub guarda la causa y exige una autorización nueva
 test('un resultado incierto nunca se reintenta: se reconcilia contra GitHub',async()=>{
   for(const failure of [new GitHubApiError(502,'GitHub unreachable'),new GitHubApiError(429,'GitHub HTTP 429'),new Error('socket hang up')]){
     let existing=null;
-    const gh=github({create:()=>{throw failure;},existing:()=>existing});
+    const gh=github({create:()=>{throw failure;},existing:repo=>typeof existing==='function'?existing(repo):existing});
     const t=setup({gh});
     try{
       await assert.rejects(t.run(),/OUTCOME_UNKNOWN/);

@@ -8,13 +8,13 @@ import {approvedPlan,requestRepositoryApproval,approvalState} from './plan-appro
 const PREFIX='zana:bootstrap:',DAY_MS=86400_000;
 const OPERATION=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const fail=(code,msg)=>{const e=new Error(code+': '+msg);e.code=code;throw e;};
-const save=(db,op)=>db.prepare('INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+export const saveOperation=(db,op)=>db.prepare('INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
   .run(PREFIX+op.operationId,JSON.stringify(op));
 const valid=op=>op?.schema==='zana.bootstrap-op.v1'&&OPERATION.test(String(op.operationId));
 const ownOps=(db,clientId)=>db.prepare(`SELECT value FROM metadata WHERE key LIKE 'zana:bootstrap:%'
   AND (CASE WHEN json_valid(value) THEN json_extract(value,'$.ownerClient') END)=?`).all(clientId)
   .map(x=>JSON.parse(x.value)).filter(valid);
-function read(db,{clientId,operationId}){
+export function readOperation(db,{clientId,operationId}){
   const entry=OPERATION.test(String(operationId))?db.prepare('SELECT value FROM metadata WHERE key=?').get(PREFIX+operationId):null;
   let op=null;
   try{op=entry?JSON.parse(entry.value):null;}catch{}
@@ -26,6 +26,8 @@ function view(op,authorization){
   const open=['PENDING','APPROVED'].includes(authorization.status);
   return {operationId:op.operationId,state:op.state,repository:repoOf(op.intent),visibility:op.intent.visibility,
     planDigest:op.intent.planDigest,intentDigest:op.intent.digest,
+    // created: el repositorio ya creado; lastError: por qué falló el último intento.
+    created:op.repository??null,lastError:op.lastError??null,
     authorization:{status:authorization.status,approvalId:open?authorization.approvalId:null,
       expiresAt:open?authorization.expiresAt:null}};
 }
@@ -49,12 +51,12 @@ export function requestBootstrap(db,{clientId,workspaceId,expectedVersion,owner,
     intent,state:'AWAITING_AUTHORIZATION',approvalId:null,repository:null,createdAt:new Date(now).toISOString()};
   const authorization=requestRepositoryApproval(db,{clientId,workspaceId,plan,now,
     subject:{operationId:op.operationId,intentDigest:op.intent.digest,repo:repoOf(op.intent),visibility:op.intent.visibility}});
-  save(db,{...op,approvalId:authorization.approvalId,updatedAt:new Date(now).toISOString()});
+  saveOperation(db,{...op,approvalId:authorization.approvalId,updatedAt:new Date(now).toISOString()});
   return view(op,authorization);
 }
 
 export function bootstrapStatus(db,{clientId,operationId,now=Date.now()}){
-  const op=read(db,{clientId,operationId});
+  const op=readOperation(db,{clientId,operationId});
   return view(op,approvalState(db,{clientId,approvalId:op.approvalId,now})??{status:'EXPIRED'});
 }
 
@@ -62,7 +64,7 @@ export function bootstrapStatus(db,{clientId,operationId,now=Date.now()}){
 // sigue vigente y es de este intento exacto y de este plan.
 export function bootstrapAuthorized(db,{clientId,operationId,now=Date.now()}){
   try{
-    const op=read(db,{clientId,operationId});
+    const op=readOperation(db,{clientId,operationId});
     validateBootstrapIntent(op.intent);
     const a=approvalState(db,{clientId,approvalId:op.approvalId,now});
     return a?.status==='APPROVED'&&a.effect==='CREATE_REPOSITORY'&&a.subject?.operationId===op.operationId&&

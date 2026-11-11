@@ -49,7 +49,7 @@ export function validateBootstrapIntent(intent){
 
 // Exclusivo del proceso autenticado: todos los callbacks deben provenir del
 // servidor y el ledger ha de persistir cada transición antes del efecto.
-export async function executeBootstrap(intent,{authorize,reserve,markUncertain,createRepository,commit}={}){
+export async function executeBootstrap(intent,{authorize,reserve,markUncertain,createRepository,commit,release}={}){
   validateBootstrapIntent(intent);
   if([authorize,reserve,markUncertain,createRepository,commit].some(f=>typeof f!=='function'))
     fail('BACKEND_UNAVAILABLE','Faltan servicios autenticados y persistentes');
@@ -66,7 +66,17 @@ export async function executeBootstrap(intent,{authorize,reserve,markUncertain,c
   let repository;
   try{repository=await createRepository({owner:intent.owner,name:intent.name,
     private:intent.visibility==='private',operationId:intent.operationId});}
-  catch{fail('OUTCOME_UNKNOWN','Reconciliar el ID del repositorio antes de otro intento');}
+  catch(error){
+    // Si el proveedor respondió que no (error.definite), no hay nada incierto:
+    // se libera el intento guardando la causa. Cualquier otra falla es incierta.
+    if(error?.definite===true&&typeof release==='function'){
+      const cause=String(error?.message??error).replace(/[\p{Cc}\p{Cf}]/gu,'').slice(0,200);
+      try{await release({operationId:intent.operationId,digest:intent.digest,cause});}
+      catch{fail('OUTCOME_UNKNOWN','Creación rechazada pero no se pudo registrar; reconciliar');}
+      fail('CREATE_REJECTED',cause);
+    }
+    fail('OUTCOME_UNKNOWN','Reconciliar el ID del repositorio antes de otro intento');
+  }
   if(!Number.isSafeInteger(repository?.id)||repository.id<1||
     repository.full_name?.toLowerCase()!==(intent.owner+'/'+intent.name).toLowerCase())
     fail('OUTCOME_UNKNOWN','Respuesta GitHub sin identidad verificable; reconciliar');

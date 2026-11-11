@@ -96,7 +96,7 @@ const NEW_TOOLS={
       name:z.string().min(1).max(100),visibility:z.enum(['private','public']).optional()}).strict()],
   zana_mission_init:['Create one remote mission bound to a GitHub repository and base; code units declare code:true. Returns memory: the project context to read before planning and the .zanallaima.json pointer to write first when its status is not OK',false,
     z.object({spec:z.record(z.string(),z.unknown()),github:z.object({repo:z.string().min(3).max(201),base:z.string().min(1).max(200)}).strict()}).strict()],
-  zana_session_status:['Show this session (id, host, creation time, source: conversation = the ChatGPT conversation, transport = the MCP session) and its role in the active mission',true,z.object({}).strict()],
+  zana_session_status:['Show this session (id, host, creation time, source: conversation = the ChatGPT conversation, transport = the MCP session), what the MCP client declared when connecting (name, version, capabilities such as sampling) and its role in the active mission',true,z.object({}).strict()],
   zana_skill_list:['List the skills this server serves',true,z.object({}).strict()],
   zana_skill_load:['Load one skill by exact name',true,z.object({name:z.string().min(1).max(100)}).strict()],
   zana_checks_start:['Dispatch (or associate) the checks workflow on the mission branch head; returns checkId and SHA without blocking',false,
@@ -444,8 +444,9 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       });
       return {...packet,rebound:true,attempts:'unchanged'};
     },
-    zana_session_status:(args,session)=>rr((db,mission)=>({
+    zana_session_status:(args,session,extra)=>rr((db,mission)=>({
       session:{id:session.sessionId,host:session.host,createdAt:session.createdAt,source:session.source??'transport'},
+      client:extra?.client??null,
       activeMission:mission&&db?{id:mission.id,remote:remoteMission(db,mission.id),
         wrote:sessionWrote(db,session.sessionId,mission.id),reviewer:sessionReviews(db,session.sessionId,mission.id)}:null,
       note:'Separate conversations must show different session ids; that is what review separation relies on.'})),
@@ -595,12 +596,12 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
   const categoryOf=name=>/^zana_review_/.test(name)?'review':name==='zana_merge'?'merge':readOnlyTool(name)?'read':'write';
   // Every tool has a total deadline (ZANA_TOOL_DEADLINE_MS). A late operation
   // may still finish on its own; the caller is told to read state first.
-  async function dispatch(name,args,session){
+  async function dispatch(name,args,session,extra){
     const fn=ops[name];
     if(!fn)return {isError:true,content:[{type:'text',text:'Unknown tool'}]};
     let outcome='OK',data=null,result,failure=null;
     try{
-      data=await within(Promise.resolve().then(()=>fn(args??{},session)),config.toolDeadlineMs,name);
+      data=await within(Promise.resolve().then(()=>fn(args??{},session,extra)),config.toolDeadlineMs,name);
       result=data?.passthrough?redactDeep(data.passthrough,secrets()):redactDeep(data,secrets());
     }catch(error){
       outcome='ERROR';
@@ -630,6 +631,21 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     const safe=auditFailed?{...result,auditFailed:true}:result;
     return {content:[{type:'text',text:JSON.stringify(safe)}],structuredContent:safe};
   }
+  // Lo que el cliente MCP declaró al conectarse (nombre, versión y capacidades).
+  // Sirve para saber qué se le puede pedir, por ejemplo sampling. Son datos del
+  // cliente: se acotan y no deciden ningún permiso.
+  function clientInfo(server){
+    // Sin caracteres de control ni de dirección de texto; acotado.
+    const text=v=>typeof v==='string'?v.replace(/[\p{Cc}\p{Cf}]/gu,'').slice(0,100):null;
+    const keys=o=>o&&typeof o==='object'?Object.keys(o).map(k=>text(k).slice(0,80)).sort().slice(0,20):[];
+    try{
+      const caps=server.server.getClientCapabilities()??null,who=server.server.getClientVersion()??null;
+      // La versión negociada en initialize: lo que una llamada diga en su _meta no la cambia.
+      return {name:text(who?.name),version:text(who?.version),protocolVersion:text(server.server.getNegotiatedProtocolVersion()),
+        capabilities:{declared:keys(caps),sampling:Boolean(caps?.sampling),samplingTools:Boolean(caps?.sampling?.tools),
+          elicitation:Boolean(caps?.elicitation),roots:Boolean(caps?.roots),tasks:Boolean(caps?.tasks),extensions:keys(caps?.extensions)}};
+    }catch{return null;}
+  }
   // Un McpServer por sesión MCP. getSession(ctx) da la identidad de cada llamada:
   // la conversación de ChatGPT si la llamada la trae, si no la del transporte.
   // Si no se puede resolver, la tool no corre (falla cerrado) y el error sale limpio.
@@ -642,7 +658,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         let session;
         try{session=await getSession(ctx);}
         catch(error){return {isError:true,content:[{type:'text',text:'SESSION_UNAVAILABLE: '+clean(error,secrets())}]};}
-        return dispatch(name,args,session);
+        return dispatch(name,args,session,name==='zana_session_status'?{client:clientInfo(server)}:undefined);
       });
     for(const name of REUSED){const [,description,readOnly]=TOOL_DESCRIPTIONS[name];register(name,description,readOnly,schemas[name]);}
     for(const [name,[description,readOnly,schema]] of Object.entries(NEW_TOOLS))register(name,description,readOnly,schema);

@@ -673,7 +673,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     decide:({approvalId,decision,passwordOk,from=null})=>rw(db=>{
       const r=decidePlanApproval(db,{approvalId,decision,passwordOk});
       writeAudit(db,{caller:{host:'operator',sessionId:null},tool:r.effect==='CREATE_REPOSITORY'?'operator_repository_approval':'operator_plan_approval',
-        outcome:r.denied?'REFUSED':r.status,detail:{workspaceId:r.workspaceId,planDigest:r.planDigest,from},category:'operator'});
+        outcome:r.denied?'REFUSED':r.status,detail:{workspaceId:r.workspaceId,planDigest:r.planDigest,subject:r.subject,from},category:'operator'});
       return r;
     }),
   };

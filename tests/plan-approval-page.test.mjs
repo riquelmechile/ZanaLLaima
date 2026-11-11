@@ -200,3 +200,36 @@ test('la página pide autorizar la creación del repositorio y lo audita aparte'
     assert.deepEqual(audit.map(x=>x.outcome).sort(),['APPROVED','REFUSED','REVOKED']);
   }finally{await t.close();}
 });
+
+// Ronda de corrección tras la revisión 4R de la página de bootstrap.
+test('la página de repo no promete uso único, marca privado y usa sus propios textos de cierre',async()=>{
+  const t=await setup();
+  try{
+    const plan=await t.request();
+    await t.post(plan.approvalId,{decision:'allow',password:PASSWORD});
+    const s=await t.f.session('zana-chatgpt','oauth-one');
+    const op=await t.f.call('zana_bootstrap_request',{workspaceId:t.workspaceId,expectedVersion:2,owner:'o',name:'r'},s);
+    const aid=op.authorization.approvalId;
+    const html=await (await fetch(t.base+'/operator/approve?aid='+aid)).text();
+    assert.ok(html.includes('<code>o/r</code> (privado)'));
+    assert.doesNotMatch(html,/una vez/,'el uso único lo hará cumplir la ejecución; hoy no se promete');
+    assert.equal((await t.post(aid,{decision:'allow',password:PASSWORD})).status,200);
+    // El operador revoca la aprobación del plan: la autorización del repo queda dormida.
+    await t.post(plan.approvalId,{decision:'revoke'});
+    const dormant=await (await fetch(t.base+'/operator/approve?aid='+aid)).text();
+    assert.match(dormant,/El plan aprobado cambió o su aprobación se retiró/);
+    assert.match(dormant,/value="revoke"/);
+    assert.doesNotMatch(dormant,/type="password"/);
+    // Una solicitud pendiente cuyo plan dejó de estar aprobado responde con el texto de repo.
+    const plan2=await t.request();
+    await t.post(plan2.approvalId,{decision:'allow',password:PASSWORD});
+    const op2=await t.f.call('zana_bootstrap_request',{workspaceId:t.workspaceId,expectedVersion:2,owner:'o',name:'r'},s);
+    assert.equal(op2.authorization.status,'PENDING');
+    await t.post(plan2.approvalId,{decision:'revoke'});
+    const late=await t.post(op2.authorization.approvalId,{decision:'allow',password:PASSWORD});
+    assert.equal(late.status,409);
+    assert.match(await late.text(),/El plan aprobado cambió o su aprobación se retiró/);
+    const audit=(await t.f.runtime.readAudit({limit:80})).filter(x=>x.tool==='operator_repository_approval'&&x.outcome==='APPROVED');
+    assert.deepEqual(audit.map(x=>[x.detail.subject.repo,x.detail.subject.visibility]),[['o/r','private']]);
+  }finally{await t.close();}
+});

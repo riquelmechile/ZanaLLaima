@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {startDiscovery,answerDiscovery,draftProjectPlan} from '../src/project-discovery.mjs';
-import {initializeProjectRun,readyMilestones,claimMilestone,completeMilestone,cancelProjectRun} from '../src/project-orchestrator.mjs';
+import {initializeProjectRun,readyMilestones,claimMilestone,completeMilestone,releaseMilestone,cancelProjectRun} from '../src/project-orchestrator.mjs';
 const base='a'.repeat(40), head='b'.repeat(40);
 const projectId='zp_1234567890abcdef';
 const plan=()=>draftProjectPlan({
@@ -66,4 +66,48 @@ test('acepta missionId UUID real aunque comience por un dígito',async()=>{
   assert.equal(running.milestones[0].missionId,uuid);
   const completed=await done(running,'discovery',uuid);
   assert.equal(completed.milestones[0].status,'DONE');
+});
+
+test('CANCELLED es terminal incluso ante una respuesta de revisión tardía',async()=>{
+  const started=claim(init(),'discovery','mission-one');
+  const cancelled=cancelProjectRun(started,{expectedRevision:started.revision,reason:'Cancelar el proyecto'});
+  let called=false;
+  await assert.rejects(completeMilestone(cancelled,{expectedRevision:cancelled.revision,
+    milestoneId:'discovery',missionId:'mission-one',headSha:head},async()=>{called=true;return {sha:head,ci:'SUCCESS',review:'APPROVED',merged:true}}),/INVALID_STATE/);
+  assert.equal(called,false);
+  assert.equal(cancelled.status,'CANCELLED');
+  assert.equal(cancelled.milestones[0].status,'RUNNING');
+  await assert.rejects(releaseMilestone(cancelled,{expectedRevision:cancelled.revision,
+    milestoneId:'discovery',missionId:'mission-one',reason:'Misión cancelada'},async()=>({missionId:'mission-one',status:'CANCELLED',activeUnits:false})),/INVALID_STATE/);
+});
+
+test('recuperación de hito bloqueado exige misión terminal comprobada y genera nuevo intento',async()=>{
+  const state=claim(init(),'discovery','mission-one');
+  const args={expectedRevision:state.revision,milestoneId:'discovery',missionId:'mission-one',reason:'Rondas de revisión agotadas'};
+  const verify=async()=>({missionId:'mission-one',status:'REVIEW_ROUNDS_EXHAUSTED',activeUnits:false});
+  const recovered=await releaseMilestone(state,args,verify);
+  assert.equal(state.milestones[0].status,'RUNNING');
+  assert.equal(recovered.revision,state.revision+1);
+  assert.equal(recovered.milestones[0].status,'PENDING');
+  assert.deepEqual(recovered.milestones[0].attempts,[{missionId:'mission-one',reason:args.reason}]);
+  assert.deepEqual(readyMilestones(recovered).map(x=>x.id),['discovery']);
+  assert.throws(()=>claim(recovered,'discovery','mission-one'),/DUPLICATE_MISSION/);
+  const retried=claim(recovered,'discovery','mission-two');
+  assert.equal(retried.milestones[0].missionId,'mission-two');
+  assert.equal((await done(retried,'discovery','mission-two')).milestones[0].status,'DONE');
+});
+
+test('fallo de misión no libera hito si existe actividad, no hay prueba o difiere su identidad',async()=>{
+  const s=claim(init(),'discovery','mission-one');
+  const args={expectedRevision:s.revision,milestoneId:'discovery',missionId:'mission-one',reason:'Fallo antes del merge'};
+  for(const outcome of [
+    {missionId:'other',status:'CANCELLED',activeUnits:false},
+    {missionId:'mission-one',status:'ACTIVE',activeUnits:false},
+    {missionId:'mission-one',status:'CANCELLED',activeUnits:true},
+    {missionId:'mission-one',status:'REVIEW_ROUNDS_EXHAUSTED'}
+  ])await assert.rejects(releaseMilestone(s,args,async()=>outcome),/RECOVERY_NOT_ALLOWED/);
+  await assert.rejects(releaseMilestone(s,args,null),/VERIFIER_REQUIRED/);
+  await assert.rejects(releaseMilestone(s,{...args,expectedRevision:0},async()=>true),/STALE_REVISION/);
+  await assert.rejects(releaseMilestone(s,{...args,reason:'x'},async()=>true),/INVALID_REASON/);
+  assert.equal(s.milestones[0].status,'RUNNING');
 });

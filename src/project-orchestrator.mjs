@@ -41,12 +41,14 @@ export function claimMilestone(state,{expectedRevision,milestoneId,missionId,hea
   if(!ID.test(milestoneId)||!MISSION_ID.test(missionId))fail('INVALID_ID','ID de hito o misión inválido');
   if(!SHA.test(headSha))fail('INVALID_SHA','El SHA de base debe ser exacto');
   if(!readyMilestones(state).some(m=>m.id===milestoneId))fail('MILESTONE_NOT_READY','Dependencias o misión activa');
-  if(state.milestones.some(m=>m.missionId===missionId))fail('DUPLICATE_MISSION','La misión ya se utilizó');
+  if(state.milestones.some(m=>m.missionId===missionId||m.attempts?.some(a=>a.missionId===missionId)))
+    fail('DUPLICATE_MISSION','La misión ya se utilizó');
   return replace(state,milestoneId,{status:'RUNNING',missionId,headSha});
 }
 export async function completeMilestone(state,{expectedRevision,milestoneId,missionId,headSha},verify){
   check(state);
   if(expectedRevision!==state.revision)fail('STALE_REVISION','La revisión del proyecto cambió');
+  if(state.status!=='ACTIVE')fail('INVALID_STATE','Un proyecto cancelado no puede completar hitos');
   const milestone=state.milestones.find(m=>m.id===milestoneId);
   if(!milestone||milestone.status!=='RUNNING'||milestone.missionId!==missionId)
     fail('MILESTONE_NOT_RUNNING','No corresponde a la misión en ejecución');
@@ -57,6 +59,27 @@ export async function completeMilestone(state,{expectedRevision,milestoneId,miss
     evidence?.merged!==true)fail('EVIDENCE_NOT_READY','CI, 4R o merge sin verificar en SHA exacto');
   return replace(state,milestoneId,{status:'DONE',headSha});
 }
+
+ // Recuperación explícita del hito cuyo trabajo dejó de existir; no se
+ // autodeclara cancelado mediante una respuesta de GPT. El backend verifica
+ // el cierre de la misión y que ninguna unidad continúa con permisos vivos.
+export async function releaseMilestone(state,{expectedRevision,milestoneId,missionId,reason},verifyMission){
+  check(state);
+  if(expectedRevision!==state.revision)fail('STALE_REVISION','La revisión del proyecto cambió');
+  if(state.status!=='ACTIVE')fail('INVALID_STATE','Proyecto no recuperable');
+  const milestone=state.milestones.find(m=>m.id===milestoneId);
+  if(!milestone||milestone.status!=='RUNNING'||milestone.missionId!==missionId)
+    fail('MILESTONE_NOT_RUNNING','La misión no corresponde al hito en curso');
+  if(typeof reason!=='string'||reason.trim().length<8)fail('INVALID_REASON','Motivo requerido');
+  if(typeof verifyMission!=='function')fail('VERIFIER_REQUIRED','Se requiere evidencia de la misión desde backend');
+  const evidence=await verifyMission({missionId,milestoneId,projectId:state.projectId});
+  if(evidence?.missionId!==missionId||!['CANCELLED','REVIEW_ROUNDS_EXHAUSTED'].includes(evidence?.status)||
+    evidence.activeUnits!==false)
+    fail('RECOVERY_NOT_ALLOWED','La misión no está terminada o conserva unidades activas');
+  return replace(state,milestoneId,{status:'PENDING',missionId:null,headSha:null,
+    attempts:[...(milestone.attempts??[]),{missionId,reason:reason.trim().slice(0,300)}]});
+}
+
 export function cancelProjectRun(state,{expectedRevision,reason}){
   check(state);
   if(expectedRevision!==state.revision)fail('STALE_REVISION','La revisión del proyecto cambió');

@@ -20,12 +20,12 @@ async function setup(){
 test('pedir una revisión avisa al monitor suscrito y la ejecución despertada reclama sin el código',async()=>{
   const t=await setup();
   try{
-    const author=await t.f.authorReady();
+    const ready=await t.f.authorReady(),author={session:ready.author};
     const identity={clientId:author.session.clientId,host:'zana-chatgpt'};
     assert.deepEqual((await t.f.runtime.events.list(identity)).events.map(e=>e.name),[REVIEW_EVENT]);
     const sub=await t.f.runtime.events.subscribe(identity,t.input);
     assert.match(sub.id,/^sub_/);
-    const r=await t.f.call('zana_review_request',{},author.session);
+    const r=await t.f.call('zana_review_request',{missionId:ready.missionId},author.session);
     assert.match(r.ticket,/^ZR-/);
     assert.equal(r.wake.eventsQueued,1);
     await t.f.runtime.events.flush();
@@ -46,9 +46,9 @@ test('pedir una revisión avisa al monitor suscrito y la ejecución despertada r
     const claimed=await t.f.call('zana_review_claim',{},woken);
     assert.deepEqual([claimed.state,claimed.ticketId,claimed.sha],['CLAIMED',ticketId,r.sha]);
     assert.equal(claimed.ticket,ticketId,'las tools siguientes usan el id en lugar del código');
-    const page=await t.f.call('zana_review_diff',{ticket:ticketId,page:1},woken);
+    const page=await t.f.call('zana_review_diff',{ticket:ticketId,page:0},woken);
     assert.ok(!page.error,'la sesión revisora lee el diff con el id');
-    assert.match((await t.f.call('zana_review_diff',{ticket:ticketId,page:1},stranger)).error,/NOT_REVIEWER/);
+    assert.match((await t.f.call('zana_review_diff',{ticket:ticketId,page:0},stranger)).error,/NOT_REVIEWER/);
     assert.match((await t.f.call('zana_review_claim',{},await t.f.session('zana-chatgpt',author.session.clientId))).error,/NO_PENDING_REVIEW/);
     const health=await t.f.runtime.health();
     assert.deepEqual(health.events,{subscriptions:1,pending:0,accepted:1,failed:0});
@@ -58,8 +58,8 @@ test('pedir una revisión avisa al monitor suscrito y la ejecución despertada r
 test('sin monitor suscrito el ticket se emite igual; suscribirse después avisa los tickets abiertos',async()=>{
   const t=await setup();
   try{
-    const author=await t.f.authorReady();
-    const r=await t.f.call('zana_review_request',{},author.session);
+    const ready=await t.f.authorReady(),author={session:ready.author};
+    const r=await t.f.call('zana_review_request',{missionId:ready.missionId},author.session);
     assert.equal(r.wake.eventsQueued,0);
     assert.match(r.instructions,/conversación NUEVA/);
     const identity={clientId:author.session.clientId,host:'zana-chatgpt'};

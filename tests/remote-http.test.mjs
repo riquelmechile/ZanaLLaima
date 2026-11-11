@@ -122,6 +122,22 @@ test('Streamable HTTP sessions: two conversations get two sessions; the reviewer
     assert.doesNotMatch(forged.content[0].text,/WORKSPACE_NOT_FOUND/,'se rechaza por esquema, antes de ejecutar');
     const sa=await a.call('zana_session_status');
     assert.equal(sa.session.host,'zana-chatgpt');
+    // MCP Events: el servidor lo anuncia y atiende events/list como método nativo sobre la sesión.
+    const rawInit=await fetch(s.base+'/mcp',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json',accept:'application/json, text/event-stream'},
+      body:JSON.stringify({jsonrpc:'2.0',id:90,method:'initialize',params:{protocolVersion:sa.client.protocolVersion,capabilities:{},clientInfo:{name:'raw',version:'1'}}})});
+    const initText=await rawInit.text(),initJson=JSON.parse(initText.split('\n').filter(l=>l.startsWith('data:')).map(l=>l.slice(5)).pop()??initText);
+    assert.deepEqual(initJson.result.capabilities.events,{},'el servidor anuncia la capacidad de eventos');
+    const listed=await fetch(s.base+'/mcp',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json',
+      accept:'application/json, text/event-stream','mcp-session-id':a.transport.sessionId,'mcp-protocol-version':sa.client.protocolVersion},
+      body:JSON.stringify({jsonrpc:'2.0',id:91,method:'events/list',params:{}})});
+    const listedText=await listed.text(),listedJson=JSON.parse(listedText.split('\n').filter(l=>l.startsWith('data:')).map(l=>l.slice(5)).pop()??listedText);
+    assert.deepEqual(listedJson.result.events.map(e=>[e.name,e.inputSchema.properties.host.enum]),[['zana.review.ready',['zana-chatgpt']]]);
+    const badSub=await fetch(s.base+'/mcp',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json',
+      accept:'application/json, text/event-stream','mcp-session-id':a.transport.sessionId,'mcp-protocol-version':sa.client.protocolVersion},
+      body:JSON.stringify({jsonrpc:'2.0',id:92,method:'events/subscribe',params:{name:'zana.review.ready',arguments:{host:'zana-chatgpt'},
+        delivery:{mode:'webhook',url:'http://127.0.0.1/x',secret:'whsec_'+Buffer.alloc(32,1).toString('base64')}}})});
+    const badText=await badSub.text();
+    assert.match(badText,/callback/i,'un callback que no es HTTPS público se rechaza sin salir del servidor');
     assert.equal(sa.session.id,a.transport.sessionId);
     // Lo que el cliente declaró al conectarse: de ahí se sabe si se le puede pedir sampling.
     assert.deepEqual({name:sa.client.name,version:sa.client.version,sampling:sa.client.capabilities.sampling,

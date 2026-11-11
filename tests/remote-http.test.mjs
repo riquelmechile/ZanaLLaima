@@ -123,6 +123,16 @@ test('Streamable HTTP sessions: two conversations get two sessions; the reviewer
     const sa=await a.call('zana_session_status');
     assert.equal(sa.session.host,'zana-chatgpt');
     assert.equal(sa.session.id,a.transport.sessionId);
+    // Lo que el cliente declaró al conectarse: de ahí se sabe si se le puede pedir sampling.
+    assert.deepEqual({name:sa.client.name,version:sa.client.version,sampling:sa.client.capabilities.sampling,
+      elicitation:sa.client.capabilities.elicitation},{name:'chatgpt-like',version:'1.0.0',sampling:false,elicitation:false});
+    const capable=await connect(s.base,token,{capabilities:{sampling:{},elicitation:{}}});
+    try{
+      const sc=(await capable.call('zana_session_status')).client;
+      assert.deepEqual([sc.capabilities.sampling,sc.capabilities.elicitation,sc.capabilities.samplingTools],[true,true,false]);
+      assert.ok(sc.capabilities.declared.includes('sampling')&&sc.capabilities.declared.includes('elicitation'));
+      assert.match(sc.era,/^(initialize|2026-07-28)$/);
+    }finally{await capable.client.close();}
     const skills=await a.call('zana_skill_list');
     assert.ok(skills.skills.some(x=>x.name==='zana-odd'));
     // Author conversation over HTTP.

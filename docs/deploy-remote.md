@@ -75,7 +75,9 @@ Cada repo que GPT va a tocar necesita tres cosas, y **las haces tú** (ZanaLLaim
    - exigir PR antes de mergear, con 1 aprobación;
    - exigir que los checks de `zana-checks` estén verdes (si el repo también recibe PR que no son de ZanaLLaima, mira la nota de [checks-workflow.md](checks-workflow.md) para que no queden esperando un check que nadie corre);
    - exigir aprobación del último push y que se resuelvan las conversaciones.
-3. **Agregarlo a `ZANA_GITHUB_REPOS`** en el paso 4.
+3. **Que `ZANA_GITHUB_REPOS` lo cubra** (paso 4): por nombre, o con `owner/*` si quieres permitir todos los repos de la cuenta sin tocar el servidor cada vez.
+
+Permitir un repo solo deja abrir misiones en él. Para que una misión termine bien, el repo igual necesita los pasos 1 y 2 de esta lista. Sin la cuenta revisora no hay merge. Sin el workflow de checks solo hay CI verde si el repo tiene otro CI en sus PR (con `ZANA_REQUIRED_CHECKS` vacío vale cualquier check exitoso). La protección de rama no la verifica el servidor: es tu segunda llave en GitHub. Detalle en [SECURITY.md](../SECURITY.md).
 
 Para la primera prueba conviene un repo sandbox vacío con un `package.json` y un test.
 
@@ -110,7 +112,7 @@ Edítalo con un editor en el servidor, nunca en el repo ni en un chat. **Rutas a
 | `ZANA_STATE_FILE` | sí | `/home/<usuario>/.local/share/zanallaima/state.json` |
 | `ZANA_OAUTH_DB` | sí | `/home/<usuario>/.local/share/zanallaima/oauth.sqlite` |
 | `ZANA_OAUTH_CONSENT_PASSWORD` | sí | La clave del paso 1.3 (32 caracteres o más). |
-| `ZANA_GITHUB_REPOS` | sí | `owner/repo` separados por coma. GPT no puede tocar ningún otro. |
+| `ZANA_GITHUB_REPOS` | sí | Repos donde GPT puede abrir misiones, separados por coma. Cada entrada es `owner/repo` (ese repo) u `owner/*` (todos los repos de esa cuenta, incluidos los que se creen después). No existe `*` solo: la cuenta siempre va nombrada, con un login de letras, números y guiones (una cuenta con `_` en el nombre lista sus repos uno por uno). GPT no puede escribir en ningún otro. |
 | `ZANA_DOWNSTREAM_GITHUB_TOKEN` | sí | Token de la cuenta autora (1.1). |
 | `ZANA_REVIEWER_TOKEN` | sí | Token de la cuenta revisora (1.2). |
 | `ZANA_REVIEWER_LOGIN` | sí | Login de GitHub de la cuenta revisora. No tiene valor por defecto: sin él el servidor no arranca, y `node src/cli.mjs remote-health` lo muestra como `degraded`. |

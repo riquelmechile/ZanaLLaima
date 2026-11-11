@@ -2,6 +2,8 @@
 
 ## [Sin publicar]
 
+- **Repos permitidos por cuenta.** `ZANA_GITHUB_REPOS` acepta `owner/*` además de `owner/repo`: todos los repos de esa cuenta quedan permitidos, incluidos los que se creen después, sin editar el servidor ni reiniciarlo por cada repo nuevo. El comodín solo vale para una cuenta nombrada con un login válido (no hay `*` ni `*/*`), y lo que no es un `owner/repo` válido nunca está permitido. `ZANA_REPO_CHECKS_JSON` acepta overrides para repos cubiertos por el comodín. No cambia ningún otro gate: escritura solo en `zana/<missionId>`, CI sobre el SHA exacto, revisión y merge. `SECURITY.md` explica qué CI cuenta y que el servidor no verifica la protección de rama.
+
 - **Borradores OAuth más seguros:** redacción de credenciales antes de almacenar ideas y respuestas, rechazo de planes con secretos (sin invalidar silenciosamente su digest), redacción defensiva al leer datos antiguos y cuota dura de 50 workspaces por cliente incluyendo archivados. Pendiente la migración a tabla propia, recuperación administrativa tras nuevo OAuth y limpieza operator-only de filas legadas.
 
 - **Corrección de gate de Delivery:** la entrega ya no exige `mergeable:true` en un PR `merged:true` (GitHub responde `null` tras el merge) ni asume que el último hito del arreglo es el último integrado. El verificador GitHub del backend ahora debe acreditar la integración de todos los SHA de hitos y el CI/4R del SHA final.

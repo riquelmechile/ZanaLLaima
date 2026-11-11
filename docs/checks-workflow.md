@@ -1,6 +1,6 @@
 # Plantilla del workflow de checks para repos administrados
 
-Los tests que cuentan corren en GitHub Actions. Cada repo de `ZANA_GITHUB_REPOS` necesita un workflow `workflow_dispatch`. Por defecto se llama como `ZANA_CHECKS_WORKFLOW` (`zana-checks.yml`), salvo que el operador configure un override explícito por repositorio mediante `ZANA_REPO_CHECKS_JSON`. Con eso basta: `zana_checks_start` lo dispara **una vez por SHA**, cuando la autora terminó de escribir. Así una misión gasta una corrida, y no una por cada push.
+Los tests que cuentan corren en GitHub Actions. Cada repo donde se abran misiones (los que cubre `ZANA_GITHUB_REPOS`, por nombre o con `owner/*`) necesita un workflow `workflow_dispatch`. Por defecto se llama como `ZANA_CHECKS_WORKFLOW` (`zana-checks.yml`), salvo que el operador configure un override explícito por repositorio mediante `ZANA_REPO_CHECKS_JSON`. Con eso basta: `zana_checks_start` lo dispara **una vez por SHA**, cuando la autora terminó de escribir. Así una misión gasta una corrida, y no una por cada push.
 
 **Lo agrega el operador.** ZanaLLaima nunca escribe en `.github/workflows/**` de otro repo (la política lo deniega) y esta plantilla no se instala sola.
 
@@ -50,6 +50,6 @@ En el entorno **del servidor** (no en el código ni en herramientas del modelo):
 ZANA_REPO_CHECKS_JSON='{"operador/frontend":{"workflow":"zana-node.yml","requiredChecks":["test","lint"]},"operador/backend":{"workflow":"zana-python.yml","requiredChecks":["pytest"]}}'
 ~~~
 
-Ambos repositorios deben estar en `ZANA_GITHUB_REPOS` y tener sus workflows instalados previamente por el operador. Los nombres de workflow son archivos, no rutas, y cada entrada debe contener exactamente `workflow` y `requiredChecks` (1 a 20 nombres distintos). Errores o repositorios desconocidos impiden iniciar el servidor. En ausencia de la variable, se mantiene el comportamiento global anterior.
+Ambos repositorios deben estar cubiertos por `ZANA_GITHUB_REPOS` (por nombre o con `owner/*`) y tener sus workflows instalados previamente por el operador. Los nombres de workflow son archivos, no rutas, y cada entrada debe contener exactamente `workflow` y `requiredChecks` (1 a 20 nombres distintos). Errores o repositorios desconocidos impiden iniciar el servidor. En ausencia de la variable, se mantiene el comportamiento global anterior.
 
 `zana_checks_start` utiliza el workflow definido para el repositorio de la misión y `zana_checks_status` verifica los jobs correspondientes sobre el SHA exacto. Un cambio de nombre de workflow después del dispatch invalida ese checkId y exige iniciar otro. La configuración no otorga acceso a nuevos repositorios, no instala CI y no permite escribir `.github/workflows/**`.

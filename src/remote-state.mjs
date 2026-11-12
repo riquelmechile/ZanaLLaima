@@ -54,7 +54,7 @@ export const sessionWrote=(db,sessionId,missionId)=>Boolean(db?.prepare(
 // that held (started or rebound) one of its units.
 export const sessionIsMissionAuthor=(db,sessionId,missionId)=>Boolean(db&&(
   db.prepare('SELECT 1 FROM remote_missions WHERE mission_id=? AND created_session=?').get(missionId,sessionId)||
-  db.prepare("SELECT 1 FROM remote_activity WHERE session_id=? AND mission_id=? AND kind IN ('UNIT_START','UNIT_REBIND') LIMIT 1")
+  db.prepare("SELECT 1 FROM remote_activity WHERE session_id=? AND mission_id=? AND kind IN ('UNIT_START','UNIT_REBIND','MISSION_ADOPT') LIMIT 1")
     .get(sessionId,missionId)));
 // A session that claimed any ticket of the mission stays read-only on it.
 export const sessionReviews=(db,sessionId,missionId)=>Boolean(db?.prepare(

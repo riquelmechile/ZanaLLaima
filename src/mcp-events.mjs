@@ -14,6 +14,7 @@ import {request} from 'node:https';
 import {BlockList,isIP} from 'node:net';
 
 export const REVIEW_EVENT='zana.review.ready';
+export const REVIEW_DONE_EVENT='zana.review.done';
 const SUB='zana:evsub:',OUT='zana:evout:';
 const MAX_TTL_MS=7*86_400_000,MAX_SUBSCRIPTIONS_PER_CLIENT=4,MAX_OUTSTANDING=200,MAX_ATTEMPTS=5,HISTORY_MS=7*86_400_000;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -82,10 +83,10 @@ const put=(db,prefix,row)=>db.prepare('INSERT INTO metadata(key,value) VALUES(?,
 const del=(db,prefix,id)=>db.prepare('DELETE FROM metadata WHERE key=?').run(prefix+id);
 const live=(s,now)=>Date.parse(s.expiresAt)>now;
 const terminal=d=>d.state==='ACCEPTED'||d.state==='FAILED';
-const subId=({clientId,host},url)=>'sub_'+hash([clientId,host,url,REVIEW_EVENT].join('\n')).slice(0,32);
+const subId=({clientId,host},url,name=REVIEW_EVENT)=>'sub_'+hash([clientId,host,url,name].join('\n')).slice(0,32);
 // El filtro del anfitrión debe nombrar su propio host: la identidad sale del OAuth, no del filtro.
 function check(identity,input){
-  if(input?.name!==REVIEW_EVENT)fail('UNKNOWN_EVENT','Unknown event');
+  if(![REVIEW_EVENT,REVIEW_DONE_EVENT].includes(input?.name))fail('UNKNOWN_EVENT','Unknown event');
   const args=input.arguments;
   if(!args||typeof args!=='object'||Array.isArray(args)||Object.keys(args).length!==1||args.host!==identity.host)
     fail('INVALID_EVENT_FILTER','Event filter must match the authenticated host');
@@ -95,7 +96,10 @@ export function listEvents({host}){
   return {events:[{name:REVIEW_EVENT,delivery:['webhook'],
     description:'A review ticket of this account is ready. Start a new run, load the zana-4r skill and claim it with zana_review_claim.',
     inputSchema:{type:'object',properties:{host:{type:'string',enum:[host]}},required:['host'],additionalProperties:false},
-    payloadSchema:{type:'object',properties:{ticketId:{type:'string',format:'uuid'}},required:['ticketId'],additionalProperties:false}}]};
+    payloadSchema:{type:'object',properties:{ticketId:{type:'string',format:'uuid'}},required:['ticketId'],additionalProperties:false}},
+    {name:REVIEW_DONE_EVENT,delivery:['webhook'],description:'A 4R review of this account finished. Start a new run, load the zana-project-orchestrator skill, adopt the mission with zana_mission_adopt and resume it.',
+      inputSchema:{type:'object',properties:{host:{type:'string',enum:[host]}},required:['host'],additionalProperties:false},
+      payloadSchema:{type:'object',properties:{ticketId:{type:'string',format:'uuid'},verdict:{type:'string',enum:['APPROVE','REQUEST_CHANGES']}},required:['ticketId','verdict'],additionalProperties:false}}]};
 }
 
 // rw: transacción de escritura. post: envío saliente (safeWebhookPost en producción).
@@ -107,7 +111,7 @@ export async function subscribeEvent({rw,post=safeWebhookPost,identity,input,now
   secretBytes(secret);
   const requested=input.ttlMs===undefined||input.ttlMs===null?MAX_TTL_MS:input.ttlMs;
   if(!Number.isInteger(requested)||requested<60_000)fail('INVALID_EVENT_TTL','Invalid event subscription TTL');
-  const ttl=Math.min(MAX_TTL_MS,requested),id=subId(identity,url);
+  const ttl=Math.min(MAX_TTL_MS,requested),id=subId(identity,url,input.name);
   const known=await rw(db=>rows(db,SUB).find(s=>s.id===id&&live(s,now())&&s.secret===secret));
   if(!known){
     // El anfitrión prueba que controla el callback devolviendo el desafío.
@@ -126,14 +130,14 @@ export async function subscribeEvent({rw,post=safeWebhookPost,identity,input,now
     const mine=rows(db,SUB).filter(s=>s.ownerClient===identity.clientId&&s.id!==id);
     for(const old of mine.filter(s=>!live(s,now())))del(db,SUB,old.id);
     if(mine.filter(s=>live(s,now())).length>=MAX_SUBSCRIPTIONS_PER_CLIENT)fail('EVENT_SUBSCRIPTION_LIMIT','Too many event subscriptions for this client');
-    put(db,SUB,{schema:'zana.evsub.v1',id,ownerClient:identity.clientId,host:identity.host,url,secret,expiresAt,verifiedAt:iso(now())});
+    put(db,SUB,{schema:'zana.evsub.v1',id,ownerClient:identity.clientId,host:identity.host,name:input.name,url,secret,expiresAt,verifiedAt:iso(now())});
   });
   return {id,refreshBefore:iso(Date.parse(expiresAt)-Math.floor(ttl/4)),cursor:null,truncated:false};
 }
 
 export function unsubscribeEvent(db,{identity,input}){
   check(identity,input);
-  const id=subId(identity,validCallback(input.delivery?.url).toString());
+  const id=subId(identity,validCallback(input.delivery?.url).toString(),input.name);
   const found=rows(db,SUB).find(s=>s.id===id&&s.ownerClient===identity.clientId);
   if(found){
     del(db,SUB,id);
@@ -144,16 +148,18 @@ export function unsubscribeEvent(db,{identity,input}){
 
 // Encola un aviso por cada suscripción vigente del cliente dueño del ticket.
 // Va en la misma transacción que emite el ticket. Devuelve cuántos encoló.
-export function queueEvent(db,{clientId,ticketId,now=Date.now()}){
+export function queueEvent(db,{clientId,ticketId,name=REVIEW_EVENT,data=null,now=Date.now()}){
+  if(![REVIEW_EVENT,REVIEW_DONE_EVENT].includes(name))fail('UNKNOWN_EVENT','Unknown event');
+  if(name===REVIEW_DONE_EVENT&&(!data||!['APPROVE','REQUEST_CHANGES'].includes(data.verdict)))fail('INVALID_EVENT_POINTER','Invalid review verdict');
   if(!UUID.test(String(ticketId)))fail('INVALID_EVENT_POINTER','El aviso solo lleva el id del ticket');
   const all=rows(db,OUT);
   for(const old of all)if(terminal(old)&&now-(old.terminalAt??0)>=HISTORY_MS)del(db,OUT,old.id);
   let added=0,outstanding=all.filter(d=>!terminal(d)).length;
-  for(const sub of rows(db,SUB).filter(s=>s.ownerClient===clientId&&live(s,now))){
-    const id='evt_'+hash(sub.id+':'+ticketId).slice(0,32);
+  for(const sub of rows(db,SUB).filter(s=>s.ownerClient===clientId&&live(s,now)&&(s.name??REVIEW_EVENT)===name)){
+    const id='evt_'+hash(sub.id+':'+name+':'+ticketId).slice(0,32);
     if(all.some(d=>d.id===id))continue;
     if(outstanding>=MAX_OUTSTANDING)fail('EVENT_BACKLOG_LIMIT','MCP event backlog limit reached');
-    put(db,OUT,{schema:'zana.evout.v1',id,subId:sub.id,ticketId,state:'PENDING',attempts:0,nextAt:now,lastStatus:null,terminalAt:null});
+    put(db,OUT,{schema:'zana.evout.v1',id,subId:sub.id,ticketId,name,data:name===REVIEW_DONE_EVENT?{ticketId,verdict:data.verdict}:{ticketId},state:'PENDING',attempts:0,nextAt:now,lastStatus:null,terminalAt:null});
     outstanding++;added++;
   }
   return added;
@@ -181,7 +187,7 @@ export async function flushEvents({rw,post=safeWebhookPost,now=()=>Date.now(),li
     if(!item)break;
     attempted++;
     const {delivery,sub}=item;
-    const body=JSON.stringify({eventId:delivery.id,name:REVIEW_EVENT,timestamp:iso(now()),data:{ticketId:delivery.ticketId},cursor:null});
+    const body=JSON.stringify({eventId:delivery.id,name:delivery.name??REVIEW_EVENT,timestamp:iso(now()),data:delivery.data??{ticketId:delivery.ticketId},cursor:null});
     let status=null;
     try{status=(await post(sub.url,webhookHeaders(sub.secret,delivery.id,sub.id,body,Math.floor(now()/1000)),body)).status;}
     catch{/* nunca se registra la URL, el secreto ni el error del anfitrión */}

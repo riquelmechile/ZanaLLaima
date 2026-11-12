@@ -126,3 +126,7 @@ El environment `ci-attestation` exige como reviewer requerido la cuenta revisora
 Para verificar el run firmado se usa `gh run list --workflow ci-attestation.yml`, `gh run view` y la descarga del artifact firmado. Ningún sobre CI sustituye la aprobación separada del operador ni autoriza merge o despliegue. Ver [operator-checklist.md](operator-checklist.md) y [release-security.md](release-security.md).
 
 - `zana_github_request` aparece solo con `ZANA_GITHUB_FULL_ACCESS=true`; permite REST administrativo al orquestador y audita cada llamada como `github_admin`.
+
+### Reanudación después de la 4R
+
+`zana_mission_adopt({missionId})` permite a una sesión nueva del mismo cliente OAuth retomar una misión activa, si no hay revisiones ni escritores incompatibles. MCP Events ofrece `zana.review.ready` y `zana.review.done`; el segundo entrega solo `ticketId` y `verdict` (`APPROVE` o `REQUEST_CHANGES`). La sesión nueva verifica el estado antes de adoptar, corregir o fusionar.

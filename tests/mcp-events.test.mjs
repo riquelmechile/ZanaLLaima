@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHmac} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
-import {REVIEW_EVENT,publicIp,validCallback,webhookHeaders,listEvents,subscribeEvent,unsubscribeEvent,
+import {REVIEW_EVENT,REVIEW_DONE_EVENT,publicIp,validCallback,webhookHeaders,listEvents,subscribeEvent,unsubscribeEvent,
   queueEvent,flushEvents,eventStatus,dropClientEvents} from '../src/mcp-events.mjs';
 
 const SECRET='whsec_'+Buffer.alloc(32,7).toString('base64');
@@ -44,7 +44,7 @@ test('solo acepta callbacks HTTPS públicos y firma como Standard Webhooks',()=>
 test('suscribirse exige el desafío firmado, el host propio y queda ligado al cliente OAuth',async()=>{
   const t=setup();
   try{
-    assert.deepEqual(listEvents(me).events.map(e=>[e.name,e.delivery]),[[REVIEW_EVENT,['webhook']]]);
+    assert.deepEqual(listEvents(me).events.map(e=>[e.name,e.delivery]),[[REVIEW_EVENT,['webhook']],[REVIEW_DONE_EVENT,['webhook']]]);
     await assert.rejects(t.subscribe(me,{name:'otro.evento'}),/Unknown event/);
     await assert.rejects(t.subscribe(me,{arguments:{host:'otro-host'}}),/filter/);
     await assert.rejects(t.subscribe(me,{delivery:{mode:'webhook',url:'http://x.example.org/',secret:SECRET}}),/callback/i);
@@ -125,4 +125,24 @@ test('reintenta con espera, se rinde a los cinco intentos y nunca envía dos vec
     assert.equal(u.posts.length,sentBefore,'revocado el cliente, no sale ningún aviso');
     assert.deepEqual(eventStatus(u.db,{now}),{subscriptions:0,pending:0,accepted:0,failed:3});
   }finally{u.db.close();}
+});
+
+
+test('los dos eventos coexisten y se entregan por nombre, sin filtrar datos de la revisión',async()=>{
+  const t=setup();
+  try{
+    const ready=await t.subscribe();
+    const done=await t.subscribe(me,{name:REVIEW_DONE_EVENT});
+    assert.notEqual(ready.id,done.id);
+    assert.equal(queueEvent(t.db,{clientId:me.clientId,ticketId:TICKET,now:T0}),1);
+    assert.equal(queueEvent(t.db,{clientId:me.clientId,ticketId:TICKET,name:REVIEW_DONE_EVENT,data:{verdict:'APPROVE'},now:T0}),1);
+    assert.equal(queueEvent(t.db,{clientId:me.clientId,ticketId:TICKET,name:REVIEW_DONE_EVENT,data:{verdict:'APPROVE'},now:T0}),0);
+    assert.equal(await t.flush(),2);
+    const delivered=t.posts.filter(p=>p.body.eventId);
+    assert.deepEqual(delivered.map(p=>p.body.name).sort(),[REVIEW_DONE_EVENT,REVIEW_EVENT].sort());
+    assert.deepEqual(delivered.find(p=>p.body.name===REVIEW_DONE_EVENT).body.data,{ticketId:TICKET,verdict:'APPROVE'});
+    assert.deepEqual(delivered.find(p=>p.body.name===REVIEW_EVENT).body.data,{ticketId:TICKET});
+    unsubscribeEvent(t.db,{identity:me,input:t.input({name:REVIEW_DONE_EVENT})});
+    assert.equal(eventStatus(t.db,{now:T0}).subscriptions,1);
+  }finally{t.db.close();}
 });

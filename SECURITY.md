@@ -49,3 +49,5 @@ Lo mismo vale para el cuerpo del PR que la revisora lee y pasa a los lentes (`za
 Ver también [seguridad de release](docs/release-security.md), [autorización de escrituras](docs/safety-lifecycle.md) y [revisión atada a Git](docs/solo-rdd.md).
 
 - El acceso REST administrativo opcional del orquestador y su riesgo se documentan en `docs/github-full-access.md`; viene apagado y usa un token separado.
+
+La herramienta `zana_mission_adopt` solo admite sesiones del mismo cliente OAuth creador, sin tickets revisados ni otra unidad con lease vivo. Una revisora jamás puede adoptar o fusionar su propia misión.

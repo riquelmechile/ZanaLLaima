@@ -534,11 +534,13 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
         const done=await remoteWrite(db=>{
           const changed=db.prepare("UPDATE review_tickets SET state='FINALIZED',status_posted=1,finalized_at=?,updated_at=? WHERE ticket_id=? AND state='FINALIZING' AND reviewer_session=?")
             .run(nowIso(),nowIso(),t.ticket_id,session.sessionId).changes;
+          if(changed){try{events?.queue(db,{clientId:t.author_client,ticketId:t.ticket_id,name:'zana.review.done',data:{ticketId:t.ticket_id,verdict:event}});}catch{/* El evento nunca impide finalizar. */}}
           if(changed)db.prepare('INSERT OR IGNORE INTO review_archive(mission_id,review_id,content,created_at) VALUES(?,?,?,?)')
             .run(t.mission_id,t.ticket_id,JSON.stringify(archived),nowIso());
           return changed;
         });
         if(!done)return inconsistent(['review','zana/4r']);
+        if(events)void events.flush();
         return {ticket:code,state:'FINALIZED',published:true,event,githubReviewId:reviewId,reviewUrl,adoptedExistingReview:adopted,
           status:{context:'zana/4r',state:statusState},sha:t.sha,lensHashes:Object.fromEntries(ordered.map(l=>[l.lens,l.hash]))};
       });

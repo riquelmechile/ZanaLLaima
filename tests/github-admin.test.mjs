@@ -4,8 +4,11 @@ import {InMemoryTransport} from '@modelcontextprotocol/server';
 import {remoteConfig} from '../src/remote-config.mjs';
 import {createRemoteRuntime} from '../src/remote.mjs';
 import {validateGithubAdmin,githubAdminRequest,githubAdminAudit} from '../src/github-admin.mjs';
+import {redactDeep} from '../src/redact.mjs';
 import {remoteFixture} from './helpers/remote-fixture.mjs';
 import {BOOTSTRAP_TOKEN,REVIEWER_TOKEN} from './helpers/fake-github.mjs';
+
+const FULL={ZANA_GITHUB_FULL_ACCESS:'true',ZANA_BOOTSTRAP_GITHUB_TOKEN:BOOTSTRAP_TOKEN};
 
 async function mcpClient(runtime,session){
   const [client,transport]=InMemoryTransport.createLinkedPair();
@@ -131,4 +134,49 @@ test('un error GitHub es isError y la auditoría conserva status sin respuesta',
     const serialized=JSON.stringify(row);
     for(const secret of ['denied-response-secret','query-secret','?token='])assert.equal(serialized.includes(secret),false);
   }finally{if(client)await client.close();await f.cleanup();}
+});
+
+test('R1 la fila real de auditoría usa la categoría github_admin',async()=>{
+  const f=await remoteFixture({envExtra:FULL});
+  try{
+    const s=await f.session();
+    const r=await f.call('zana_github_request',{method:'GET',path:'/repos/o/r'},s);
+    assert.equal(r.error,undefined,r.error);
+    const row=(await f.runtime.readAudit({limit:10})).find(x=>x.tool==='zana_github_request');
+    assert.equal(row.category,'github_admin');
+  }finally{await f.cleanup();}
+});
+
+test('R2 una sesión revisora de la misión no puede usar el token owner',async()=>{
+  const f=await remoteFixture({envExtra:FULL});
+  try{
+    const {author,missionId}=await f.authorReady();
+    const req=await f.call('zana_review_request',{missionId},author);
+    assert.equal(req.error,undefined,req.error);
+    const reviewer=await f.session();
+    const claim=await f.call('zana_review_claim',{ticket:req.ticket},reviewer);
+    assert.equal(claim.error,undefined,claim.error);
+    assert.match((await f.call('zana_budget_extend',{missionId,lines:500,reason:'x'},reviewer)).error,/REVIEWER_READ_ONLY/);
+    const before=f.api.state.requests.length;
+    const r=await f.call('zana_github_request',{method:'PUT',path:'/repos/o/r/branches/main/protection',body:{x:1}},reviewer);
+    assert.equal(f.api.state.requests.length,before,'la sesión revisora llegó a GitHub con el token owner');
+    assert.match(String(r.error),/REVIEWER/);
+  }finally{await f.cleanup();}
+});
+
+test('R3 un eco del token en el corte de 64 KB no deja un prefijo del token',async()=>{
+  const pad='x'.repeat(64_000-10-20);
+  const owner={request:async()=>({status:200,data:{t:pad+BOOTSTRAP_TOKEN+'y'.repeat(1000)}})};
+  const out=redactDeep(await githubAdminRequest({method:'GET',path:'/repos/o/r'},{owner}),[BOOTSTRAP_TOKEN]);
+  assert.equal(JSON.stringify(out).includes(BOOTSTRAP_TOKEN.slice(0,20)),false);
+});
+
+test('R4 tokens que solo difieren en espacios no cuentan como distintos',()=>{
+  assert.throws(()=>remoteConfig({ZANA_GITHUB_FULL_ACCESS:'true',ZANA_BOOTSTRAP_GITHUB_TOKEN:'tok ',ZANA_DOWNSTREAM_GITHUB_TOKEN:'tok'}),/TOKEN_SHARED/);
+});
+
+test('R5 %2e%2e no sale del prefijo de config.apiUrl',()=>{
+  const v=validateGithubAdmin({method:'GET',path:'/%2e%2e/%2e%2e/login'});
+  const url=new URL('https://ghe.example/api/v3'+v.path);
+  assert.equal(url.pathname.startsWith('/api/v3/'),true,url.href);
 });

@@ -142,7 +142,7 @@ test('Streamable HTTP sessions: two conversations get two sessions; the reviewer
       accept:'application/json, text/event-stream','mcp-session-id':a.transport.sessionId,'mcp-protocol-version':sa.client.protocolVersion},
       body:JSON.stringify({jsonrpc:'2.0',id:91,method:'events/list',params:{}})});
     const listedText=await listed.text(),listedJson=JSON.parse(listedText.split('\n').filter(l=>l.startsWith('data:')).map(l=>l.slice(5)).pop()??listedText);
-    assert.deepEqual(listedJson.result.events.map(e=>[e.name,e.inputSchema.properties.host.enum]),[['zana.review.ready',['zana-chatgpt']]]);
+    assert.deepEqual(listedJson.result.events.map(e=>[e.name,e.inputSchema.properties.host.enum]),[['zana.review.ready',['zana-chatgpt']],['zana.review.done',['zana-chatgpt']]]);
     const badSub=await fetch(s.base+'/mcp',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json',
       accept:'application/json, text/event-stream','mcp-session-id':a.transport.sessionId,'mcp-protocol-version':sa.client.protocolVersion},
       body:JSON.stringify({jsonrpc:'2.0',id:92,method:'events/subscribe',params:{name:'zana.review.ready',arguments:{host:'zana-chatgpt'},

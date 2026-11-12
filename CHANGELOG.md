@@ -2,6 +2,8 @@
 
 ## [Sin publicar]
 
+- Adopción segura de misiones entre sesiones OAuth y aviso MCP `zana.review.done` tras finalizar una 4R.
+
 - Acceso GitHub completo opcional para el orquestador mediante `zana_github_request`, con token separado, alcance reviewer restringido y auditoría sin secretos.
 
 - **Panel MCP Apps de aprobación:** `zana_project_approval_panel` entrega la vista y el nonce solo en `_meta`; `zana_panel_decide` es app-only, requiere negociación UI y audita la decisión sin nonce. Mantiene el flujo con la página del operador cuando el cliente no muestra paneles; la vista ejecuta el bootstrap únicamente tras aprobación.

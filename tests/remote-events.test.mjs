@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {remoteFixture} from './helpers/remote-fixture.mjs';
-import {REVIEW_EVENT} from '../src/mcp-events.mjs';
+import {REVIEW_EVENT,REVIEW_DONE_EVENT} from '../src/mcp-events.mjs';
 
 const SECRET='whsec_'+Buffer.alloc(32,9).toString('base64'),URL1='https://hooks.chatgpt.test.openai.com/cb/1';
 // Anfitrión de mentira: devuelve el desafío y guarda cada aviso recibido.
@@ -22,7 +22,7 @@ test('pedir una revisión avisa al monitor suscrito y la ejecución despertada r
   try{
     const ready=await t.f.authorReady(),author={session:ready.author};
     const identity={clientId:author.session.clientId,host:'zana-chatgpt'};
-    assert.deepEqual((await t.f.runtime.events.list(identity)).events.map(e=>e.name),[REVIEW_EVENT]);
+    assert.deepEqual((await t.f.runtime.events.list(identity)).events.map(e=>e.name),[REVIEW_EVENT,REVIEW_DONE_EVENT]);
     const sub=await t.f.runtime.events.subscribe(identity,t.input);
     assert.match(sub.id,/^sub_/);
     const r=await t.f.call('zana_review_request',{missionId:ready.missionId},author.session);
@@ -72,4 +72,95 @@ test('sin monitor suscrito el ticket se emite igual; suscribirse después avisa 
     const manual=await t.f.session('zana-chatgpt','zc_reviewer');
     assert.equal((await t.f.call('zana_review_claim',{ticket:r.ticket},manual)).state,'CLAIMED');
   }finally{await t.f.cleanup();}
+});
+
+
+test('adopción: solo mismo cliente OAuth, sin revisión activa, y es idempotente',async()=>{
+  const t=await setup();
+  try{
+    const ready=await t.f.authorReady(),missionId=ready.missionId;
+    const other=await t.f.session('zana-chatgpt','zc_other');
+    assert.match((await t.f.call('zana_mission_adopt',{missionId},other)).error,/ADOPT_OTHER_CLIENT/);
+    const next=await t.f.session('zana-chatgpt',ready.author.clientId);
+    const first=await t.f.call('zana_mission_adopt',{missionId},next);
+    assert.deepEqual(first,{missionId,adopted:true,alreadyAdopted:false});
+    assert.equal((await t.f.call('zana_mission_adopt',{missionId},next)).alreadyAdopted,true);
+    const request=await t.f.call('zana_review_request',{missionId},ready.author);
+    assert.ok(request.ticket);
+    const during=await t.f.session('zana-chatgpt',ready.author.clientId);
+    assert.match((await t.f.call('zana_mission_adopt',{missionId},during)).error,/ADOPT_REVIEW_IN_PROGRESS/);
+    const reviewer=await t.f.session('zana-chatgpt',ready.author.clientId);
+    assert.equal((await t.f.call('zana_review_claim',{ticket:request.ticket},reviewer)).state,'CLAIMED');
+    assert.match((await t.f.call('zana_mission_adopt',{missionId},reviewer)).error,/REVIEWER_READ_ONLY/);
+  }finally{await t.f.cleanup();}
+});
+
+test('adopción rechaza una unidad viva de otra sesión',async()=>{
+  const t=await setup();
+  try{
+    const ready=await t.f.authorReady({green:false,pull:false,complete:false});
+    const next=await t.f.session('zana-chatgpt',ready.author.clientId);
+    assert.match((await t.f.call('zana_mission_adopt',{missionId:ready.missionId},next)).error,/ADOPT_MISSION_BUSY/);
+  }finally{await t.f.cleanup();}
+});
+
+
+test('finalize publica review.done una vez, con el veredicto y solo al monitor done',async()=>{
+  const t=await setup();
+  try{
+    const ready=await t.f.authorReady();
+    const identity={clientId:ready.author.clientId,host:'zana-chatgpt'};
+    await t.f.runtime.events.subscribe(identity,{...t.input,name:REVIEW_DONE_EVENT});
+    const requested=await t.f.call('zana_review_request',{missionId:ready.missionId},ready.author);
+    const reviewer=await t.f.session('zana-chatgpt',ready.author.clientId);
+    assert.equal((await t.f.call('zana_review_claim',{ticket:requested.ticket},reviewer)).state,'CLAIMED');
+    const page=await t.f.call('zana_review_diff',{ticket:requested.ticket,page:0},reviewer);
+    for(let i=1;i<page.manifest.totalPages;i++)await t.f.call('zana_review_diff',{ticket:requested.ticket,page:i},reviewer);
+    for(const lens of ['risk','readability','reliability','resilience']){
+      const result=await t.f.call('zana_review_lens_submit',{ticket:requested.ticket,lens,findings:[],evidence:['Se revisó el diff completo']},reviewer);
+      assert.equal(result.error,undefined,result.error);
+    }
+    const done=await t.f.call('zana_review_finalize',{ticket:requested.ticket,execution:'SEQUENTIAL_SAME_CONVERSATION'},reviewer);
+    assert.equal(done.state,'FINALIZED');
+    await t.f.runtime.events.flush();
+    const deliveries=t.posts.filter(p=>p.body.name===REVIEW_DONE_EVENT);
+    assert.equal(deliveries.length,1);
+    assert.match(deliveries[0].body.data.ticketId,/^[0-9a-f-]{36}$/);
+    assert.equal(deliveries[0].body.data.verdict,'APPROVE');
+    assert.equal((await t.f.call('zana_review_finalize',{ticket:requested.ticket,execution:'SEQUENTIAL_SAME_CONVERSATION'},reviewer)).state,'FINALIZED');
+    await t.f.runtime.events.flush();
+    assert.equal(t.posts.filter(p=>p.body.name===REVIEW_DONE_EVENT).length,1);
+    const resumed=await t.f.session('zana-chatgpt',ready.author.clientId);
+    assert.equal((await t.f.call('zana_mission_adopt',{missionId:ready.missionId},resumed)).adopted,true);
+    const merged=await t.f.call('zana_merge',{missionId:ready.missionId},resumed);
+    assert.ok(!merged.error||!/NOT_AUTHOR/.test(merged.error),JSON.stringify(merged));
+  }finally{await t.f.cleanup();}
+});
+
+
+test('REQUEST_CHANGES despierta al orquestador, STALE_SHA no emite done',async()=>{
+  for(const stale of [false,true]){
+    const t=await setup();
+    try{
+      const ready=await t.f.authorReady(),identity={clientId:ready.author.clientId,host:'zana-chatgpt'};
+      await t.f.runtime.events.subscribe(identity,{...t.input,name:REVIEW_DONE_EVENT});
+      const req=await t.f.call('zana_review_request',{missionId:ready.missionId},ready.author);
+      const reviewer=await t.f.session('zana-chatgpt',ready.author.clientId);
+      assert.equal((await t.f.call('zana_review_claim',{ticket:req.ticket},reviewer)).state,'CLAIMED');
+      const page=await t.f.call('zana_review_diff',{ticket:req.ticket,page:0},reviewer);
+      for(let i=1;i<page.manifest.totalPages;i++)await t.f.call('zana_review_diff',{ticket:req.ticket,page:i},reviewer);
+      for(const lens of ['risk','readability','reliability','resilience']){
+        const findings=lens==='risk'?[{severity:'BLOCKER',location:'src/sum.mjs:3',evidence:'Error reproducible',origin:'INTRODUCED',title:'Resultado incorrecto'}]:[];
+        const r=await t.f.call('zana_review_lens_submit',{ticket:req.ticket,lens,findings,evidence:['Diff completo']},reviewer);
+        assert.equal(r.error,undefined,r.error);
+      }
+      if(stale)t.f.api.state.push(ready.branch,'b'.repeat(40));
+      const done=await t.f.call('zana_review_finalize',{ticket:req.ticket,execution:'SEQUENTIAL_SAME_CONVERSATION'},reviewer);
+      assert.equal(done.state,stale?'STALE_SHA':'FINALIZED');
+      await t.f.runtime.events.flush();
+      const delivered=t.posts.filter(p=>p.body.name===REVIEW_DONE_EVENT);
+      assert.equal(delivered.length,stale?0:1);
+      if(!stale)assert.equal(delivered[0].body.data.verdict,'REQUEST_CHANGES');
+    }finally{await t.f.cleanup();}
+  }
 });

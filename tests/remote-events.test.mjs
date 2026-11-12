@@ -163,6 +163,41 @@ test('repetir adopt en la misma sesión no emite STATE_CHANGED',async()=>{
   }finally{await t.f.cleanup();}
 });
 
+test('una adopción posterior invalida la generación anterior aunque registre actividad',async()=>{
+  const t=await setup();
+  try{
+    const ready=await t.f.authorReady(),missionId=ready.missionId;
+    const a=await t.f.session('zana-chatgpt',ready.author.clientId);
+    const b=await t.f.session('zana-chatgpt',ready.author.clientId);
+    assert.equal((await t.f.call('zana_mission_adopt',{missionId},a)).adopted,true);
+    const old=new Date(Date.now()-24*60*60_000).toISOString();
+    await remoteWrite(db=>db.prepare('UPDATE remote_activity SET created_at=? WHERE mission_id=? AND session_id=?').run(old,missionId,a.sessionId));
+    assert.equal((await t.f.call('zana_mission_adopt',{missionId},b)).adopted,true);
+    const batch=await t.f.call('zana_start_batch',{},a);
+    assert.ok(batch.packets?.length,JSON.stringify(batch));
+    const result=await t.f.call('zana_mission_adopt',{missionId},a);
+    assert.match(result.error,/ADOPT_MISSION_BUSY.*hasta .*Z$/,JSON.stringify(result));
+  }finally{await t.f.cleanup();}
+});
+
+test('la sesión de una generación invalidada puede adoptar de nuevo tras vencer la vigente',async()=>{
+  const t=await setup();
+  try{
+    const ready=await t.f.authorReady(),missionId=ready.missionId;
+    const a=await t.f.session('zana-chatgpt',ready.author.clientId);
+    const b=await t.f.session('zana-chatgpt',ready.author.clientId);
+    assert.equal((await t.f.call('zana_mission_adopt',{missionId},a)).adopted,true);
+    const old=new Date(Date.now()-24*60*60_000).toISOString();
+    await remoteWrite(db=>db.prepare('UPDATE remote_activity SET created_at=? WHERE mission_id=? AND session_id=?').run(old,missionId,a.sessionId));
+    assert.equal((await t.f.call('zana_mission_adopt',{missionId},b)).adopted,true);
+    const batch=await t.f.call('zana_start_batch',{},a);
+    assert.ok(batch.packets?.length,JSON.stringify(batch));
+    await remoteWrite(db=>db.prepare('UPDATE remote_activity SET created_at=? WHERE mission_id=? AND session_id=?').run(old,missionId,b.sessionId));
+    const result=await t.f.call('zana_mission_adopt',{missionId},a);
+    assert.deepEqual(result,{missionId,adopted:true,alreadyAdopted:false});
+  }finally{await t.f.cleanup();}
+});
+
 test('finalize revierte un encolado parcial sin perder la finalización',async()=>{
   const t=await setup();
   try{

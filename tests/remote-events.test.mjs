@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {createHash,randomUUID} from 'node:crypto';
 import {remoteFixture} from './helpers/remote-fixture.mjs';
-import {REVIEW_EVENT,REVIEW_DONE_EVENT} from '../src/mcp-events.mjs';
+import {remoteWrite,remoteRead} from '../src/store.mjs';
+import {queueEvent,REVIEW_EVENT,REVIEW_DONE_EVENT} from '../src/mcp-events.mjs';
 
 const SECRET='whsec_'+Buffer.alloc(32,9).toString('base64'),URL1='https://hooks.chatgpt.test.openai.com/cb/1';
+const put=(db,key,value)=>db.prepare('INSERT INTO metadata(key,value) VALUES(?,?)').run(key,JSON.stringify(value));
 // Anfitrión de mentira: devuelve el desafío y guarda cada aviso recibido.
 async function setup(){
   const posts=[];
@@ -104,6 +107,19 @@ test('adopción rechaza una unidad viva de otra sesión',async()=>{
   }finally{await t.f.cleanup();}
 });
 
+test('adopt expira de forma perezosa un ticket OPEN vencido',async()=>{
+  const t=await setup();
+  try{
+    const ready=await t.f.authorReady(),missionId=ready.missionId;
+    const req=await t.f.call('zana_review_request',{missionId},ready.author);
+    assert.ok(req.ticket);
+    await remoteWrite(db=>db.prepare('UPDATE review_tickets SET expires_at=? WHERE mission_id=?')
+      .run(new Date(Date.now()-60_000).toISOString(),missionId));
+    const session=await t.f.session('zana-chatgpt',ready.author.clientId);
+    const result=await t.f.call('zana_mission_adopt',{missionId},session);
+    assert.equal(result.adopted,true,JSON.stringify(result));
+  }finally{await t.f.cleanup();}
+});
 
 test('finalize publica review.done una vez, con el veredicto y solo al monitor done',async()=>{
   const t=await setup();

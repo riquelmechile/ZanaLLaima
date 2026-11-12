@@ -16,7 +16,7 @@ async function workspace(){
   await f.call('zana_workspace_update',{workspaceId:w.workspaceId,expectedVersion:1,plan},session);
   return {f,session,args:{workspaceId:w.workspaceId,expectedVersion:2,owner:'O',name:'panel-secure',visibility:'private'}};
 }
-async function rawClient(runtime,session,ui){
+async function rawClient(runtime,session,ui,mime=PANEL_MIME){
   const [client,transport]=InMemoryTransport.createLinkedPair();
   const server=runtime.createServer(async()=>session);
   await server.connect(transport);
@@ -30,7 +30,7 @@ async function rawClient(runtime,session,ui){
     return promise;
   };
   await request('initialize',{protocolVersion:'2025-11-25',
-    capabilities:ui?{extensions:{'io.modelcontextprotocol/ui':{mimeTypes:[PANEL_MIME]}}}:{},
+    capabilities:ui?{extensions:{'io.modelcontextprotocol/ui':{mimeTypes:[mime]}}}:{},
     clientInfo:{name:'raw-panel-test',version:'1.0'}});
   await client.send({jsonrpc:'2.0',method:'notifications/initialized'});
   return {request,close:async()=>{await client.close();await server.close();}};
@@ -114,4 +114,52 @@ test('denegar en el panel queda auditado sin nonce y no autoriza bootstrap',asyn
     assert.ok(!JSON.stringify(audit).includes(nonce));
     assert.equal(t.f.api.state.requests.some(x=>x.method==='POST'&&x.path==='/user/repos'),false);
   }finally{if(app)await app.close();await t.f.cleanup();}
+});
+
+test('replay allow es idempotente y no duplica auditoría de operador',async()=>{
+  const t=await workspace();let app;try{app=await rawClient(t.f.runtime,t.session,true);
+    const opened=result(await call(app,'zana_project_approval_panel',t.args));
+    assert.ok(opened.structuredContent?.panel,'panel ausente');
+    const {panelId,nonce}=opened._meta['zana-llaima/panel'];
+    const first=result(await call(app,'zana_panel_decide',{panelId,nonce,decision:'allow'}));
+    assert.equal(first.structuredContent.status,'APPROVED');
+    const replay=result(await call(app,'zana_panel_decide',{panelId,nonce,decision:'allow'}));
+    assert.equal(replay.structuredContent.replayed,true,JSON.stringify(replay));
+    assert.equal(replay.structuredContent.operationId,first.structuredContent.operationId);
+    const audit=await t.f.runtime.readAudit({limit:100});
+    assert.equal(audit.filter(x=>x.tool==='operator_panel_approval'&&x.outcome==='APPROVED').length,1);
+  }finally{if(app)await app.close();await t.f.cleanup();}
+});
+
+test('nonce errado queda REFUSED sin filtrar secreto',async()=>{
+  const t=await workspace();let app;try{app=await rawClient(t.f.runtime,t.session,true);
+    const opened=result(await call(app,'zana_project_approval_panel',t.args));
+    assert.ok(opened.structuredContent?.panel,'panel ausente');
+    const panelId=opened.structuredContent.panel.panelId,secret='nonce-equivocado';
+    const denied=result(await call(app,'zana_panel_decide',{panelId,nonce:secret,decision:'allow'}));
+    assert.equal(denied.structuredContent.denied,true);
+    const audit=await t.f.runtime.readAudit({limit:100});
+    assert.ok(audit.some(x=>x.tool==='zana_panel_decide'&&x.outcome==='REFUSED'),JSON.stringify(audit));
+    assert.equal(JSON.stringify(audit).includes(secret),false);
+  }finally{if(app)await app.close();await t.f.cleanup();}
+});
+
+test('visibilidad privada, mime incorrecto y fallback sin filas de panel',async()=>{
+  const t=await workspace();let wrong,noUi;try{
+    wrong=await rawClient(t.f.runtime,t.session,true,'text/html');
+    const unavailable=await call(wrong,'zana_project_approval_panel',t.args);
+    assert.ok(unavailable.error||unavailable.result?.isError,'mime incorrecto aceptado');
+    noUi=await rawClient(t.f.runtime,t.session,false);
+    const denied=await call(noUi,'zana_project_approval_panel',t.args);
+    assert.ok(denied.error||denied.result?.isError,'cliente sin UI aceptado');
+    const {DatabaseSync}=await import('node:sqlite');
+    const {databasePath}=await import('../src/store.mjs');
+    const db=new DatabaseSync(databasePath());
+    try{assert.equal(db.prepare("SELECT count(*) n FROM metadata WHERE key LIKE 'zana:panel:%'").get().n,0);}
+    finally{db.close();}
+    const app=await rawClient(t.f.runtime,t.session,true);
+    try{const tools=(await app.request('tools/list')).result.tools;
+      assert.equal(tools.find(x=>x.name==='zana_panel_decide')._meta['openai/visibility'],'private');
+    }finally{await app.close();}
+  }finally{if(wrong)await wrong.close();if(noUi)await noUi.close();await t.f.cleanup();}
 });

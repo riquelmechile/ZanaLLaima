@@ -144,3 +144,23 @@ test('fallo de aprobación del repositorio usa código propio',()=>{
     assert.throws(()=>decide(f,p),/PANEL_REPOSITORY_NOT_APPROVED/);
   }finally{f.db.close();}
 });
+
+test('replay allow devuelve el mismo resultado sin efectos nuevos',()=>{
+  const f=panelFixture();try{const p=request(f),first=decide(f,p);
+    const before=f.db.prepare("SELECT count(*) n FROM metadata WHERE key LIKE 'zana:approval:%' OR key LIKE 'zana:bootstrap:%'").get().n;
+    const replay=decide(f,p);
+    assert.deepEqual(replay,{...first,replayed:true});
+    assert.equal(f.db.prepare("SELECT count(*) n FROM metadata WHERE key LIKE 'zana:approval:%' OR key LIKE 'zana:bootstrap:%'").get().n,before);
+    assert.throws(()=>decide(f,p,{nonce:'incorrecto'}),/PANEL_NOT_PENDING/);
+  }finally{f.db.close();}
+});
+
+test('fallo de rollback conserva cause y no deja escrituras parciales',()=>{
+  const f=panelFixture();try{const p=request(f),exec=f.db.exec.bind(f.db);
+    f.db.exec=sql=>{if(String(sql).startsWith('ROLLBACK TO'))throw new Error('rollback roto');return exec(sql);};
+    exec("CREATE TRIGGER abort_panel BEFORE INSERT ON metadata WHEN NEW.key LIKE 'zana:approval:%' BEGIN SELECT RAISE(ABORT,'boom original'); END");
+    let caught;try{decide(f,p);}catch(error){caught=error;}
+    assert.equal(caught?.message,'rollback roto');assert.match(caught?.cause?.message??'',/boom original/);
+    assert.equal(f.db.prepare("SELECT count(*) n FROM metadata WHERE key LIKE 'zana:approval:%' OR key LIKE 'zana:bootstrap:%'").get().n,0);
+  }finally{if(f.db.isTransaction)try{f.db.exec('ROLLBACK');}catch{}f.db.close();}
+});

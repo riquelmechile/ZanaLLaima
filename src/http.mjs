@@ -160,6 +160,18 @@ export function createHttpServer({runtime,oauth,settings,log=console,maxSessions
     await server.connect(transport);
     return {holder,respond:()=>transport.handleRequest(request,{parsedBody:parsed})};
   }
+  // Intentos de la revisión 2026-07-28 de un cliente autenticado, que este
+  // servidor todavía rechaza. Solo en memoria y solo visibles en el /health
+  // local: sirven para saber si el cliente ya intenta el protocolo nuevo antes
+  // de abrirlo. Los textos vienen del cliente: van acotados y con tope de claves.
+  const modern={count:0,last:null,versions:Object.create(null),methods:Object.create(null)};
+  function noteModern(parsed){
+    const label=v=>typeof v==='string'?v.replace(/[\p{Cc}\p{Cf}]/gu,'').slice(0,40)||'?':'?';
+    const bump=(bag,key)=>{if(key in bag||Object.keys(bag).length<10)bag[key]=(bag[key]??0)+1;};
+    modern.count++;modern.last=new Date().toISOString();
+    bump(modern.versions,label(parsed.params._meta['io.modelcontextprotocol/protocolVersion']));
+    bump(modern.methods,label(parsed.method));
+  }
   async function handleMcp(req,res,identity){
     const url='http://127.0.0.1'+req.url;
     const raw=req.method==='POST'?await readBody(req):null;
@@ -188,7 +200,10 @@ export function createHttpServer({runtime,oauth,settings,log=console,maxSessions
     }
     const envelope=parsed&&!Array.isArray(parsed)&&parsed.params?._meta&&
       Object.keys(parsed.params._meta).some(k=>k.startsWith('io.modelcontextprotocol/'));
-    if(envelope)return jsonRpcError(res,400,-32602,'Unsupported protocol version: this endpoint serves the sessionful 2025 Streamable HTTP transport; send initialize');
+    if(envelope){
+      noteModern(parsed);
+      return jsonRpcError(res,400,-32602,'Unsupported protocol version: this endpoint serves the sessionful 2025 Streamable HTTP transport; send initialize');
+    }
     return jsonRpcError(res,400,-32000,'Bad Request: no valid session; send initialize first');
   }
   const server=createServer(async(req,res)=>{
@@ -201,7 +216,8 @@ export function createHttpServer({runtime,oauth,settings,log=console,maxSessions
         const peer=String(req.socket?.remoteAddress??'').replace(/^::ffff:/,'');
         const local=['127.0.0.1','::1'].includes(peer)&&!req.headers['cf-connecting-ip']&&
           ['127.0.0.1','localhost'].includes(hostname(req.headers.host));
-        const body=local?{...h,name:'zana-llaima',version:packageVersion,mode:'remote',sessions:sessions.size}
+        const body=local?{...h,name:'zana-llaima',version:packageVersion,mode:'remote',sessions:sessions.size,
+            protocol:{served:'2025 (initialize, con sesiones)',modernRejected:modern}}
           :{status:h.status,version:packageVersion,sessions:sessions.size,staleTickets:h.staleTickets};
         res.writeHead(h.status==='ok'?200:503,{'content-type':'application/json','cache-control':'no-store'});
         res.end(JSON.stringify(body));
@@ -233,6 +249,10 @@ export function createHttpServer({runtime,oauth,settings,log=console,maxSessions
     }
   });
   server.sessions=sessions;
+  // Reintentos de los avisos pendientes (MCP Events); el primer envío sale al encolar.
+  const eventTimer=runtime?.events?setInterval(()=>{void runtime.events.flush();},30_000):null;
+  eventTimer?.unref();
+  server.on('close',()=>clearInterval(eventTimer));
   return server;
 }
 

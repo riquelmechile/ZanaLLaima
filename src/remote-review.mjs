@@ -20,6 +20,7 @@ export const EXECUTIONS=Object.freeze(['PARALLEL_SUBAGENTS','SEQUENTIAL_SAME_CON
 export const ORIGINS=Object.freeze(['INTRODUCED','ACTIVATED','WORSENED','PREEXISTING','UNKNOWN']);
 const LOCATION=/^[^\s:][^:\n]{0,239}:\d{1,7}(?:-\d{1,7})?$/;
 const CODE=/^ZR-[A-Z2-7]{4}-[A-Z2-7]{4}-[A-Z2-7]{4}-[A-Z2-7]{4}$/;
+const TICKET_ID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_BODY=60_000;
 export const DIFF_PAGE_BYTES=60_000;
 const TERMINAL=['FINALIZED','STALE_SHA','EXPIRED','ABANDONED'];
@@ -160,12 +161,18 @@ export const correctionPrev=(db,missionId)=>{
   return t?.verdict==='REQUEST_CHANGES'?t:null;
 };
 export const latestIn=(db,missionId)=>db?.prepare('SELECT * FROM review_tickets WHERE mission_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(missionId)??null;
-export function createReview({github,reviewerGithub,config,checks,remoteWrite,remoteRead,transact,missionContext}){
+// events (opcional): {queue(db,{clientId,ticketId}), flush()} para avisar al monitor suscrito.
+export function createReview({github,reviewerGithub,config,checks,remoteWrite,remoteRead,transact,missionContext,events=null}){
   const {exclusive}=makeExclusive();
   const pageCache=new Map();
+  // Un ticket se nombra por su código ZR- (la conversación revisora manual) o
+  // por su id (la ejecución que despertó con el aviso). El id no es una
+  // credencial: cada tool comprueba después la sesión que lo usa.
   const ticketBy=(db,code)=>{
-    if(typeof code!=='string'||!CODE.test(code))fail('TICKET_NOT_FOUND','unknown ticket');
-    const row=db.prepare('SELECT * FROM review_tickets WHERE code_hash=?').get(hash(code));
+    const byId=typeof code==='string'&&TICKET_ID.test(code);
+    if(!byId&&(typeof code!=='string'||!CODE.test(code)))fail('TICKET_NOT_FOUND','unknown ticket');
+    const row=byId?db.prepare('SELECT * FROM review_tickets WHERE ticket_id=?').get(code)
+      :db.prepare('SELECT * FROM review_tickets WHERE code_hash=?').get(hash(code));
     if(!row)fail('TICKET_NOT_FOUND','unknown ticket');
     return row;
   };
@@ -309,7 +316,7 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
       }
       const code=ticketCode(),ticketId=randomUUID();
       let expiresAt;
-      let superseded=[];
+      let superseded=[],eventsQueued=0;
       // Superseding tickets and publishing a review are serialized per mission,
       // so a finalize never publishes for a ticket replaced meanwhile.
       await exclusive(missionLock(missionId),()=>transact((mission,txc)=>{
@@ -344,18 +351,29 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
             new Date(at).toISOString(),expiresAt,'OPEN',nowIso(),JSON.stringify({...budget,touched:touchedFiles(files)}));
         mission.reviewCount=(mission.reviewCount||0)+1;
         mission.revision++;
+        // Aviso al monitor del mismo cliente, si está suscrito. Un fallo aquí no frena el ticket.
+        try{eventsQueued=events?.queue(db,{clientId:session.clientId,ticketId})??0;}catch{eventsQueued=0;}
         return mission;
       }));
+      if(eventsQueued)void events.flush();
       return {ticket:code,missionId,repo:ctx.repo,pullNumber:pull.number,sha,expiresAt,lineBudget:budget,diffBytes,
         ...(correction?{correction}:{}),
         superseded:superseded.map(x=>x.ticket_id),
+        wake:{eventsQueued},
         message:'Revisa el ticket '+code+' con ZanaLLaima',
-        instructions:'Entrega este mensaje exacto al usuario para que lo pegue en una conversación NUEVA. Esta sesión no puede reclamarlo.'};
+        instructions:(eventsQueued?'Se avisó al monitor suscrito para que una ejecución nueva reclame este ticket. Si no lo reclama, entrega':'Entrega')+
+          ' este mensaje exacto al usuario para que lo pegue en una conversación NUEVA. Esta sesión no puede reclamarlo.'};
     },
     async claim(code,session){
       const claimed=await remoteWrite(db=>{
         expire(db);
-        const t=ticketBy(db,code);
+        // Sin código: la ejecución que despertó con el aviso. Solo ve tickets
+        // de su propio cliente OAuth; para cualquier otro, ese ticket no existe.
+        const byCode=typeof code==='string'&&CODE.test(code);
+        const t=code===undefined?db.prepare("SELECT * FROM review_tickets WHERE state='OPEN' AND author_client=? AND author_session<>? ORDER BY created_at LIMIT 1")
+          .get(session.clientId??'',session.sessionId):ticketBy(db,code);
+        if(!t)return {error:['NO_PENDING_REVIEW','no open review ticket of this account to claim']};
+        if(!byCode&&t.author_client!==session.clientId)return {error:['TICKET_NOT_FOUND','unknown ticket']};
         if(t.state==='EXPIRED')return {error:['TICKET_EXPIRED','ticket expired']};
         if(t.state!=='OPEN')return {error:['TICKET_ALREADY_CLAIMED','ticket already used ('+t.state+')']};
         if(t.author_session===session.sessionId)return {error:['AUTHOR_SESSION','the author session cannot claim its own ticket']};
@@ -387,7 +405,8 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
       const verdict=await checks.verdict(t.repo,t.sha);
       // The merge-base is a reading aid for PREEXISTING proofs; without it the claim still works.
       const baseSha=await github.mergeBase(t.repo,ctx.base,t.sha).catch(()=>null);
-      return {ticket:code,state:'CLAIMED',missionId:t.mission_id,repo:t.repo,pullNumber:t.pr_number,sha:t.sha,base:ctx.base,baseSha,
+      // Quien reclamó sin el código sigue con el id del ticket en las demás tools.
+      return {ticket:code!==undefined&&CODE.test(code)?code:t.ticket_id,ticketId:t.ticket_id,state:'CLAIMED',missionId:t.mission_id,repo:t.repo,pullNumber:t.pr_number,sha:t.sha,base:ctx.base,baseSha,
         spec:{objective:ctx.objective,units:ctx.units},diffManifest:manifest,diffBytes,lineBudget:budget,
         ...(manifestError?{diffManifestError:manifestError+'; zana_review_diff retries'}:{}),checks:verdict,
         lenses:LENSES,skills:['review-discipline',...LENSES.map(l=>'review-'+l)],

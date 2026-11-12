@@ -10,6 +10,8 @@ export const AUTHOR_TOKEN='github_pat_'+'A'.repeat(40);
 export const REVIEWER_TOKEN='ghp_'+'R'.repeat(36);
 export const REVIEWER_LOGIN='reviewer-bot';
 export const AUTHOR_LOGIN='author-dev';
+// Token aparte para crear repositorios; su cuenta es state.bootstrapLogin.
+export const BOOTSTRAP_TOKEN='gho_'+'B'.repeat(36);
 export const sha=c=>c.repeat(40);
 const CATALOG=JSON.parse(readFileSync(new URL('../../data/github-mcp-tools.json',import.meta.url),'utf8'));
 
@@ -19,7 +21,7 @@ async function bodyOf(req){const parts=[];for await(const c of req)parts.push(c)
 export async function fakeGitHubApi(){
   const state={repo:'o/r',defaultBranch:'main',branches:{main:sha('0')},pulls:[],checkRuns:{},statuses:{},
     reviews:{},commits:{},pullFiles:{},workflowRuns:{},runJobs:{},dispatches:[],merges:[],logs:{},comments:{},requests:[],
-    failNext:null,repoId:4242,files:{}};
+    failNext:null,repoId:4242,files:{},bootstrapLogin:'O',created:{},failCreate:null};
   const server=createServer(async(req,res)=>{
     const url=new URL(req.url,'http://x');
     const body=req.method==='GET'?'':await bodyOf(req);
@@ -28,6 +30,20 @@ export async function fakeGitHubApi(){
     const send=(status,data,type='application/json')=>{res.writeHead(status,{'content-type':type});
       res.end(typeof data==='string'?data:JSON.stringify(data));};
     if(state.failNext){const f=state.failNext;state.failNext=null;return send(f.status,{message:f.message});}
+    // Lo mínimo del bootstrap: quién es el token, crear un repositorio y consultarlo.
+    if(url.pathname==='/user'&&req.method==='GET')return send(200,{login:token===BOOTSTRAP_TOKEN?state.bootstrapLogin:AUTHOR_LOGIN});
+    if(url.pathname==='/user/repos'&&req.method==='POST'){
+      if(token!==BOOTSTRAP_TOKEN)return send(403,{message:'Resource not accessible by this token'});
+      if(state.failCreate){const f=state.failCreate;state.failCreate=null;if(f.createAnyway)state.created[(state.bootstrapLogin+'/'+JSON.parse(body).name).toLowerCase()]=f.createAnyway(JSON.parse(body));return send(f.status,{message:f.message,...(f.errors?{errors:f.errors}:{})});}
+      const input=JSON.parse(body),full=state.bootstrapLogin+'/'+input.name;
+      if(state.created[full.toLowerCase()])return send(422,{message:'Repository creation failed.',errors:[{resource:'Repository',code:'custom',field:'name',message:'name already exists on this account'}]});
+      const made={id:++state.repoId,full_name:full,private:input.private===true,description:input.description??null,html_url:'https://github.test/'+full,
+        default_branch:'main',created_at:new Date().toISOString(),owner:{login:state.bootstrapLogin}};
+      state.created[full.toLowerCase()]=made;
+      return send(201,made);
+    }
+    const made=/^\/repos\/([^/]+\/[^/]+)$/.exec(url.pathname);
+    if(made&&req.method==='GET'&&state.created[made[1].toLowerCase()])return send(200,state.created[made[1].toLowerCase()]);
     const p=url.pathname.replace('/repos/o/r','');
     if(!url.pathname.startsWith('/repos/o/r'))return send(404,{message:'Not Found'});
     if(p===''&&req.method==='GET')return send(200,{id:state.repoId,full_name:state.fullName??'o/r',default_branch:state.defaultBranch});

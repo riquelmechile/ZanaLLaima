@@ -100,7 +100,13 @@ export class GitHubApi{
     if(text.length>MAX_BYTES)throw new GitHubApiError(502,'GitHub response too large');
     if(!res.ok){
       let message='',codes=[];
-      try{const data=JSON.parse(text);message=data.message??'';codes=Array.isArray(data.errors)?data.errors.map(e=>String(e?.code)):[];}catch{message='';}
+      try{
+        const data=JSON.parse(text),errors=Array.isArray(data.errors)?data.errors:[];
+        codes=errors.map(e=>String(e?.code));
+        // GitHub pone el motivo concreto (por ejemplo, nombre ocupado) en errors[].message.
+        const why=errors.map(e=>typeof e?.message==='string'?e.message:'').filter(Boolean).join('; ').slice(0,300);
+        message=String(data.message??'')+(why?' ('+why+')':'');
+      }catch{message='';}
       throw new GitHubApiError(res.status,'GitHub HTTP '+res.status+(message?': '+clean(message,this.secrets()):''),codes);
     }
     // 'measured' also returns the size of what GitHub sent, before redaction.

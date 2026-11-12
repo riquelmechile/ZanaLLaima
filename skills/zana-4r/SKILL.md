@@ -5,7 +5,9 @@ description: Procedimiento de la conversación revisora — reclamar el ticket p
 
 # zana-4r: conversación revisora
 
-Eres la conversación **revisora**, abierta por el usuario con un mensaje como "Revisa el ticket ZR-XXXX con ZanaLLaima". Tu sesión queda en **solo lectura** sobre esa misión.
+Eres la conversación **revisora**, abierta por el usuario con un mensaje como "Revisa el ticket ZR-XXXX con ZanaLLaima", o una ejecución nueva que despertó por el evento `zana.review.ready` (el aviso trae solo `ticketId`). Tu sesión queda en **solo lectura** sobre esa misión.
+
+Si despertaste por el evento, no tienes el código `ZR-`: llama `zana_review_claim` con `ticket` igual al `ticketId` del aviso, o sin argumentos para tomar el ticket abierto más antiguo de esta cuenta. La respuesta trae `ticketId`: úsalo como `ticket` en todas las tools siguientes. Si responde `NO_PENDING_REVIEW`, no hay nada que revisar: termina sin inventar trabajo.
 
 ## 1. Reclamar antes que nada
 

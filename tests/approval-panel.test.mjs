@@ -60,7 +60,7 @@ test('bootstrap iniciado bloquea solicitud y decisión con operación y estado',
   const f=panelFixture();try{const p=request(f),id=insertStarted(f,'UNCERTAIN');
     assert.throws(()=>decide(f,p),new RegExp('BOOTSTRAP_ALREADY_STARTED:.*'+id+'.*UNCERTAIN'));
     assert.equal(f.db.prepare("SELECT count(*) n FROM metadata WHERE key LIKE 'zana:approval:%'").get().n,0);
-    assert.equal(approvalPanelStatus(f.db,{clientId:client,panelId:p.panel.panelId}).status,'PENDING');
+    assert.equal(approvalPanelStatus(f.db,{clientId:client,panelId:p.panel.panelId,now:T0+2}).status,'PENDING');
   }finally{f.db.close();}
 });
 

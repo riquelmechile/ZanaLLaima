@@ -37,7 +37,19 @@ test('el arranque remoto falla cerrado si full access no tiene token bootstrap s
 test('validates paths, accept and reviewer scope',()=>{
   for(const path of ['https://x','//repos/x','/repos/../x','/repos\\x','/repos/x\r\ny'])
     assert.throws(()=>validateGithubAdmin({method:'GET',path}),/PATH/);
+  assert.throws(()=>validateGithubAdmin({method:'TRACE',path:'/repos/o/r'}),/METHOD/);
+  assert.throws(()=>validateGithubAdmin({method:'GET',path:'repos/o/r'}),/PATH/);
+  assert.throws(()=>validateGithubAdmin({method:'GET',path:'/'+('x'.repeat(2000))}),/PATH/);
+  assert.throws(()=>validateGithubAdmin({method:'GET',path:'/repos/o/r',accept:'text/plain'}),/ACCEPT/);
+  assert.doesNotThrow(()=>validateGithubAdmin({method:'GET',path:'/repos/o/r',accept:'application/vnd.github+json'}));
+  for(const body of [null,[],1,'text'])
+    assert.throws(()=>validateGithubAdmin({method:'POST',path:'/repos/o/r',body}),/BODY/);
+  assert.throws(()=>validateGithubAdmin({method:'POST',path:'/repos/o/r',body:{large:'x'.repeat(1_048_576)}}),/BODY/);
+  assert.doesNotThrow(()=>validateGithubAdmin({method:'POST',path:'/repos/o/r',body:{ok:true}}));
   assert.throws(()=>validateGithubAdmin({method:'GET',path:'/repos/x',identity:'reviewer'}),/REVIEWER_SCOPE/);
+  assert.throws(()=>validateGithubAdmin({method:'GET',path:'/user/repository_invitations/7',identity:'reviewer'}),/REVIEWER_SCOPE/);
+  assert.throws(()=>validateGithubAdmin({method:'PATCH',path:'/user/repository_invitations',identity:'reviewer'}),/REVIEWER_SCOPE/);
+  assert.doesNotThrow(()=>validateGithubAdmin({method:'GET',path:'/user/repository_invitations',identity:'reviewer'}));
   assert.doesNotThrow(()=>validateGithubAdmin({method:'PATCH',path:'/user/repository_invitations/7',identity:'reviewer'}));
 });
 test('executes the bootstrap sequence and audit excludes bodies and tokens',async()=>{
@@ -54,6 +66,20 @@ test('executes the bootstrap sequence and audit excludes bodies and tokens',asyn
   const audit=githubAdminAudit({method:'PUT',path:'/repos/o/r?token=secret',body:{token:'secret'},identity:'owner'},201);
   assert.deepEqual(audit,{method:'PUT',path:'/repos/o/r',status:201,identity:'owner'});
   assert.equal(JSON.stringify(audit).includes('secret'),false);
+});
+
+test('acota respuestas grandes, usa owner por defecto y convierte errores desconocidos en 502',async()=>{
+  const calls=[];
+  const owner={request:async(method,path)=>{calls.push([method,path]);return {status:200,data:{text:'x'.repeat(70_000)}};}};
+  const large=await githubAdminRequest({method:'GET',path:'/repos/o/r'},{owner});
+  assert.deepEqual(calls,[['GET','/repos/o/r']]);
+  assert.equal(large.status,200);assert.equal(large.truncated,true);
+  assert.equal(typeof large.data,'string');assert.equal(large.data.length,64_000);
+  const unknown={request:async()=>{throw new TypeError('socket closed');}};
+  await assert.rejects(githubAdminRequest({method:'GET',path:'/repos/o/r'},{owner:unknown}),error=>{
+    assert.equal(error.status,502);assert.match(error.message,/^GITHUB_502: socket closed$/);return true;
+  });
+  assert.deepEqual(githubAdminAudit(),{method:undefined,path:'',status:null,identity:'owner'});
 });
 
 test('MCP real expone full access solo encendido, ejecuta bootstrap y audita solo metadatos',async()=>{

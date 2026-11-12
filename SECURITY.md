@@ -50,4 +50,4 @@ Ver también [seguridad de release](docs/release-security.md), [autorización de
 
 - El acceso REST administrativo opcional del orquestador y su riesgo se documentan en `docs/github-full-access.md`; viene apagado y usa un token separado.
 
-La herramienta `zana_mission_adopt` solo admite sesiones del mismo cliente OAuth creador, sin tickets revisados ni otra unidad con lease vivo. Una revisora jamás puede adoptar o fusionar su propia misión.
+La herramienta `zana_mission_adopt` solo admite sesiones del mismo cliente OAuth creador y sin otra unidad con lease vivo. Puede adoptar con el último ticket en `FINALIZED`, `STALE_SHA`, `EXPIRED` o `ABANDONED`; rechaza `OPEN`, `CLAIMED` y `FINALIZING`. Una revisora jamás puede adoptar o fusionar su propia misión.

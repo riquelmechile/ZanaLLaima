@@ -182,7 +182,7 @@ test('finalize revierte un encolado parcial sin perder la finalización',async()
         put(db,'zana:evsub:'+id,{schema:'zana.evsub.v1',id,ownerClient:ready.author.clientId,host:'zana-chatgpt',
           name:REVIEW_DONE_EVENT,url:'https://hooks.chatgpt.test.openai.com/cb/'+i,secret:SECRET,expiresAt,verifiedAt:new Date().toISOString()});
       }
-      for(let i=0;i<99;i++){
+      for(let i=0;i<199;i++){
         const id='evt_'+String(i).padStart(32,'0');
         put(db,'zana:evout:'+id,{schema:'zana.evout.v1',id,subId:'missing',ticketId:randomUUID(),name:REVIEW_DONE_EVENT,
           data:{ticketId:randomUUID(),verdict:'APPROVE'},state:'PENDING',attempts:0,nextAt:now,lastStatus:null,terminalAt:null});

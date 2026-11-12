@@ -356,7 +356,8 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     zana_capability_status:args=>capabilityContract(args.hostReport??{}),
     async zana_mission_adopt({missionId:id},session){
       let adopted;
-      await transact((mission,ctx)=>{
+      const alreadyAdopted=Symbol('already-adopted');
+      try{await transact((mission,ctx)=>{
         const db=ctx.db;
         const rm=remoteMission(db,id);
         if(!rm||!mission||mission.id!==id||(mission.status||'ACTIVE')!=='ACTIVE')
@@ -367,22 +368,25 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
           throw new Error('ADOPT_OTHER_CLIENT: la misión pertenece a otro cliente OAuth');
         if(sessionReviews(db,session.sessionId,id))
           throw new Error('REVIEWER_READ_ONLY: una sesión revisora no puede adoptar');
-        if(db.prepare("SELECT 1 FROM review_tickets WHERE mission_id=? AND reviewer_session=? AND state IN ('CLAIMED','FINALIZING')").get(id,session.sessionId))
-          throw new Error('REVIEWER_READ_ONLY: existe una revisión activa de esta sesión');
         if(mission.units.some(u=>u.status==='RUNNING'&&u.run?.sessionId!==session.sessionId&&Date.parse(u.run?.expiresAt)>Date.now()))
           throw new Error('ADOPT_MISSION_BUSY: otra sesión tiene una unidad activa');
-        const latest=db.prepare('SELECT state FROM review_tickets WHERE mission_id=? ORDER BY created_at DESC,ticket_id DESC LIMIT 1').get(id);
+        review.expireIn(db);
+        const latest=db.prepare('SELECT state FROM review_tickets WHERE mission_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1').get(id);
         if(latest&&!['FINALIZED','STALE_SHA','EXPIRED','ABANDONED'].includes(latest.state))
           throw new Error('ADOPT_REVIEW_IN_PROGRESS: existe una revisión en curso');
         const exists=db.prepare("SELECT 1 FROM remote_activity WHERE mission_id=? AND session_id=? AND kind='MISSION_ADOPT'").get(id,session.sessionId);
-        if(!exists){
-          recordActivity(db,{sessionId:session.sessionId,clientId:session.clientId,missionId:id,kind:'MISSION_ADOPT',tool:'zana_mission_adopt'});
-          writeAudit(db,{caller:{host:session.host,sessionId:session.sessionId,clientId:session.clientId},
-            tool:'mission_adopt',missionId:id,outcome:'ADOPTED',category:'write'});
-        }
-        adopted={missionId:id,adopted:true,alreadyAdopted:Boolean(exists)};
+        if(exists){adopted={missionId:id,adopted:true,alreadyAdopted:true};throw alreadyAdopted;}
+        const finalizedAt=db.prepare("SELECT finalized_at FROM review_tickets WHERE mission_id=? AND state='FINALIZED' ORDER BY created_at DESC,rowid DESC LIMIT 1")
+          .get(id)?.finalized_at??'';
+        const competing=db.prepare("SELECT 1 FROM remote_activity a JOIN remote_sessions s ON s.session_id=a.session_id WHERE a.mission_id=? AND a.kind='MISSION_ADOPT' AND a.session_id!=? AND a.created_at>? LIMIT 1")
+          .get(id,session.sessionId,finalizedAt);
+        if(competing)throw new Error('ADOPT_MISSION_BUSY: otra sesión viva ya adoptó la misión');
+        recordActivity(db,{sessionId:session.sessionId,clientId:session.clientId,missionId:id,kind:'MISSION_ADOPT',tool:'zana_mission_adopt'});
+        writeAudit(db,{caller:{host:session.host,sessionId:session.sessionId,clientId:session.clientId},
+          tool:'mission_adopt',missionId:id,outcome:'ADOPTED',category:'write'});
+        adopted={missionId:id,adopted:true,alreadyAdopted:false};
         return mission;
-      });
+      });}catch(error){if(error!==alreadyAdopted)throw error;}
       return adopted;
     },
     zana_mission_status:()=>operations.status(),

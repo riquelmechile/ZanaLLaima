@@ -266,3 +266,16 @@ test('la reconciliación adopta el repositorio que creó un intento anterior de 
     }finally{t.f.db.close();}
   }
 });
+
+test('el historial de intentos no se recorta: al llenarse no se gasta otra autorización',async()=>{
+  const t=setup(),key='zana:bootstrap:'+t.r.operationId;
+  try{
+    const row=JSON.parse(t.f.db.prepare('SELECT value FROM metadata WHERE key=?').get(key).value);
+    const attempts=Array.from({length:20},(_,i)=>({id:'attempt-'+i,at:new Date(T0).toISOString()}));
+    t.f.db.prepare('UPDATE metadata SET value=? WHERE key=?').run(JSON.stringify({...row,attempts}),key);
+    await assert.rejects(t.run(),/TOO_MANY_ATTEMPTS/);
+    assert.deepEqual([t.gh.posts().length,t.authorizedNow(),t.status().state],[0,true,'AWAITING_AUTHORIZATION']);
+    // Sin repositorio de ningún intento no hay nada que adoptar.
+    await assert.rejects(t.reconcile(),/NOTHING_TO_RECONCILE/);
+  }finally{t.f.db.close();}
+});

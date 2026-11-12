@@ -23,14 +23,18 @@ const repoOf=intent=>intent.owner+'/'+intent.name;
 const definite=e=>Number.isInteger(e?.status)&&(e.status>=400&&e.status<500&&![408,429].includes(e.status)||
   e.status===503&&/circuit open|token not configured/.test(String(e.message)));
 // Marca que va en la descripción del repositorio: liga el repo al intento que lo creó.
-// Cada reserva estrena un attemptId: lo que resuelve un intento no vale para otro.
-const mark=op=>'Creado por ZanaLLaima (operación '+op.operationId+', intento '+op.attemptId+')';
-// El repositorio encontrado es el de esta operación: cuenta, nombre, visibilidad, marca y fecha.
-const ours=(found,op,since)=>Boolean(found)&&Number.isSafeInteger(found.id)&&found.id>0&&
+// Cada reserva estrena un attemptId y queda en op.attempts: el historial de
+// intentos autorizados de la operación (cada uno gastó una autorización).
+const MAX_ATTEMPTS=20;
+const mark=(operationId,attemptId)=>'Creado por ZanaLLaima (operación '+operationId+', intento '+attemptId+')';
+// El repositorio encontrado es de esta operación: cuenta, nombre, visibilidad y la
+// marca de alguno de sus intentos, creado después de ese intento. Un intento
+// reemplazado puede terminar creando tarde: su repositorio sigue siendo de la operación.
+const ours=(found,op)=>Boolean(found)&&Number.isSafeInteger(found.id)&&found.id>0&&
   String(found.full_name).toLowerCase()===repoOf(op.intent).toLowerCase()&&
   String(found.owner?.login).toLowerCase()===op.intent.owner.toLowerCase()&&
-  found.private===(op.intent.visibility==='private')&&String(found.description??'').includes(mark(op))&&
-  Date.parse(found.created_at)>=since-SKEW_MS;
+  found.private===(op.intent.visibility==='private')&&(op.attempts??[]).some(a=>
+    String(found.description??'').includes(mark(op.operationId,a.id))&&Date.parse(found.created_at)>=Date.parse(a.at)-SKEW_MS);
 const slim=r=>({id:r.id,fullName:text(r.full_name),private:r.private===true,htmlUrl:text(r.html_url,300),defaultBranch:text(r.default_branch,100)});
 async function lookup(github,repo){
   try{return await github.repo(repo);}
@@ -41,11 +45,19 @@ export async function runBootstrap({rw,rr,github,allowed,clientId,operationId,no
   const at={clientId,operationId};
   const status=()=>rr(db=>bootstrapStatus(db,{...at,now:now()}));
   let attemptId=null;
-  // Solo escribe el intento que hizo la reserva, y solo desde el estado que espera.
+  let closedBefore=false;
+  // Marcar incierto y liberar solo valen para el intento que hizo la reserva y desde el estado que espera.
   const stamp=(fields,from)=>rw(db=>{
     const current=readOperation(db,at);
-    if(current.attemptId!==attemptId||from&&current.state!==from)fail('ATTEMPT_SUPERSEDED','Otro intento o una reconciliación tomó esta operación');
+    if(current.attemptId!==attemptId||current.state!==from)fail('ATTEMPT_SUPERSEDED','Otro intento o una reconciliación tomó esta operación');
     saveOperation(db,{...current,...fields,updatedAt:iso(now())});
+  });
+  // El repositorio que GitHub confirmó es un hecho: se registra aunque el intento
+  // haya sido reemplazado. Si la operación ya estaba cerrada, no se reescribe.
+  const close=repository=>rw(db=>{
+    const current=readOperation(db,at);
+    if(current.state==='DONE'){closedBefore=true;return;}
+    saveOperation(db,{...current,state:'DONE',repository:slim(repository),lastError:null,updatedAt:iso(now())});
   });
   const authorized=()=>rr(db=>bootstrapAuthorized(db,{...at,now:now()}));
   const op=await rr(db=>readOperation(db,at)),repo=repoOf(op.intent);
@@ -58,7 +70,9 @@ export async function runBootstrap({rw,rr,github,allowed,clientId,operationId,no
   const login=text((await github.request('GET','/user'))?.login,60);
   if(login.toLowerCase()!==op.intent.owner.toLowerCase())
     fail('OWNER_MISMATCH','El token de bootstrap crea repositorios de '+JSON.stringify(login)+', no de '+JSON.stringify(op.intent.owner));
-  if(await lookup(github,repo))fail('REPO_ALREADY_EXISTS','Ya existe '+JSON.stringify(repo)+'; elige otro nombre');
+  const taken=await lookup(github,repo);
+  if(ours(taken,op))fail('RECONCILIATION_REQUIRED','Un intento anterior de esta operación ya creó '+JSON.stringify(repo)+': usa zana_bootstrap_reconcile');
+  if(taken)fail('REPO_ALREADY_EXISTS','Ya existe '+JSON.stringify(repo)+'; elige otro nombre');
   const result=await executeBootstrap(op.intent,{
     authorize:async()=>await authorized()&&allowed(repo)===true,
     // Solo quien hace la transición recibe RESERVED: otra ejecución en curso no crea.
@@ -68,49 +82,53 @@ export async function runBootstrap({rw,rr,github,allowed,clientId,operationId,no
       if(current.state!=='AWAITING_AUTHORIZATION')return {state:'BUSY',digest};
       // Dentro de la misma transacción: la autorización sigue siendo de esta operación exacta.
       if(!bootstrapAuthorized(db,{...at,now:now()}))fail('AUTHORIZATION_REQUIRED','El operador debe autorizar esta creación (zana_bootstrap_request)');
+      // El historial no se recorta: olvidar un intento dejaría huérfano lo que cree tarde.
+      if((current.attempts??[]).length>=MAX_ATTEMPTS)fail('TOO_MANY_ATTEMPTS','Esta operación agotó sus intentos; pide el repositorio con otro nombre');
       consumeRepositoryApproval(db,{clientId,approvalId:current.approvalId,now:now()});
       attemptId=randomUUID();
-      saveOperation(db,{...current,state:'RESERVED',attemptId,lastError:null,updatedAt:iso(now())});
+      const attempts=[...(current.attempts??[]),{id:attemptId,at:iso(now())}];
+      saveOperation(db,{...current,state:'RESERVED',attemptId,attempts,lastError:null,updatedAt:iso(now())});
       return {state:'RESERVED',digest};
     }),
     markUncertain:()=>stamp({state:'UNCERTAIN',attemptedAt:iso(now())},'RESERVED'),
     createRepository:async({name,private:isPrivate})=>{
-      const started=now();
-      try{return await github.request('POST','/user/repos',{body:{name,private:isPrivate,auto_init:true,description:mark({operationId,attemptId})}});}
+      try{return await github.request('POST','/user/repos',{body:{name,private:isPrivate,auto_init:true,description:mark(operationId,attemptId)}});}
       catch(error){
         if(!definite(error))throw error;
         // Un rechazo puede esconder un repositorio creado a medias: se mira antes de liberar.
         const found=await lookup(github,repo).catch(()=>undefined);
         if(found===undefined)throw error; // no se pudo comprobar: queda incierto
-        if(ours(found,{...op,attemptId},started))return found;
+        if(ours(found,await rr(db=>readOperation(db,at))))return found;
         error.definite=true;throw error;
       }
     },
-    commit:({repository})=>stamp({state:'DONE',repository:slim(repository),lastError:null}),
+    commit:({repository})=>close(repository),
     release:({cause})=>stamp({state:'AWAITING_AUTHORIZATION',lastError:cause},'UNCERTAIN'),
   });
-  return {...await status(),reused:result.reused};
+  return {...await status(),reused:result.reused||closedBefore};
 }
 
-// Para una operación RESERVED o UNCERTAIN: mira en GitHub qué pasó de verdad.
-// Adopta el repositorio solo si lo creó este intento; si no existe, o existe
-// pero no es de este intento, la operación vuelve a esperar autorización.
+// Mira en GitHub qué pasó de verdad con una operación RESERVED o UNCERTAIN, o
+// con una que volvió a esperar autorización después de algún intento.
+// Adopta el repositorio si lo creó cualquier intento de esta operación. Si no
+// existe, o es ajeno, la operación RESERVED o UNCERTAIN vuelve a esperar autorización.
 export async function reconcileBootstrap({rw,rr,github,clientId,operationId,now=()=>Date.now()}){
   const at={clientId,operationId};
   const op=await rr(db=>readOperation(db,at)),repo=repoOf(op.intent);
-  if(!['RESERVED','UNCERTAIN'].includes(op.state))fail('NOTHING_TO_RECONCILE','La operación está en '+op.state);
-  const found=await lookup(github,repo);
-  const mine=op.state==='UNCERTAIN'&&ours(found,op,Date.parse(op.attemptedAt));
+  const pending=['RESERVED','UNCERTAIN'].includes(op.state);
+  if(!pending&&!(op.state==='AWAITING_AUTHORIZATION'&&op.attempts?.length))fail('NOTHING_TO_RECONCILE','La operación está en '+op.state);
+  const found=await lookup(github,repo),mine=ours(found,op);
+  if(!pending&&!mine)fail('NOTHING_TO_RECONCILE','Ningún intento anterior creó el repositorio');
   if(!found&&op.state==='UNCERTAIN'&&now()-Date.parse(op.attemptedAt)<SETTLE_MS)
     fail('RECONCILE_TOO_EARLY','Todavía no se puede saber si el intento creó el repositorio; reconcilia en un minuto');
   const next=mine?{state:'DONE',repository:slim(found),lastError:null}
-    :{state:'AWAITING_AUTHORIZATION',lastError:found?'REPO_ALREADY_EXISTS: existe un repositorio con ese nombre que no creó este intento'
+    :{state:'AWAITING_AUTHORIZATION',lastError:found?'REPO_ALREADY_EXISTS: existe un repositorio con ese nombre que no creó esta operación'
       :'El intento no creó el repositorio; pide una autorización nueva'};
   await rw(db=>{
     const current=readOperation(db,at);
     if(current.state!==op.state||current.attemptId!==op.attemptId)fail('NOTHING_TO_RECONCILE','La operación cambió mientras se reconciliaba');
     saveOperation(db,{...current,...next,updatedAt:iso(now())});
   });
-  if(found&&!mine)fail('REPO_ALREADY_EXISTS','Existe '+JSON.stringify(repo)+' y no lo creó este intento; elige otro nombre');
+  if(found&&!mine)fail('REPO_ALREADY_EXISTS','Existe '+JSON.stringify(repo)+' y no lo creó esta operación; elige otro nombre');
   return rr(db=>bootstrapStatus(db,{...at,now:now()}));
 }

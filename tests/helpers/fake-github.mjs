@@ -32,6 +32,11 @@ export async function fakeGitHubApi(){
     if(state.failNext){const f=state.failNext;state.failNext=null;return send(f.status,{message:f.message});}
     // Lo mínimo del bootstrap: quién es el token, crear un repositorio y consultarlo.
     if(url.pathname==='/user'&&req.method==='GET')return send(200,{login:token===BOOTSTRAP_TOKEN?state.bootstrapLogin:AUTHOR_LOGIN});
+    if(url.pathname==='/user/repository_invitations'&&req.method==='GET')return send(200,[{id:7}]);
+    if(url.pathname==='/user/repository_invitations/7'&&req.method==='PATCH'){
+      if(token!==REVIEWER_TOKEN)return send(403,{message:'Reviewer token required'});
+      return res.writeHead(204).end();
+    }
     if(url.pathname==='/user/repos'&&req.method==='POST'){
       if(token!==BOOTSTRAP_TOKEN)return send(403,{message:'Resource not accessible by this token'});
       if(state.failCreate){const f=state.failCreate;state.failCreate=null;if(f.createAnyway)state.created[(state.bootstrapLogin+'/'+JSON.parse(body).name).toLowerCase()]=f.createAnyway(JSON.parse(body));return send(f.status,{message:f.message,...(f.errors?{errors:f.errors}:{})});}
@@ -47,6 +52,9 @@ export async function fakeGitHubApi(){
     const p=url.pathname.replace('/repos/o/r','');
     if(!url.pathname.startsWith('/repos/o/r'))return send(404,{message:'Not Found'});
     if(p===''&&req.method==='GET')return send(200,{id:state.repoId,full_name:state.fullName??'o/r',default_branch:state.defaultBranch});
+    if(p==='/contents/.github/workflows/zana-checks.yml'&&req.method==='PUT')return send(201,{content:{path:'.github/workflows/zana-checks.yml'}});
+    if(p==='/collaborators/reviewer-bot'&&req.method==='PUT')return send(201,{id:7});
+    if(p==='/branches/main/protection'&&req.method==='PUT')return send(200,{required_pull_request_reviews:{required_approving_review_count:1}});
     let m;
     // files[path]: text (served as a base64 file) or a raw contents object.
     if((m=/^\/contents\/(.+)$/.exec(p))){

@@ -36,7 +36,9 @@ export async function githubAdminRequest(raw,clients){
     return {status,...bounded(data)};
   }catch(error){
     const status=error instanceof GitHubApiError?error.status:502;
-    return {status,data:{message:error instanceof Error?error.message:String(error)},error:true};
+    const failure=new Error('GITHUB_'+status+': '+(error instanceof Error?error.message:String(error)));
+    failure.status=status;
+    throw failure;
   }
 }
 export function githubAdminAudit(input,status){

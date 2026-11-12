@@ -164,7 +164,8 @@ const NEW_TOOLS={
     z.object({operation:z.string().min(1).max(64),arguments:z.record(z.string(),z.unknown()).optional(),
       missionId:missionId().optional()}).strict()],
 };
-export const REMOTE_TOOL_NAMES=Object.freeze([...REUSED,...Object.keys(NEW_TOOLS)].sort());
+export const REMOTE_TOOL_NAMES=Object.freeze([...REUSED,...Object.keys(NEW_TOOLS)
+  .filter(name=>name!=='zana_github_request')].sort());
 
 export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fetcher=globalThis.fetch,
   downstreamFetcher=fetcher,signer=ActorSigner.generate(),eventPost=safeWebhookPost}={}){
@@ -678,7 +679,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
   async function dispatch(name,args,session,extra){
     const fn=ops[name];
     if(!fn)return {isError:true,content:[{type:'text',text:'Unknown tool'}]};
-    let outcome='OK',data=null,result,failure=null;
+    let outcome='OK',data=null,result,failure=null,failureStatus=null;
     try{
       if((name==='zana_project_approval_panel'||name==='zana_panel_decide')&&extra?.uiAvailable!==true)
         throw new Error('UI_UNAVAILABLE: este cliente no muestra paneles; usa zana_plan_approval_request y la página del operador');
@@ -687,6 +688,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       result=data?.passthrough?redactDeep(data.passthrough,secrets()):redactDeep(data,secrets());
     }catch(error){
       outcome='ERROR';
+      failureStatus=Number.isInteger(error?.status)?error.status:null;
       const text=error instanceof DeadlineError
         ?'TOOL_DEADLINE: '+name+' exceeded '+config.toolDeadlineMs+' ms; the operation may still complete, read state before retrying'
         :clean(error,secrets());
@@ -699,9 +701,11 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       try{
         // The mission the call belongs to: named, returned, or the active one.
         const missionId=args?.missionId??data?.missionId??(await readState().catch(()=>null))?.id??null;
+        const githubDetail=name==='zana_github_request'?githubAdminAudit(args,data?.status??failureStatus):null;
         const auditArgs=name==='zana_panel_decide'?{panelId:args?.panelId,decision:args?.decision}:
-          name==='zana_github_request'?githubAdminAudit(args,data?.status):args;
-        await audit({caller:session,tool:name,missionId,outcome,args:auditArgs,category:categoryOf(name),...(failure?{detail:{error:failure}}:{})});
+          name==='zana_github_request'?undefined:args;
+        await audit({caller:session,tool:name,missionId,outcome,args:auditArgs,category:categoryOf(name),
+          ...(githubDetail?{detail:githubDetail}:failure?{detail:{error:failure}}:{})});
       }catch(error){
         auditFailed=true;
         console.error('ZanaLLaima audit write failed:',clean(error,secrets()));

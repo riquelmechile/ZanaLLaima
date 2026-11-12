@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {InMemoryTransport} from '@modelcontextprotocol/server';
 import {remoteConfig} from '../src/remote-config.mjs';
+import {createRemoteRuntime} from '../src/remote.mjs';
 import {validateGithubAdmin,githubAdminRequest,githubAdminAudit} from '../src/github-admin.mjs';
 import {remoteFixture} from './helpers/remote-fixture.mjs';
 import {BOOTSTRAP_TOKEN,REVIEWER_TOKEN} from './helpers/fake-github.mjs';
@@ -28,9 +29,9 @@ test('full access is off and fails closed without a distinct bootstrap token',()
   assert.throws(()=>remoteConfig({ZANA_GITHUB_FULL_ACCESS:'true'}),/TOKEN_MISSING/);
   assert.throws(()=>remoteConfig({ZANA_GITHUB_FULL_ACCESS:'true',ZANA_BOOTSTRAP_GITHUB_TOKEN:'x',ZANA_DOWNSTREAM_GITHUB_TOKEN:'x'}),/TOKEN_SHARED/);
 });
-test('el arranque remoto falla cerrado si full access no tiene token bootstrap separado',async()=>{
-  await assert.rejects(remoteFixture({envExtra:{ZANA_GITHUB_FULL_ACCESS:'true'}}),/TOKEN_MISSING/);
-  await assert.rejects(remoteFixture({envExtra:{ZANA_GITHUB_FULL_ACCESS:'true',ZANA_BOOTSTRAP_GITHUB_TOKEN:'same',
+test('el arranque remoto falla cerrado si full access no tiene token bootstrap separado',()=>{
+  assert.throws(()=>createRemoteRuntime({env:{ZANA_GITHUB_FULL_ACCESS:'true'}}),/TOKEN_MISSING/);
+  assert.throws(()=>createRemoteRuntime({env:{ZANA_GITHUB_FULL_ACCESS:'true',ZANA_BOOTSTRAP_GITHUB_TOKEN:'same',
     ZANA_DOWNSTREAM_GITHUB_TOKEN:'same'}}),/TOKEN_SHARED/);
 });
 test('validates paths, accept and reviewer scope',()=>{

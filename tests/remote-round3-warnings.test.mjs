@@ -24,6 +24,15 @@ async function review(f,ticket,s,risk=clean('risk')){
     assert.equal((await f.call('zana_review_lens_submit',{ticket,...l},s)).error,undefined);
   return f.call('zana_review_finalize',{ticket,execution:'PARALLEL_SUBAGENTS'},s);
 }
+async function finalizeReady(f,ready){
+  const req=await f.call('zana_review_request',{missionId:ready.missionId},ready.author);
+  const reviewer=await f.session('zana-chatgpt',ready.author.clientId);
+  assert.equal((await f.call('zana_review_claim',{ticket:req.ticket},reviewer)).state,'CLAIMED');
+  await readDiff(f.call,req.ticket,reviewer);
+  for(const lens of ['risk','readability','reliability','resilience'])
+    assert.equal((await f.call('zana_review_lens_submit',{ticket:req.ticket,...clean(lens)},reviewer)).error,undefined);
+  return {req,reviewer};
+}
 
 test('P2: failed-job logs use the Actions job id, not the check run id (details_url, run jobs by name, none)',async()=>{
   const f=await remoteFixture();
@@ -248,4 +257,52 @@ test('delivery authority: only the current ticket FINALIZED APPROVE on the head 
   for(const bad of [{state:'ABANDONED'},{state:'FINALIZING'},{verdict:'REQUEST_CHANGES'},{sha:'other'},{github_review_id:null},{github_review_id:8}])
     assert.equal(ticketAuthority({...ok,...bad},'h',rv).ok,false,JSON.stringify(bad));
   assert.match(ticketAuthority({...ok,github_review_id:8},'h',rv).reason,/not the latest decisive/);
+});
+
+test('rev63: una adopción de una sesión muerta no bloquea durante 30 días',async()=>{
+  const f=await remoteFixture();
+  try{
+    const ready=await f.authorReady(),missionId=ready.missionId;
+    const dead=await f.session('zana-chatgpt',ready.author.clientId);
+    assert.equal((await f.call('zana_mission_adopt',{missionId},dead)).adopted,true);
+    const old=new Date(Date.now()-29*86_400_000).toISOString();
+    await remoteWrite(db=>db.prepare('UPDATE remote_sessions SET last_seen_at=? WHERE session_id=?').run(old,dead.sessionId));
+    await remoteWrite(db=>pruneRemote(db));
+    const next=await f.session('zana-chatgpt',ready.author.clientId);
+    const result=await f.call('zana_mission_adopt',{missionId},next);
+    assert.equal(result.adopted,true,'sesión muerta aún bloquea: '+JSON.stringify(result));
+  }finally{await f.cleanup();}
+});
+
+test('rev63: actividad renueva el lease de adopción y, vencido, otra sesión adopta',async()=>{
+  const f=await remoteFixture();
+  try{
+    const ready=await f.authorReady(),missionId=ready.missionId;
+    const owner=await f.session('zana-chatgpt',ready.author.clientId);
+    assert.equal((await f.call('zana_mission_adopt',{missionId},owner)).adopted,true);
+    const old=new Date(Date.now()-60*60_000).toISOString();
+    await remoteWrite(db=>db.prepare('UPDATE remote_activity SET created_at=? WHERE mission_id=? AND session_id=?').run(old,missionId,owner.sessionId));
+    const notes=(await f.call('zana_start_batch',{},owner)).packets.find(packet=>packet.unitId==='notes');
+    assert.ok(notes);
+    assert.equal((await f.call('zana_complete_unit',{unitId:notes.unitId,token:notes.token,leaseGeneration:notes.leaseGeneration,
+      outcome:{success:true,summary:'Notas listas',evidence:['Actividad de la sesión adoptante']}},owner)).error,undefined);
+    const next=await f.session('zana-chatgpt',ready.author.clientId);
+    assert.match((await f.call('zana_mission_adopt',{missionId},next)).error,/ADOPT_MISSION_BUSY.*hasta/);
+    await remoteWrite(db=>db.prepare('UPDATE remote_activity SET created_at=? WHERE mission_id=? AND session_id=?').run(old,missionId,owner.sessionId));
+    assert.equal((await f.call('zana_mission_adopt',{missionId},next)).adopted,true);
+  }finally{await f.cleanup();}
+});
+
+test('rev63: transacción abortada en events.queue no deja archivo sin FINALIZED',async()=>{
+  const f=await remoteFixture();
+  try{
+    const ready=await f.authorReady(),missionId=ready.missionId;
+    const {req,reviewer}=await finalizeReady(f,ready);
+    f.runtime.events.queue=db=>{db.exec('ROLLBACK');throw new Error('SQLITE_FULL simulado');};
+    await f.call('zana_review_finalize',{ticket:req.ticket,execution:'SEQUENTIAL_SAME_CONVERSATION'},reviewer);
+    const state=await remoteRead(db=>({
+      ticket:db.prepare('SELECT state FROM review_tickets WHERE mission_id=?').get(missionId).state,
+      archived:db.prepare('SELECT COUNT(*) n FROM review_archive WHERE mission_id=?').get(missionId).n}));
+    assert.ok(!(state.archived>0&&state.ticket!=='FINALIZED'),'escritura parcial: archivo sin FINALIZED '+JSON.stringify(state));
+  }finally{await f.cleanup();}
 });

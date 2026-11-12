@@ -47,3 +47,5 @@ Lo mismo vale para el cuerpo del PR que la revisora lee y pasa a los lentes (`za
 - El modo stdio local queda congelado: su código sigue probado pero no se endurece más. No lo expongas a la red.
 
 Ver también [seguridad de release](docs/release-security.md), [autorización de escrituras](docs/safety-lifecycle.md) y [revisión atada a Git](docs/solo-rdd.md).
+
+- El acceso REST administrativo opcional del orquestador y su riesgo se documentan en `docs/github-full-access.md`; viene apagado y usa un token separado.

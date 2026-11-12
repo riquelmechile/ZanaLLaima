@@ -201,3 +201,5 @@ Versión candidata en PR #1. Sin tag, release ni despliegue.
 - Llaves reales de operador y CI, environment protegido y atestación CI emitida por GitHub.
 - Verificación de aislamiento del sistema operativo y E2E Codex por el operador.
 - Revisión independiente, aprobación de PR sobre SHA exacto y decisión humana de merge.
+
+- Acceso GitHub completo opcional para el orquestador mediante `zana_github_request`, con token separado, alcance reviewer restringido y auditoría sin secretos.

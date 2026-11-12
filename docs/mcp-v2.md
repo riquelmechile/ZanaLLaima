@@ -124,3 +124,5 @@ La herramienta no garantiza que otras capacidades del host hayan sido deshabilit
 El environment `ci-attestation` exige como reviewer requerido la cuenta revisora (`ZANA_CI_REVIEWER` en `scripts/setup-ci-signing.sh`). Si pertenece al mismo dueño que la cuenta autora, la separación de cuentas no constituye independencia organizacional. La configuración debe impedir self-review y mantener solo `main` como deployment policy. El workflow permanece desactivado hasta configurar el secreto, la llave pública real y `ZANA_CI_ATTESTATION_READY=true` con controles humanos. La llave `keys/ci-verifier.pub` sigue siendo placeholder hasta entonces.
 
 Para verificar el run firmado se usa `gh run list --workflow ci-attestation.yml`, `gh run view` y la descarga del artifact firmado. Ningún sobre CI sustituye la aprobación separada del operador ni autoriza merge o despliegue. Ver [operator-checklist.md](operator-checklist.md) y [release-security.md](release-security.md).
+
+- `zana_github_request` aparece solo con `ZANA_GITHUB_FULL_ACCESS=true`; permite REST administrativo al orquestador y audita cada llamada como `github_admin`.

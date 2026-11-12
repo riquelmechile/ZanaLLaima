@@ -78,7 +78,7 @@ export class GitHubApi{
   }
   get configured(){return Boolean(this.token);}
   secrets(){return this.token?[this.token]:[];}
-  async request(method,path,{body,accept='application/vnd.github+json',raw=false}={}){
+  async request(method,path,{body,accept='application/vnd.github+json',raw=false,withStatus=false}={}){
     if(!this.token)throw new GitHubApiError(503,'GitHub token not configured on the server');
     const breaker=breakerFor(this.origin);
     if(Date.now()<breaker.openUntil)
@@ -112,8 +112,9 @@ export class GitHubApi{
     // 'measured' also returns the size of what GitHub sent, before redaction.
     if(raw==='measured')return {text:redactText(text,this.secrets()),bytes:Buffer.byteLength(text,'utf8')};
     if(raw)return redactText(text,this.secrets());
-    if(!text)return null;
-    try{return JSON.parse(text);}catch{throw new GitHubApiError(502,'GitHub answered without JSON');}
+    if(!text)return withStatus?{status:res.status,data:null}:null;
+    try{const data=JSON.parse(text);return withStatus?{status:res.status,data}:data;}
+    catch{throw new GitHubApiError(502,'GitHub answered without JSON');}
   }
   async repo(repo){return this.request('GET',repoPath(repo));}
   // A small JSON file of the repository at ref (≤4 KB): null if absent (404),

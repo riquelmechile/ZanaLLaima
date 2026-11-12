@@ -250,3 +250,5 @@ Cada `remote-*` exige solo la DB que usa, con ruta absoluta y ya existente, así
 | El servicio no arranca: `... name different hosts` | `ZANA_PUBLIC_HOST` y `ZANA_PUBLIC_MCP_URL` apuntan a hosts distintos; basta con definir uno. |
 | `zana_delivery_status` dice `REVIEWER_IS_AUTHOR` | La cuenta revisora tiene commits en el PR. |
 | La review de la revisora no cuenta para la protección | La revisora no tiene permiso Write en el repo. |
+
+Con `ZANA_GITHUB_FULL_ACCESS=true`, el orquestador ejecuta por sí mismo la preparación de §2 y la verifica con GET antes de iniciar misiones; consulte `github-full-access.md`.

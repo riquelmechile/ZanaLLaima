@@ -88,7 +88,7 @@ const NEW_TOOLS={
     z.object({workspaceId:z.string().uuid(),expectedVersion:z.number().int().min(0),owner:z.string().min(1).max(100),
       name:z.string().min(1).max(100),visibility:z.enum(['private','public']).default('private')}).strict()],
   zana_panel_decide:['Decisión privada del operador desde el panel MCP Apps; no llamar desde el modelo',false,
-    z.object({panelId:z.string().min(1),nonce:z.string().min(1),decision:z.enum(['allow','deny'])}).strict()],
+    z.object({panelId:z.string().min(1).max(128),nonce:z.string().min(1).max(128),decision:z.enum(['allow','deny'])}).strict()],
   zana_bootstrap_execute:['Create the GitHub repository of a bootstrap operation the operator already authorized. One authorization is one attempt. If GitHub rejects it the cause is kept and a new authorization is needed; if the outcome is unknown it answers OUTCOME_UNKNOWN and must be settled with zana_bootstrap_reconcile, never retried',false,
     z.object({operationId:z.string().uuid()}).strict()],
   zana_bootstrap_reconcile:['Settle a bootstrap operation whose creation attempt had an unknown outcome: looks at GitHub and adopts the repository only if an authorized attempt of this same operation created it (also when a replaced attempt created it late)',false,
@@ -326,7 +326,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     zana_panel_decide:({panelId,nonce,decision},session)=>rw(db=>{
       const decided=decideApprovalPanel(db,{clientId:session.clientId,panelId,nonce,decision,
         allowed:repo=>repoAllowed(config,repo)});
-      if(['APPROVED','DENIED'].includes(decided.status)){
+      if(['APPROVED','DENIED'].includes(decided.status)&&decided.replayed!==true){
         const panel=approvalPanelStatus(db,{clientId:session.clientId,panelId});
         writeAudit(db,{caller:{host:'operator',sessionId:session.sessionId,clientId:session.clientId},
           tool:'operator_panel_approval',outcome:decided.status,category:'operator',
@@ -673,6 +673,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       if((name==='zana_project_approval_panel'||name==='zana_panel_decide')&&extra?.uiAvailable!==true)
         throw new Error('UI_UNAVAILABLE: este cliente no muestra paneles; usa zana_plan_approval_request y la página del operador');
       data=await within(Promise.resolve().then(()=>fn(args??{},session,extra)),config.toolDeadlineMs,name);
+      if(name==='zana_panel_decide'&&data?.denied===true)outcome='REFUSED';
       result=data?.passthrough?redactDeep(data.passthrough,secrets()):redactDeep(data,secrets());
     }catch(error){
       outcome='ERROR';

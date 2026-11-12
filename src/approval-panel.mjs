@@ -58,8 +58,9 @@ function transaction(db,work){
     return result;
   }catch(error){
     // RAISE(ROLLBACK), SQLITE_FULL e IOERR pueden haber eliminado el savepoint.
-    // Nunca reemplazar el error original con 'no such savepoint'.
-    if(db.isTransaction)try{db.exec('ROLLBACK TO zana_approval_panel');db.exec('RELEASE zana_approval_panel');}catch{}
+    if(!db.isTransaction)throw error;
+    try{db.exec('ROLLBACK TO zana_approval_panel');db.exec('RELEASE zana_approval_panel');}
+    catch(rollback){throw new Error(rollback.message,{cause:error});}
     throw error;
   }
 }
@@ -122,11 +123,16 @@ export function decideApprovalPanel(db,{clientId,panelId,decision,nonce,allowed,
       const next={...row,status,decidedAt:iso(now),...extra};save(db,next);
       return panelView(next,currentPlan(db,next));
     };
-    if(row.status!=='PENDING')fail('PANEL_NOT_PENDING','Este panel ya no admite decisiones');
-    if(now>=Date.parse(row.expiresAt))return finish('EXPIRED');
     if(!['allow','deny'].includes(decision))fail('INVALID_DECISION','La decisión debe ser allow o deny');
     const supplied=digest(typeof nonce==='string'?nonce:'');
-    if(!timingSafeEqual(Buffer.from(row.nonceHash,'hex'),Buffer.from(supplied,'hex'))){
+    const nonceMatches=timingSafeEqual(Buffer.from(row.nonceHash,'hex'),Buffer.from(supplied,'hex'));
+    if(row.status==='APPROVED'){
+      if(decision==='allow'&&nonceMatches&&row.result)return {status:'APPROVED',...row.result,planDigest:row.planDigest,replayed:true};
+      fail('PANEL_NOT_PENDING','Este panel ya no admite decisiones');
+    }
+    if(row.status!=='PENDING')fail('PANEL_NOT_PENDING','Este panel ya no admite decisiones');
+    if(now>=Date.parse(row.expiresAt))return finish('EXPIRED');
+    if(!nonceMatches){
       const failures=row.failures+1,status=failures>=MAX_FAILURES?'LOCKED':'PENDING';
       const next={...row,failures,status};save(db,next);
       return {status,denied:true,attemptsLeft:MAX_FAILURES-failures};

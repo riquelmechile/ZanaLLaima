@@ -376,10 +376,11 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
           throw new Error('ADOPT_REVIEW_IN_PROGRESS: existe una revisión en curso');
         const finalizedAt=db.prepare("SELECT finalized_at FROM review_tickets WHERE mission_id=? AND state='FINALIZED' ORDER BY created_at DESC,rowid DESC LIMIT 1")
           .get(id)?.finalized_at??'';
-        const leaseFor=(sessionId,adoptedAt=null)=>{
-          const start=adoptedAt??db.prepare("SELECT created_at FROM remote_activity WHERE mission_id=? AND session_id=? AND kind='MISSION_ADOPT' AND created_at>? ORDER BY created_at DESC,seq DESC LIMIT 1")
-            .get(id,sessionId,finalizedAt)?.created_at;
-          if(!start)return null;
+        const latestAdopt=db.prepare("SELECT session_id,created_at adopted_at FROM remote_activity WHERE mission_id=? AND kind='MISSION_ADOPT' AND created_at>? ORDER BY created_at DESC,seq DESC LIMIT 1")
+          .get(id,finalizedAt);
+        const leaseFor=sessionId=>{
+          if(!latestAdopt||latestAdopt.session_id!==sessionId)return null;
+          const start=latestAdopt.adopted_at;
           const last=db.prepare('SELECT created_at FROM remote_activity WHERE mission_id=? AND session_id=? AND created_at>=? ORDER BY created_at DESC,seq DESC LIMIT 1')
             .get(id,sessionId,start)?.created_at??start;
           const expiresAt=new Date(Date.parse(last)+config.claimTtlMinutes*60_000).toISOString();
@@ -391,10 +392,8 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
           // El símbolo revierte transact para no persistir un STATE_CHANGED idempotente.
           throw alreadyAdopted;
         }
-        const candidates=db.prepare("SELECT session_id,MAX(created_at) adopted_at FROM remote_activity WHERE mission_id=? AND kind='MISSION_ADOPT' AND session_id!=? AND created_at>? GROUP BY session_id")
-          .all(id,session.sessionId,finalizedAt);
-        const competing=candidates.map(row=>leaseFor(row.session_id,row.adopted_at)).find(lease=>lease?.active);
-        if(competing)throw new Error('ADOPT_MISSION_BUSY: otra sesión mantiene la adopción hasta '+competing.expiresAt);
+        const competing=latestAdopt?.session_id===session.sessionId?null:leaseFor(latestAdopt?.session_id);
+        if(competing?.active)throw new Error('ADOPT_MISSION_BUSY: otra sesión mantiene la adopción hasta '+competing.expiresAt);
         recordActivity(db,{sessionId:session.sessionId,clientId:session.clientId,missionId:id,kind:'MISSION_ADOPT',tool:'zana_mission_adopt'});
         writeAudit(db,{caller:{host:session.host,sessionId:session.sessionId,clientId:session.clientId},
           tool:'mission_adopt',missionId:id,outcome:'ADOPTED',category:'write'});

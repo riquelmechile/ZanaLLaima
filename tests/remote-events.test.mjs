@@ -163,6 +163,40 @@ test('repetir adopt en la misma sesión no emite STATE_CHANGED',async()=>{
   }finally{await t.f.cleanup();}
 });
 
+test('finalize revierte un encolado parcial sin perder la finalización',async()=>{
+  const t=await setup();
+  try{
+    const ready=await t.f.authorReady(),missionId=ready.missionId;
+    const req=await t.f.call('zana_review_request',{missionId},ready.author);
+    const reviewer=await t.f.session('zana-chatgpt',ready.author.clientId);
+    assert.equal((await t.f.call('zana_review_claim',{ticket:req.ticket},reviewer)).state,'CLAIMED');
+    const page=await t.f.call('zana_review_diff',{ticket:req.ticket,page:0},reviewer);
+    for(let i=1;i<page.manifest.totalPages;i++)await t.f.call('zana_review_diff',{ticket:req.ticket,page:i},reviewer);
+    for(const lens of ['risk','readability','reliability','resilience'])
+      assert.equal((await t.f.call('zana_review_lens_submit',{ticket:req.ticket,lens,findings:[],evidence:['Diff completo']},reviewer)).error,undefined);
+    const ticketId=await remoteRead(db=>db.prepare('SELECT ticket_id FROM review_tickets WHERE mission_id=?').get(missionId).ticket_id);
+    await remoteWrite(db=>{
+      const now=Date.now(),expiresAt=new Date(now+86_400_000).toISOString();
+      for(let i=0;i<2;i++){
+        const id='sub_done_'+i;
+        put(db,'zana:evsub:'+id,{schema:'zana.evsub.v1',id,ownerClient:ready.author.clientId,host:'zana-chatgpt',
+          name:REVIEW_DONE_EVENT,url:'https://hooks.chatgpt.test.openai.com/cb/'+i,secret:SECRET,expiresAt,verifiedAt:new Date().toISOString()});
+      }
+      for(let i=0;i<99;i++){
+        const id='evt_'+String(i).padStart(32,'0');
+        put(db,'zana:evout:'+id,{schema:'zana.evout.v1',id,subId:'missing',ticketId:randomUUID(),name:REVIEW_DONE_EVENT,
+          data:{ticketId:randomUUID(),verdict:'APPROVE'},state:'PENDING',attempts:0,nextAt:now,lastStatus:null,terminalAt:null});
+      }
+    });
+    const done=await t.f.call('zana_review_finalize',{ticket:req.ticket,execution:'SEQUENTIAL_SAME_CONVERSATION'},reviewer);
+    assert.equal(done.state,'FINALIZED',JSON.stringify(done));
+    const queued=await remoteRead(db=>db.prepare("SELECT COUNT(*) count FROM metadata WHERE key LIKE 'zana:evout:%' AND value LIKE ?")
+      .get('%'+ticketId+'%').count);
+    assert.equal(queued,0,'quedó la primera escritura parcial de events.queue');
+  }finally{await t.f.cleanup();}
+});
+
+
 test('finalize publica review.done una vez, con el veredicto y solo al monitor done',async()=>{
   const t=await setup();
   try{

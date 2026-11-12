@@ -24,10 +24,11 @@ function boot(){
   return {html,ids,messages,parent,receive};
 }
 const flush=async()=>{for(let i=0;i<5;i++)await Promise.resolve();};
+const plain=value=>JSON.parse(JSON.stringify(value));
 async function initialize(app){
   const request=app.messages.find(x=>x.method==='ui/initialize');
   assert.ok(request,'la vista inicia el protocolo MCP Apps');
-  assert.deepEqual(request.params.appCapabilities.availableDisplayModes,['inline']);
+  assert.deepEqual(plain(request.params.appCapabilities.availableDisplayModes),['inline']);
   app.receive({jsonrpc:'2.0',id:request.id,result:{protocolVersion:'2026-01-26',hostCapabilities:{serverTools:{},openLinks:{}}}});
   await flush();
   assert.ok(app.messages.some(x=>x.method==='ui/notifications/initialized'));
@@ -53,10 +54,10 @@ test('handshake y aprobación siguen decide, execute y contexto sin filtrar nonc
   assert.equal(app.ids.actions.hidden,false);assert.match(app.ids.plan.textContent,/Crear demo/);
   app.ids.approve.click();await flush();
   const decide=app.messages.find(x=>x.method==='tools/call');
-  assert.deepEqual(decide.params,{name:'zana_panel_decide',arguments:{panelId:'panel-1',nonce:'secret-nonce',decision:'allow'}});
+  assert.deepEqual(plain(decide.params),{name:'zana_panel_decide',arguments:{panelId:'panel-1',nonce:'secret-nonce',decision:'allow'}});
   app.receive({jsonrpc:'2.0',id:decide.id,result:{structuredContent:{status:'APPROVED',operationId:'op-1'}}});await flush();
   const execute=app.messages.find(x=>x.method==='tools/call'&&x.params.name==='zana_bootstrap_execute');
-  assert.deepEqual(execute.params.arguments,{operationId:'op-1'});
+  assert.deepEqual(plain(execute.params.arguments),{operationId:'op-1'});
   app.receive({jsonrpc:'2.0',id:execute.id,result:{structuredContent:{state:'DONE',created:{fullName:'zana/demo',htmlUrl:'repo.example.invalid/zana/demo'}}}});await flush();
   const update=app.messages.find(x=>x.method==='ui/update-model-context');
   assert.match(update.params.content[0].text,/operationId=op-1, estado=DONE/);

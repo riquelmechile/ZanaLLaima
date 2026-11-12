@@ -121,3 +121,26 @@ test('validaciones de entrada cierran ramas de seguridad',()=>{
     assert.equal(decide(f,p).status,'SUPERSEDED');
   }finally{f.db.close();}
 });
+
+test('RAISE ROLLBACK preserva el error original dentro y fuera de transacción',()=>{
+  for(const outer of [false,true]){const f=panelFixture();try{const p=request(f);
+    f.db.exec("CREATE TRIGGER panel_boom BEFORE INSERT ON metadata WHEN NEW.key LIKE 'zana:approval:%' BEGIN SELECT RAISE(ROLLBACK,'boom'); END");
+    if(outer)f.db.exec('BEGIN IMMEDIATE');
+    assert.throws(()=>decide(f,p),/boom/);
+    assert.equal(f.db.isTransaction,false);
+  }finally{f.db.close();}}
+});
+
+test('fallo de aprobación del plan usa código propio',()=>{
+  const f=panelFixture();try{const p=request(f);
+    f.db.exec("CREATE TRIGGER supersede_plan AFTER INSERT ON metadata WHEN json_extract(NEW.value,'$.effect')='PROJECT_PLAN' BEGIN UPDATE metadata SET value=json_set(value,'$.archivedAt','2026-11-11T12:00:00.000Z') WHERE json_extract(value,'$.workspaceId')='"+f.workspace.workspaceId+"'; END");
+    assert.throws(()=>decide(f,p),/PANEL_PLAN_NOT_APPROVED/);
+  }finally{f.db.close();}
+});
+
+test('fallo de aprobación del repositorio usa código propio',()=>{
+  const f=panelFixture();try{const p=request(f);
+    f.db.exec("CREATE TRIGGER supersede_repo AFTER INSERT ON metadata WHEN json_extract(NEW.value,'$.effect')='CREATE_REPOSITORY' BEGIN UPDATE metadata SET value=json_set(value,'$.status','REVOKED') WHERE json_extract(value,'$.effect')='PROJECT_PLAN'; END");
+    assert.throws(()=>decide(f,p),/PANEL_REPOSITORY_NOT_APPROVED/);
+  }finally{f.db.close();}
+});

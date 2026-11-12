@@ -121,6 +121,22 @@ test('adopt expira de forma perezosa un ticket OPEN vencido',async()=>{
   }finally{await t.f.cleanup();}
 });
 
+test('review.ready conserva el id legado para deduplicar una entrega ACCEPTED',async()=>{
+  const t=await setup();
+  try{
+    const clientId='zc_legacy',ticketId='11111111-1111-4111-8111-111111111111',subId='sub_legacy';
+    const legacyId='evt_'+createHash('sha256').update(subId+':'+ticketId).digest('hex').slice(0,32);
+    const added=await remoteWrite(db=>{
+      put(db,'zana:evsub:'+subId,{schema:'zana.evsub.v1',id:subId,ownerClient:clientId,host:'zana-chatgpt',
+        url:URL1,secret:SECRET,expiresAt:new Date(Date.now()+86_400_000).toISOString(),verifiedAt:new Date().toISOString()});
+      put(db,'zana:evout:'+legacyId,{schema:'zana.evout.v1',id:legacyId,subId,ticketId,state:'ACCEPTED',attempts:1,
+        nextAt:Date.now(),lastStatus:200,terminalAt:Date.now()});
+      return queueEvent(db,{clientId,ticketId});
+    });
+    assert.equal(added,0,'se reencoló un aviso ya entregado porque cambió su id');
+  }finally{await t.f.cleanup();}
+});
+
 test('finalize publica review.done una vez, con el veredicto y solo al monitor done',async()=>{
   const t=await setup();
   try{

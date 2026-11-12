@@ -150,6 +150,19 @@ test('solo una de dos sesiones simultáneas adopta la misión',async()=>{
   }finally{await t.f.cleanup();}
 });
 
+test('repetir adopt en la misma sesión no emite STATE_CHANGED',async()=>{
+  const t=await setup();
+  try{
+    const ready=await t.f.authorReady(),missionId=ready.missionId;
+    const session=await t.f.session('zana-chatgpt',ready.author.clientId);
+    assert.equal((await t.f.call('zana_mission_adopt',{missionId},session)).adopted,true);
+    const count=()=>remoteRead(db=>db.prepare("SELECT COUNT(*) count FROM state_events WHERE category='STATE_CHANGED'").get().count);
+    const before=await count();
+    assert.equal((await t.f.call('zana_mission_adopt',{missionId},session)).alreadyAdopted,true);
+    assert.equal(await count(),before);
+  }finally{await t.f.cleanup();}
+});
+
 test('finalize publica review.done una vez, con el veredicto y solo al monitor done',async()=>{
   const t=await setup();
   try{

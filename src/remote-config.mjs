@@ -40,8 +40,8 @@ export function remoteConfig(env=process.env){
   if(!['true','false'].includes(distinct))throw new Error('ZANA_DISTINCT_REVIEWER_CLIENT must be true or false');
   const full=env.ZANA_GITHUB_FULL_ACCESS??'false';
   if(!['true','false'].includes(full))throw new Error('ZANA_GITHUB_FULL_ACCESS must be true or false');
-  if(full==='true'&&!env.ZANA_BOOTSTRAP_GITHUB_TOKEN)throw new Error('GITHUB_FULL_ACCESS_TOKEN_MISSING: ZANA_BOOTSTRAP_GITHUB_TOKEN is required');
-  if(full==='true'&&env.ZANA_BOOTSTRAP_GITHUB_TOKEN===env.ZANA_DOWNSTREAM_GITHUB_TOKEN)
+  if(full==='true'&&!String(env.ZANA_BOOTSTRAP_GITHUB_TOKEN??'').trim())throw new Error('GITHUB_FULL_ACCESS_TOKEN_MISSING: ZANA_BOOTSTRAP_GITHUB_TOKEN is required');
+  if(full==='true'&&String(env.ZANA_BOOTSTRAP_GITHUB_TOKEN).trim()===String(env.ZANA_DOWNSTREAM_GITHUB_TOKEN??'').trim())
     throw new Error('GITHUB_FULL_ACCESS_TOKEN_SHARED: bootstrap token must differ from missions token');
   // Origen público del servidor, para armar enlaces a la página del operador.
   // src/http.mjs valida el valor completo al arrancar; aquí un valor ilegible es null.

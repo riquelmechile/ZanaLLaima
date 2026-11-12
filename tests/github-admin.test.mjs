@@ -176,7 +176,5 @@ test('R4 tokens que solo difieren en espacios no cuentan como distintos',()=>{
 });
 
 test('R5 %2e%2e no sale del prefijo de config.apiUrl',()=>{
-  const v=validateGithubAdmin({method:'GET',path:'/%2e%2e/%2e%2e/login'});
-  const url=new URL('https://ghe.example/api/v3'+v.path);
-  assert.equal(url.pathname.startsWith('/api/v3/'),true,url.href);
+  assert.throws(()=>validateGithubAdmin({method:'GET',path:'/%2e%2e/%2e%2e/login'}),/PATH/);
 });

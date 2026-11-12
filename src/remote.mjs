@@ -175,7 +175,8 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
   // Cliente aparte para crear repositorios: el token de misiones no lleva ese permiso.
   const bootstrapGithub=new GitHubApi({baseUrl:config.apiUrl,token:config.bootstrapToken,fetcher});
   // Mismo token para misiones y bootstrap: el agente que escribe heredaría el permiso de crear repositorios.
-  const bootstrapShared=Boolean(config.bootstrapToken)&&config.bootstrapToken===config.authorToken;
+  const bootstrapShared=Boolean(config.bootstrapToken?.trim())&&
+    config.bootstrapToken.trim()===String(config.authorToken??'').trim();
   const secrets=()=>[...envSecrets(env),...[config.authorToken,config.reviewerToken,config.bootstrapToken].filter(Boolean)];
   const rw=fn=>remoteWrite(fn),rr=fn=>remoteRead(fn);
   const audit=entry=>rw(db=>writeAudit(db,entry));
@@ -644,8 +645,12 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       db.prepare('UPDATE project_memory SET resolved_at=? WHERE seq=?').run(resolvedAt,seq);
       return {missionId:id,projectId:project,seq,resolvedAt};
     }),
-    async zana_github_request(args){
+    async zana_github_request(args,session){
       if(!config.githubFullAccess)throw new Error('GITHUB_FULL_ACCESS_DISABLED: habilítalo en el servidor');
+      await rr((db,mission)=>{
+        if(mission&&sessionReviews(db,session.sessionId,mission.id))
+          throw new Error('REVIEWER_READ_ONLY: this session reviews mission '+mission.id+' and cannot administer GitHub');
+      });
       return githubAdminRequest(args,{owner:bootstrapGithub,reviewer:reviewerGithub});
     },
     async zana_ds_github({operation,arguments:args={},missionId:id},session){

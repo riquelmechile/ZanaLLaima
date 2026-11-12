@@ -81,6 +81,8 @@ Permitir un repo solo deja abrir misiones en él. Para que una misión termine b
 
 Para la primera prueba conviene un repo sandbox vacío con un `package.json` y un test.
 
+Con `ZANA_GITHUB_FULL_ACCESS=true`, el orquestador puede ejecutar esta preparación con `zana_github_request` y verificar cada efecto con GET antes de iniciar misiones. Consulte [github-full-access.md](github-full-access.md).
+
 ## 3. Instalar el código en el servidor
 
 Usa un usuario sin privilegios (en los ejemplos, `<usuario>`):
@@ -116,6 +118,7 @@ Edítalo con un editor en el servidor, nunca en el repo ni en un chat. **Rutas a
 | `ZANA_DOWNSTREAM_GITHUB_TOKEN` | sí | Token de la cuenta autora (1.1). |
 | `ZANA_REVIEWER_TOKEN` | sí | Token de la cuenta revisora (1.2). |
 | `ZANA_BOOTSTRAP_GITHUB_TOKEN` | no | Token de la cuenta dueña solo para crear repositorios (bootstrap). Debe ser distinto del de misiones: si son iguales, `zana_bootstrap_execute` responde `BOOTSTRAP_TOKEN_SHARED` y `/health` lo avisa. Sin él responde `BOOTSTRAP_TOKEN_MISSING`. Permiso: un token clásico necesita el scope `repo`; uno fine-grained necesita *Administration: write* sobre todos los repositorios de la cuenta, que también permite borrarlos y cambiar su configuración. Solo crea repositorios de la cuenta del token: las organizaciones no están soportadas (`OWNER_MISMATCH`). |
+| `ZANA_GITHUB_FULL_ACCESS` | no | `false` por defecto. En `true`, expone `zana_github_request` para la preparación administrativa de §2; exige un token de bootstrap separado del de misiones. |
 | `ZANA_REVIEWER_LOGIN` | sí | Login de GitHub de la cuenta revisora. No tiene valor por defecto: sin él el servidor no arranca, y `node src/cli.mjs remote-health` lo muestra como `degraded`. |
 | `ZANA_HTTP_PORT` | no | Puerto local, 8787 por defecto. |
 | `ZANA_REQUIRED_CHECKS` | no | Nombres de checks que deben estar verdes. Vacío = todos los check runs del SHA. |
@@ -250,5 +253,3 @@ Cada `remote-*` exige solo la DB que usa, con ruta absoluta y ya existente, así
 | El servicio no arranca: `... name different hosts` | `ZANA_PUBLIC_HOST` y `ZANA_PUBLIC_MCP_URL` apuntan a hosts distintos; basta con definir uno. |
 | `zana_delivery_status` dice `REVIEWER_IS_AUTHOR` | La cuenta revisora tiene commits en el PR. |
 | La review de la revisora no cuenta para la protección | La revisora no tiene permiso Write en el repo. |
-
-Con `ZANA_GITHUB_FULL_ACCESS=true`, el orquestador ejecuta por sí mismo la preparación de §2 y la verifica con GET antes de iniciar misiones; consulte `github-full-access.md`.

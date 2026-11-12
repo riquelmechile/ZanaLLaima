@@ -2,6 +2,8 @@
 
 ## [Sin publicar]
 
+- Acceso GitHub completo opcional para el orquestador mediante `zana_github_request`, con token separado, alcance reviewer restringido y auditoría sin secretos.
+
 - **Panel MCP Apps de aprobación:** `zana_project_approval_panel` entrega la vista y el nonce solo en `_meta`; `zana_panel_decide` es app-only, requiere negociación UI y audita la decisión sin nonce. Mantiene el flujo con la página del operador cuando el cliente no muestra paneles; la vista ejecuta el bootstrap únicamente tras aprobación.
 
 - **Avisos de revisión lista (MCP Events).** El servidor anuncia el evento `zana.review.ready` y atiende `events/list`, `events/subscribe` y `events/unsubscribe`. Un monitor del mismo cliente (una tarea o automatización del anfitrión) se suscribe con su callback; al emitir un ticket el servidor le manda un webhook firmado con solo el id del ticket, y la ejecución que despierta lo reclama con `zana_review_claim` sin el código `ZR-` (con ese id, o sin argumentos). Es una sesión nueva, así que la separación entre autor y revisor se mantiene con las reglas de siempre; el flujo manual con el código sigue igual. Un 2xx del anfitrión solo confirma que recibió el aviso: que despertó se ve cuando una sesión nueva reclama. `/health` local muestra las cuentas y `remote-revoke` borra las suscripciones del cliente revocado.
@@ -201,5 +203,3 @@ Versión candidata en PR #1. Sin tag, release ni despliegue.
 - Llaves reales de operador y CI, environment protegido y atestación CI emitida por GitHub.
 - Verificación de aislamiento del sistema operativo y E2E Codex por el operador.
 - Revisión independiente, aprobación de PR sobre SHA exacto y decisión humana de merge.
-
-- Acceso GitHub completo opcional para el orquestador mediante `zana_github_request`, con token separado, alcance reviewer restringido y auditoría sin secretos.

@@ -29,7 +29,9 @@ test('zana_bootstrap_execute crea el repositorio con el token de bootstrap, una 
     const done=await t.f.call('zana_bootstrap_execute',t.args,t.s);
     assert.deepEqual({state:done.state,reused:done.reused,auth:done.authorization.status,name:done.created.fullName,priv:done.created.private},
       {state:'DONE',reused:false,auth:'CONSUMED',name:'O/gestor',priv:true});
-    assert.deepEqual(t.creates().map(x=>[x.token===BOOTSTRAP_TOKEN,JSON.parse(x.body)]),[[true,{name:'gestor',private:true,auto_init:true,description:'Creado por ZanaLLaima (operación '+t.op.operationId+')'}]]);
+    const [{description,...body}]=t.creates().map(x=>JSON.parse(x.body));
+    assert.deepEqual([t.creates()[0].token===BOOTSTRAP_TOKEN,body],[true,{name:'gestor',private:true,auto_init:true}]);
+    assert.ok(description.startsWith('Creado por ZanaLLaima (operación '+t.op.operationId+', intento '));
     assert.ok(t.f.api.state.requests.every(x=>x.path!=='/user/repos'||x.token!==AUTHOR_TOKEN),'el token de misiones no crea repositorios');
     assert.equal((await t.f.call('zana_bootstrap_execute',t.args,t.s)).reused,true);
     assert.equal(t.creates().length,1);

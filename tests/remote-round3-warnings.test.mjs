@@ -267,6 +267,7 @@ test('rev63: una adopción de una sesión muerta no bloquea durante 30 días',as
     assert.equal((await f.call('zana_mission_adopt',{missionId},dead)).adopted,true);
     const old=new Date(Date.now()-29*86_400_000).toISOString();
     await remoteWrite(db=>db.prepare('UPDATE remote_sessions SET last_seen_at=? WHERE session_id=?').run(old,dead.sessionId));
+    await remoteWrite(db=>db.prepare('UPDATE remote_activity SET created_at=? WHERE mission_id=? AND session_id=?').run(old,missionId,dead.sessionId));
     await remoteWrite(db=>pruneRemote(db));
     const next=await f.session('zana-chatgpt',ready.author.clientId);
     const result=await f.call('zana_mission_adopt',{missionId},next);
@@ -280,7 +281,7 @@ test('rev63: actividad renueva el lease de adopción y, vencido, otra sesión ad
     const ready=await f.authorReady(),missionId=ready.missionId;
     const owner=await f.session('zana-chatgpt',ready.author.clientId);
     assert.equal((await f.call('zana_mission_adopt',{missionId},owner)).adopted,true);
-    const old=new Date(Date.now()-60*60_000).toISOString();
+    const old=new Date(Date.now()-24*60*60_000).toISOString();
     await remoteWrite(db=>db.prepare('UPDATE remote_activity SET created_at=? WHERE mission_id=? AND session_id=?').run(old,missionId,owner.sessionId));
     const notes=(await f.call('zana_start_batch',{},owner)).packets.find(packet=>packet.unitId==='notes');
     assert.ok(notes);
@@ -289,7 +290,8 @@ test('rev63: actividad renueva el lease de adopción y, vencido, otra sesión ad
     const next=await f.session('zana-chatgpt',ready.author.clientId);
     assert.match((await f.call('zana_mission_adopt',{missionId},next)).error,/ADOPT_MISSION_BUSY.*hasta/);
     await remoteWrite(db=>db.prepare('UPDATE remote_activity SET created_at=? WHERE mission_id=? AND session_id=?').run(old,missionId,owner.sessionId));
-    assert.equal((await f.call('zana_mission_adopt',{missionId},next)).adopted,true);
+    const afterExpiry=await f.call('zana_mission_adopt',{missionId},next);
+    assert.equal(afterExpiry.adopted,true,JSON.stringify(afterExpiry));
   }finally{await f.cleanup();}
 });
 

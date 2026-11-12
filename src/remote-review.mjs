@@ -538,8 +538,9 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
             db.exec('SAVEPOINT review_done_event');
             events.queue(db,{clientId:t.author_client,ticketId:t.ticket_id,name:'zana.review.done',data:{ticketId:t.ticket_id,verdict:event}});
             db.exec('RELEASE review_done_event');
-          }catch{
-            if(db.isTransaction){db.exec('ROLLBACK TO review_done_event');db.exec('RELEASE review_done_event');}
+          }catch(error){
+            if(!db.isTransaction)throw error;
+            db.exec('ROLLBACK TO review_done_event');db.exec('RELEASE review_done_event');
           }
           if(changed)db.prepare('INSERT OR IGNORE INTO review_archive(mission_id,review_id,content,created_at) VALUES(?,?,?,?)')
             .run(t.mission_id,t.ticket_id,JSON.stringify(archived),nowIso());

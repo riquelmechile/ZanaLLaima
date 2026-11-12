@@ -374,13 +374,27 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         const latest=db.prepare('SELECT state FROM review_tickets WHERE mission_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1').get(id);
         if(latest&&!['FINALIZED','STALE_SHA','EXPIRED','ABANDONED'].includes(latest.state))
           throw new Error('ADOPT_REVIEW_IN_PROGRESS: existe una revisión en curso');
-        const exists=db.prepare("SELECT 1 FROM remote_activity WHERE mission_id=? AND session_id=? AND kind='MISSION_ADOPT'").get(id,session.sessionId);
-        if(exists){adopted={missionId:id,adopted:true,alreadyAdopted:true};throw alreadyAdopted;}
         const finalizedAt=db.prepare("SELECT finalized_at FROM review_tickets WHERE mission_id=? AND state='FINALIZED' ORDER BY created_at DESC,rowid DESC LIMIT 1")
           .get(id)?.finalized_at??'';
-        const competing=db.prepare("SELECT 1 FROM remote_activity a JOIN remote_sessions s ON s.session_id=a.session_id WHERE a.mission_id=? AND a.kind='MISSION_ADOPT' AND a.session_id!=? AND a.created_at>? LIMIT 1")
-          .get(id,session.sessionId,finalizedAt);
-        if(competing)throw new Error('ADOPT_MISSION_BUSY: otra sesión viva ya adoptó la misión');
+        const leaseFor=(sessionId,adoptedAt=null)=>{
+          const start=adoptedAt??db.prepare("SELECT created_at FROM remote_activity WHERE mission_id=? AND session_id=? AND kind='MISSION_ADOPT' AND created_at>? ORDER BY created_at DESC,seq DESC LIMIT 1")
+            .get(id,sessionId,finalizedAt)?.created_at;
+          if(!start)return null;
+          const last=db.prepare('SELECT created_at FROM remote_activity WHERE mission_id=? AND session_id=? AND created_at>=? ORDER BY created_at DESC,seq DESC LIMIT 1')
+            .get(id,sessionId,start)?.created_at??start;
+          const expiresAt=new Date(Date.parse(last)+config.claimTtlMinutes*60_000).toISOString();
+          return {expiresAt,active:Date.parse(expiresAt)>Date.now()};
+        };
+        const ownLease=leaseFor(session.sessionId);
+        if(ownLease?.active){
+          adopted={missionId:id,adopted:true,alreadyAdopted:true};
+          // El símbolo revierte transact para no persistir un STATE_CHANGED idempotente.
+          throw alreadyAdopted;
+        }
+        const candidates=db.prepare("SELECT session_id,MAX(created_at) adopted_at FROM remote_activity WHERE mission_id=? AND kind='MISSION_ADOPT' AND session_id!=? AND created_at>? GROUP BY session_id")
+          .all(id,session.sessionId,finalizedAt);
+        const competing=candidates.map(row=>leaseFor(row.session_id,row.adopted_at)).find(lease=>lease?.active);
+        if(competing)throw new Error('ADOPT_MISSION_BUSY: otra sesión mantiene la adopción hasta '+competing.expiresAt);
         recordActivity(db,{sessionId:session.sessionId,clientId:session.clientId,missionId:id,kind:'MISSION_ADOPT',tool:'zana_mission_adopt'});
         writeAudit(db,{caller:{host:session.host,sessionId:session.sessionId,clientId:session.clientId},
           tool:'mission_adopt',missionId:id,outcome:'ADOPTED',category:'write'});

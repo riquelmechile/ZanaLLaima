@@ -137,6 +137,19 @@ test('review.ready conserva el id legado para deduplicar una entrega ACCEPTED',a
   }finally{await t.f.cleanup();}
 });
 
+test('solo una de dos sesiones simultáneas adopta la misión',async()=>{
+  const t=await setup();
+  try{
+    const ready=await t.f.authorReady(),missionId=ready.missionId;
+    const [a,b]=await Promise.all([t.f.session('zana-chatgpt',ready.author.clientId),t.f.session('zana-chatgpt',ready.author.clientId)]);
+    const results=await Promise.all([
+      t.f.call('zana_mission_adopt',{missionId},a),t.f.call('zana_mission_adopt',{missionId},b)
+    ]);
+    assert.equal(results.filter(result=>result.adopted).length,1,JSON.stringify(results));
+    assert.equal(results.filter(result=>/ADOPT_MISSION_BUSY/.test(result.error??'')).length,1,JSON.stringify(results));
+  }finally{await t.f.cleanup();}
+});
+
 test('finalize publica review.done una vez, con el veredicto y solo al monitor done',async()=>{
   const t=await setup();
   try{

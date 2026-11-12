@@ -68,6 +68,7 @@ Desde el 9 nov 2026 hay una prueba con una cuenta ChatGPT real para el camino fe
 | `zana_workspace_create`, `zana_workspace_get`, `zana_workspace_update`, `zana_workspace_list`, `zana_workspace_set_archived` | no | sí | Borradores SQLite por cliente OAuth, control de versión, sin aprobar ni crear repositorios |
 | `zana_plan_approval_request`, `zana_plan_approval_status` | no | sí | Piden y consultan la aprobación del plan guardado, por su digest exacto. No aprueban: la decisión es del operador en `/operator/approve`, con su contraseña |
 | `zana_bootstrap_request`, `zana_bootstrap_status` | no | sí | Piden y consultan la autorización del operador para crear el repositorio de un plan ya aprobado. No crean nada en GitHub |
+| `zana_project_approval_panel`, `zana_panel_decide` | no | sí | MCP Apps: abre el panel si se negoció `io.modelcontextprotocol/ui`; decisión app-only con nonce de un solo uso en `_meta` (nunca en el contenido/auditoría), autorización única del plan y del repositorio |
 | `zana_bootstrap_execute`, `zana_bootstrap_reconcile` | no | sí | Crean el repositorio autorizado (un intento por autorización, con el token de bootstrap) y resuelven contra GitHub un intento de resultado incierto |
 | `zana_discovery_start`, `zana_discovery_questions`, `zana_discovery_answer`, `zana_project_plan_draft` | no | sí | Fase de idea y plan sin repositorio; toda respuesta es borrador no persistido |
 | `zana_bootstrap_prepare` | no | sí | Propuesta no persistida, no ejecuta create_repository ni concede autorización |

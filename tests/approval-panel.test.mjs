@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {requestApprovalPanel,decideApprovalPanel,approvalPanelStatus} from '../src/approval-panel.mjs';
 import {bootstrapAuthorized} from '../src/bootstrap-request.mjs';
-import {updateProjectWorkspace} from '../src/project-workspace.mjs';
+import {createProjectWorkspace,updateProjectWorkspace,setProjectWorkspaceArchived} from '../src/project-workspace.mjs';
 import {panelFixture,makePlan,client,T0} from './helpers/plan-fixture.mjs';
 
 const request=(f,extra={})=>requestApprovalPanel(f.db,{...f.base,now:T0,...extra});
@@ -74,5 +74,29 @@ test('un panel usado no se reutiliza y status nunca devuelve nonce',()=>{
     assert.throws(()=>decide(f,p),/PANEL_NOT_PENDING/);
     const status=approvalPanelStatus(f.db,{clientId:client,panelId:p.panel.panelId,now:T0+2});
     assert.equal(status.status,'APPROVED');assert.equal('nonce' in status,false);assert.equal(JSON.stringify(status).includes(p.nonce),false);
+  }finally{f.db.close();}
+});
+
+test('validaciones de entrada, decisión y poda cierran ramas de seguridad',()=>{
+  const f=panelFixture();try{
+    assert.throws(()=>request(f,{expectedVersion:99}),/STALE_REVISION/);
+    const empty=createProjectWorkspace(f.db,{clientId:client,idea:'Otro proyecto sin plan'});
+    assert.throws(()=>requestApprovalPanel(f.db,{...f.base,workspaceId:empty.workspaceId,expectedVersion:0,now:T0}),/PLAN_REQUIRED/);
+    const p=request(f);assert.equal(approvalPanelStatus(f.db,{clientId:client,panelId:'missing',now:T0}),null);
+    assert.throws(()=>decide(f,p,{decision:'maybe'}),/INVALID_DECISION/);
+    assert.throws(()=>decide(f,p,{allowed:()=>false}),/REPO_NOT_ALLOWED/);
+    const archived=setProjectWorkspaceArchived(f.db,{clientId:client,workspaceId:f.workspace.workspaceId,expectedVersion:f.workspace.version,archived:true});
+    assert.equal(decide(f,p).status,'SUPERSEDED');assert.ok(archived.archivedAt);
+    const raw=JSON.parse(f.db.prepare('SELECT value FROM metadata WHERE key=?').get('zana:panel:'+p.panel.panelId).value);
+    raw.createdAt=new Date(T0-2*86400_000).toISOString();
+    f.db.prepare('UPDATE metadata SET value=? WHERE key=?').run(JSON.stringify(raw),'zana:panel:'+p.panel.panelId);
+  }finally{f.db.close();}
+});
+
+test('un panel nuevo reutiliza aprobaciones vigentes sin volver a decidirlas',()=>{
+  const f=panelFixture();try{
+    const first=request(f),a=decide(f,first);
+    const second=request(f),b=decide(f,second);
+    assert.equal(b.status,'APPROVED');assert.equal(b.result.operationId,a.result.operationId);
   }finally{f.db.close();}
 });

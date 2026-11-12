@@ -221,18 +221,61 @@ test('un reconciliador o una ejecución obsoletos no pisan un intento posterior'
   }finally{t.f.db.close();}
 });
 
-test('una ejecución que vuelve tarde no escribe sobre el intento que la reemplazó',async()=>{
-  let hold=true,land;
-  const gh=github({create:async(body,made)=>{if(!hold)throw new GitHubApiError(502,'GitHub HTTP 502');
-    hold=false;await new Promise(ok=>{land=ok;});return made(body);}}),t=setup({gh}),late={now:()=>T0+200_000};
+const renew=(t,at=T0+200_000)=>{
+  const r=requestBootstrap(t.f.db,{...t.f.at,expectedVersion:t.f.w.version,owner:'acme',name:'gestor',visibility:'private',allowed,now:at});
+  decidePlanApproval(t.f.db,{approvalId:r.authorization.approvalId,decision:'allow',passwordOk:true,now:at});
+};
+
+test('un intento reemplazado que termina creando el repositorio cierra la operación, sin perderlo',async()=>{
+  let hold=true,land,existing=null;
+  const gh=github({existing:()=>existing,create:async(body,made)=>{if(!hold)throw new GitHubApiError(502,'GitHub HTTP 502');
+    hold=false;await new Promise(ok=>{land=ok;});return existing=made(body);}}),t=setup({gh}),late={now:()=>T0+200_000};
   try{
     const first=t.run(); // intento A: su POST queda en vuelo
     while(!land)await new Promise(setImmediate);
     assert.equal((await t.reconcile(late)).state,'AWAITING_AUTHORIZATION');
-    const r=requestBootstrap(t.f.db,{...t.f.at,expectedVersion:t.f.w.version,owner:'acme',name:'gestor',visibility:'private',allowed,now:T0+200_000});
-    decidePlanApproval(t.f.db,{approvalId:r.authorization.approvalId,decision:'allow',passwordOk:true,now:T0+200_000});
+    renew(t);
     await assert.rejects(t.run(late),/OUTCOME_UNKNOWN/); // intento B: incierto
-    land();await assert.rejects(first,/OUTCOME_UNKNOWN/);
-    assert.deepEqual([t.status().state,t.status().created],['UNCERTAIN',null],'A no cierra el intento B con su resultado');
+    land();
+    const done=await first.catch(e=>({state:e.message,created:{}}));
+    assert.deepEqual([done.state,done.reused,done.created.id],['DONE',false,77],'el repositorio que A sí creó queda registrado');
+    // B reconcilia después: encuentra la operación cerrada, sin nada que cambiar.
+    await assert.rejects(t.reconcile(late),/NOTHING_TO_RECONCILE/);
+    assert.equal(t.status().created.id,77);
+  }finally{t.f.db.close();}
+});
+
+test('la reconciliación adopta el repositorio que creó un intento anterior de la misma operación',async()=>{
+  for(const secondAttempt of [false,true]){
+    let created=null,existing=null;
+    const gh=github({existing:()=>existing,create:(body,made)=>{created??=made(body);throw new Error('socket hang up');}});
+    const t=setup({gh}),late={now:()=>T0+200_000},later={now:()=>T0+400_000};
+    try{
+      await assert.rejects(t.run(),/OUTCOME_UNKNOWN/); // A: GitHub crea el repositorio, pero todavía no se ve
+      assert.equal((await t.reconcile(late)).state,'AWAITING_AUTHORIZATION');
+      renew(t);
+      if(secondAttempt)await assert.rejects(t.run(late),/OUTCOME_UNKNOWN/); // B también queda incierto
+      existing=created; // aparece el repositorio de A
+      if(!secondAttempt){
+        await assert.rejects(t.run(late),/RECONCILIATION_REQUIRED/);
+        assert.equal(gh.posts().length,1,'no se gasta otra autorización en un nombre que ya es de esta operación');
+      }
+      const adopted=await t.reconcile(later);
+      assert.deepEqual([adopted.state,adopted.created.id,adopted.lastError],['DONE',77,null]);
+      // La marca de otra operación sigue sin adoptarse (lo cubre el test de repositorio ajeno).
+    }finally{t.f.db.close();}
+  }
+});
+
+test('el historial de intentos no se recorta: al llenarse no se gasta otra autorización',async()=>{
+  const t=setup(),key='zana:bootstrap:'+t.r.operationId;
+  try{
+    const row=JSON.parse(t.f.db.prepare('SELECT value FROM metadata WHERE key=?').get(key).value);
+    const attempts=Array.from({length:20},(_,i)=>({id:'attempt-'+i,at:new Date(T0).toISOString()}));
+    t.f.db.prepare('UPDATE metadata SET value=? WHERE key=?').run(JSON.stringify({...row,attempts}),key);
+    await assert.rejects(t.run(),/TOO_MANY_ATTEMPTS/);
+    assert.deepEqual([t.gh.posts().length,t.authorizedNow(),t.status().state],[0,true,'AWAITING_AUTHORIZATION']);
+    // Sin repositorio de ningún intento no hay nada que adoptar.
+    await assert.rejects(t.reconcile(),/NOTHING_TO_RECONCILE/);
   }finally{t.f.db.close();}
 });

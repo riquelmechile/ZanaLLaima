@@ -83,7 +83,7 @@ const NEW_TOOLS={
       name:z.string().min(1).max(100),visibility:z.enum(['private','public']).default('private')}).strict()],
   zana_bootstrap_execute:['Create the GitHub repository of a bootstrap operation the operator already authorized. One authorization is one attempt. If GitHub rejects it the cause is kept and a new authorization is needed; if the outcome is unknown it answers OUTCOME_UNKNOWN and must be settled with zana_bootstrap_reconcile, never retried',false,
     z.object({operationId:z.string().uuid()}).strict()],
-  zana_bootstrap_reconcile:['Settle a bootstrap operation whose creation attempt had an unknown outcome: looks at GitHub and adopts the repository only if that attempt created it',false,
+  zana_bootstrap_reconcile:['Settle a bootstrap operation whose creation attempt had an unknown outcome: looks at GitHub and adopts the repository only if an authorized attempt of this same operation created it (also when a replaced attempt created it late)',false,
     z.object({operationId:z.string().uuid()}).strict()],
   zana_bootstrap_status:['Show a bootstrap operation: its repository, state and whether the operator authorized creating it (PENDING, APPROVED, DENIED, REVOKED, EXPIRED, LOCKED or SUPERSEDED when the plan approval no longer holds)',true,
     z.object({operationId:z.string().uuid()}).strict()],

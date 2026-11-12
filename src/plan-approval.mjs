@@ -171,8 +171,8 @@ export function describePlanApproval(db,{approvalId,now=Date.now()}){
       alternatives:plan.alternatives,milestones:plan.milestones}};
 }
 
-// passwordOk lo calcula la capa HTTP contra la contraseña del operador; nunca
-// llega desde una tool. Una contraseña errada o un plan que ya cambió se
+// passwordOk=true solo puede venir de la página autenticada o de un panel cuyo nonce ya fue verificado;
+// nunca llega desde una tool del modelo. Una contraseña errada o un plan que ya cambió se
 // devuelven (no se lanzan) para que el fallo quede guardado.
 export function decidePlanApproval(db,{approvalId,decision,passwordOk,now=Date.now()}){
   const row=read(db,approvalId);

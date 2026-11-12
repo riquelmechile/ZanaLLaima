@@ -28,3 +28,11 @@ export function planFixture({client='oauth-operator-one',approved=false}={}){
   }
   return {db,w,at,client,planApprovalId};
 }
+
+export const client='oauth-panel-owner',makePlan=draft;
+export function panelFixture(){
+  const {db,w:workspace}=planFixture({client});
+  const base={clientId:client,workspaceId:workspace.workspaceId,expectedVersion:workspace.version,
+    owner:'riquelmechile',name:'panel-demo',visibility:'private',allowed:()=>true};
+  return {db,workspace,base};
+}

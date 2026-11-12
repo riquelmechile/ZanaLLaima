@@ -40,7 +40,9 @@ test('crea el repositorio una sola vez y gasta la autorización',async()=>{
     const done=await t.run();
     assert.deepEqual({state:done.state,reused:done.reused,auth:done.authorization.status,repo:done.created},
       {state:'DONE',reused:false,auth:'CONSUMED',repo:{id:77,fullName:'acme/gestor',private:true,htmlUrl:'https://github.test/acme/gestor',defaultBranch:'main'}});
-    assert.deepEqual(t.gh.posts(),[['POST','/user/repos',{name:'gestor',private:true,auto_init:true,description:'Creado por ZanaLLaima (operación '+t.r.operationId+')'}]]);
+    const [[,,{description,...body}]]=t.gh.posts();
+    assert.deepEqual(body,{name:'gestor',private:true,auto_init:true});
+    assert.match(description,new RegExp('^Creado por ZanaLLaima \\(operación '+t.r.operationId+', intento [0-9a-f-]{36}\\)$'));
     assert.equal(t.authorizedNow(),false,'una autorización vale para un intento');
     const again=await t.run();
     assert.deepEqual([again.state,again.reused],['DONE',true]);
@@ -97,7 +99,7 @@ test('un resultado incierto nunca se reintenta: se reconcilia contra GitHub',asy
       assert.equal(t.status().state,'UNCERTAIN');
       // El repositorio sí quedó creado por este intento: se adopta.
       existing={id:91,full_name:'acme/gestor',private:true,html_url:'https://github.test/acme/gestor',default_branch:'main',
-        description:'Creado por ZanaLLaima (operación '+t.r.operationId+')',created_at:new Date(T0+61_000).toISOString(),owner:{login:'acme'}};
+        description:gh.posts()[0][2].description,created_at:new Date(T0+61_000).toISOString(),owner:{login:'acme'}};
       const adopted=await t.reconcile();
       assert.deepEqual([adopted.state,adopted.created.id],['DONE',91]);
       assert.equal(gh.posts().length,1);
@@ -106,18 +108,17 @@ test('un resultado incierto nunca se reintenta: se reconcilia contra GitHub',asy
 });
 
 test('la reconciliación no adopta un repositorio ajeno ni inventa uno que no existe',async()=>{
-  const mark=id=>'Creado por ZanaLLaima (operación '+id+')';
-  const old=id=>({id:9,full_name:'acme/gestor',private:true,description:mark(id),created_at:'2020-01-01T00:00:00Z',owner:{login:'acme'}});
+  const old=description=>({id:9,full_name:'acme/gestor',private:true,description,created_at:'2020-01-01T00:00:00Z',owner:{login:'acme'}});
   const publicOne=id=>({...old(id),private:false,created_at:new Date(T0+61_000).toISOString()});
-  // Mismo nombre, fecha y visibilidad, pero lo creó otra operación: no lleva la marca de este intento.
-  const foreign=()=>({...old('99999999-9999-4999-8999-999999999999'),created_at:new Date(T0+61_000).toISOString()});
+  // Mismo nombre, fecha, visibilidad y operación, pero de otro intento: no lleva la marca de este.
+  const foreign=mark=>({...old(mark.replace(/intento .*/,'intento 99999999-9999-4999-8999-999999999999)')),created_at:new Date(T0+61_000).toISOString()});
   for(const [make,error] of [[old,/REPO_ALREADY_EXISTS/],[publicOne,/REPO_ALREADY_EXISTS/],[foreign,/REPO_ALREADY_EXISTS/],[()=>null,null]]){
     let existing=null;
     const gh=github({create:()=>{throw new GitHubApiError(502,'GitHub unreachable');},existing:()=>existing});
     const t=setup({gh});
     try{
       await assert.rejects(t.run(),/OUTCOME_UNKNOWN/);
-      existing=make(t.r.operationId);
+      existing=make(gh.posts()[0][2].description);
       // Recién hecho el intento todavía no se puede saber: GitHub puede estar terminando de crear.
       if(!error){
         await assert.rejects(t.reconcile(),/RECONCILE_TOO_EARLY/);
@@ -190,5 +191,48 @@ test('un 4xx con el repositorio creado se adopta; el circuito abierto no cuenta 
     };
     await assert.rejects(t.run(),/AUTHORIZATION_REQUIRED/);
     assert.equal(t.gh.posts().length,0,'la reserva vuelve a comprobar que la autorización sea de esta operación');
+  }finally{t.f.db.close();}
+});
+
+test('un reconciliador o una ejecución obsoletos no pisan un intento posterior',async()=>{
+  const gh=github({create:()=>{throw new GitHubApiError(502,'GitHub HTTP 502');}}),t=setup({gh});
+  const late={now:()=>T0+200_000},renew=()=>{
+    const r=requestBootstrap(t.f.db,{...t.f.at,expectedVersion:t.f.w.version,owner:'acme',name:'gestor',visibility:'private',allowed,now:T0+200_000});
+    decidePlanApproval(t.f.db,{approvalId:r.authorization.approvalId,decision:'allow',passwordOk:true,now:T0+200_000});
+  };
+  try{
+    await assert.rejects(t.run(),/OUTCOME_UNKNOWN/); // intento A: incierto
+    let open;const gate=new Promise(ok=>{open=ok;});
+    const slow={repo:async repo=>{await gate;return gh.repo(repo);}};
+    const stale=t.reconcile({...late,github:slow}); // lee el intento A y queda esperando a GitHub
+    await new Promise(setImmediate);
+    assert.equal((await t.reconcile(late)).state,'AWAITING_AUTHORIZATION');
+    renew();
+    // Intento B: su POST queda en vuelo mientras llegan los resultados viejos de A.
+    let fly;gh.request=(request=>async(m,p,o)=>{if(m==='POST')await new Promise(ok=>{fly=ok;});return request(m,p,o);})(gh.request.bind(gh));
+    const second=t.run(late);
+    while(!fly)await new Promise(setImmediate);
+    open();
+    await assert.rejects(stale,/NOTHING_TO_RECONCILE/);
+    assert.equal(t.status().state,'UNCERTAIN','el resultado viejo de A no reabre el intento B');
+    fly();await assert.rejects(second,/OUTCOME_UNKNOWN/);
+    const marks=gh.posts().map(x=>x[2].description);
+    assert.equal(marks.length,2);assert.notEqual(marks[0],marks[1],'cada intento lleva su propia marca');
+  }finally{t.f.db.close();}
+});
+
+test('una ejecución que vuelve tarde no escribe sobre el intento que la reemplazó',async()=>{
+  let hold=true,land;
+  const gh=github({create:async(body,made)=>{if(!hold)throw new GitHubApiError(502,'GitHub HTTP 502');
+    hold=false;await new Promise(ok=>{land=ok;});return made(body);}}),t=setup({gh}),late={now:()=>T0+200_000};
+  try{
+    const first=t.run(); // intento A: su POST queda en vuelo
+    while(!land)await new Promise(setImmediate);
+    assert.equal((await t.reconcile(late)).state,'AWAITING_AUTHORIZATION');
+    const r=requestBootstrap(t.f.db,{...t.f.at,expectedVersion:t.f.w.version,owner:'acme',name:'gestor',visibility:'private',allowed,now:T0+200_000});
+    decidePlanApproval(t.f.db,{approvalId:r.authorization.approvalId,decision:'allow',passwordOk:true,now:T0+200_000});
+    await assert.rejects(t.run(late),/OUTCOME_UNKNOWN/); // intento B: incierto
+    land();await assert.rejects(first,/OUTCOME_UNKNOWN/);
+    assert.deepEqual([t.status().state,t.status().created],['UNCERTAIN',null],'A no cierra el intento B con su resultado');
   }finally{t.f.db.close();}
 });

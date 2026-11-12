@@ -81,3 +81,42 @@ test('error de tool se muestra y rechazo informa al modelo',async()=>{
   app2.receive({jsonrpc:'2.0',id:deny.id,result:{structuredContent:{status:'DENIED'}}});await flush();
   assert.ok(app2.messages.some(x=>x.method==='ui/update-model-context'&&/rechazó/.test(x.params.content[0].text)));
 });
+
+async function approveFlow(app){await initialize(app);app.receive(toolResult());await flush();app.ids.approve.click();await flush();
+  return app.messages.find(x=>x.method==='tools/call');}
+test('R1 requests del host no consumen respuestas pendientes',async()=>{
+  const app=boot(),decide=await approveFlow(app);
+  app.receive({jsonrpc:'2.0',id:decide.id,method:'ping'});await flush();
+  app.receive({jsonrpc:'2.0',id:decide.id,result:{structuredContent:{status:'APPROVED',operationId:'op-1'}}});await flush();
+  assert.ok(app.messages.some(x=>x.params?.name==='zana_bootstrap_execute'));
+  assert.ok(app.messages.some(x=>x.id===decide.id&&x.result&&Object.keys(x.result).length===0));
+});
+test('R2 error tras aprobar informa operationId y solo código',async()=>{
+  const app=boot(),decide=await approveFlow(app);
+  app.receive({jsonrpc:'2.0',id:decide.id,result:{structuredContent:{status:'APPROVED',operationId:'op-1'}}});await flush();
+  const ex=app.messages.find(x=>x.params?.name==='zana_bootstrap_execute');
+  app.receive({jsonrpc:'2.0',id:ex.id,result:{isError:true,content:[{type:'text',text:'OUTCOME_UNKNOWN: reconciliar secreto'}]}});await flush();
+  const ctx=app.messages.find(x=>x.method==='ui/update-model-context');
+  assert.match(ctx.params.content[0].text,/operationId=op-1.*OUTCOME_UNKNOWN/);
+  assert.doesNotMatch(ctx.params.content[0].text,/reconciliar secreto|nonce|arguments/);
+});
+test('R3 tool-result tardío no reemplaza panel decidido',async()=>{
+  const app=boot(),decide=await approveFlow(app);
+  app.receive({jsonrpc:'2.0',id:decide.id,result:{structuredContent:{status:'APPROVED',operationId:'op-1'}}});await flush();
+  const ex=app.messages.find(x=>x.params?.name==='zana_bootstrap_execute');
+  app.receive({jsonrpc:'2.0',id:ex.id,result:{structuredContent:{state:'DONE',created:{fullName:'zana/demo',htmlUrl:'https://github.com/zana/demo'}}}});await flush();
+  app.receive(toolResult('otro-nonce'));await flush();assert.match(app.ids.status.textContent,/DONE/);
+});
+test('R4 rechaza open-link que no coincida exactamente con GitHub fullName',async()=>{
+  const app=boot(),decide=await approveFlow(app);
+  app.receive({jsonrpc:'2.0',id:decide.id,result:{structuredContent:{status:'APPROVED',operationId:'op-1'}}});await flush();
+  const ex=app.messages.find(x=>x.params?.name==='zana_bootstrap_execute');
+  app.receive({jsonrpc:'2.0',id:ex.id,result:{structuredContent:{state:'DONE',created:{fullName:'zana/demo',htmlUrl:'javascript:alert(1)'}}}});await flush();
+  const link=app.ids.plan.children.find(x=>x.tagName==='button');if(link)link.click();
+  assert.equal(app.messages.some(x=>x.method==='ui/open-link'),false);
+});
+test('R5 clic prematuro no bloquea la vista',async()=>{
+  const app=boot();await initialize(app);app.ids.approve.click();await flush();
+  app.receive(toolResult());await flush();assert.equal(app.ids.approve.disabled,false);assert.equal(app.ids.actions.hidden,false);
+});
+test('CSS oculta siempre elementos hidden',()=>assert.match(panelHtml(),/\[hidden\]\s*\{\s*display\s*:\s*none\s*!important\s*\}/));

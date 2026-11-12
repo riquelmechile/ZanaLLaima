@@ -4,7 +4,7 @@
 // that leaves this process (tool results, errors, audit, logs) may carry one.
 
 // Token shapes GitHub issues (classic, fine-grained, OAuth, app, refresh).
-const GITHUB_TOKEN=/\b(?:gh[pousr]_[A-Za-z0-9]{20,255}|github_pat_[A-Za-z0-9_]{20,255})\b/g;
+const GITHUB_TOKEN=/(?:gh[pousr]_[A-Za-z0-9]{20,255}|github_pat_[A-Za-z0-9_]{20,255})/g;
 // [ \t]+ y no \s+: un token en la línea siguiente no debe fundir dos líneas del diff.
 const BEARER=/\b(Bearer)[ \t]+[A-Za-z0-9._~+/=-]{16,}/gi;
 

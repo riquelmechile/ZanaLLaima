@@ -69,7 +69,7 @@ function auditKey(db){
 }
 // Who (host and session), what tool, mission, outcome and a keyed hash of the
 // arguments. Never the arguments themselves and never a token.
-export const AUDIT_CATEGORIES=Object.freeze(['read','write','refused','merge','review','operator','other']);
+export const AUDIT_CATEGORIES=Object.freeze(['read','write','refused','merge','review','operator','github_admin','other']);
 export function writeAudit(db,{caller,tool,missionId=null,outcome,args,detail=null,category='other'}){
   if(!AUDIT_CATEGORIES.includes(category))category='other';
   const argsHmac=args===undefined?null:

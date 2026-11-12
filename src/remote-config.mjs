@@ -38,6 +38,11 @@ export function remoteConfig(env=process.env){
   if(!allowedUrl(apiUrl))throw new Error('ZANA_GITHUB_API_URL must be https (or http to a private address)');
   const distinct=env.ZANA_DISTINCT_REVIEWER_CLIENT??'false';
   if(!['true','false'].includes(distinct))throw new Error('ZANA_DISTINCT_REVIEWER_CLIENT must be true or false');
+  const full=env.ZANA_GITHUB_FULL_ACCESS??'false';
+  if(!['true','false'].includes(full))throw new Error('ZANA_GITHUB_FULL_ACCESS must be true or false');
+  if(full==='true'&&!String(env.ZANA_BOOTSTRAP_GITHUB_TOKEN??'').trim())throw new Error('GITHUB_FULL_ACCESS_TOKEN_MISSING: ZANA_BOOTSTRAP_GITHUB_TOKEN is required');
+  if(full==='true'&&String(env.ZANA_BOOTSTRAP_GITHUB_TOKEN).trim()===String(env.ZANA_DOWNSTREAM_GITHUB_TOKEN??'').trim())
+    throw new Error('GITHUB_FULL_ACCESS_TOKEN_SHARED: bootstrap token must differ from missions token');
   // Origen público del servidor, para armar enlaces a la página del operador.
   // src/http.mjs valida el valor completo al arrancar; aquí un valor ilegible es null.
   const publicHost=String(env.ZANA_PUBLIC_HOST??'').trim();
@@ -46,7 +51,7 @@ export function remoteConfig(env=process.env){
     const url=new URL(env.ZANA_PUBLIC_MCP_URL||(publicHost?'https://'+publicHost:''));
     if(url.protocol==='https:')publicOrigin=url.origin;
   }catch{}
-  return Object.freeze({repos,reviewerLogin,publicOrigin,distinctReviewerClient:distinct==='true',
+  return Object.freeze({repos,reviewerLogin,publicOrigin,distinctReviewerClient:distinct==='true',githubFullAccess:full==='true',
     claimTtlMinutes:int(env.ZANA_TICKET_CLAIM_TTL_MINUTES,240,10,10080,'ZANA_TICKET_CLAIM_TTL_MINUTES'),
     toolDeadlineMs:int(env.ZANA_TOOL_DEADLINE_MS,45000,5000,300000,'ZANA_TOOL_DEADLINE_MS'),checksWorkflow,requiredChecks,repoChecks,mergeEnabled:merge==='true',mergeMethod,
     ticketTtlMinutes:int(env.ZANA_TICKET_TTL_MINUTES,120,5,1440,'ZANA_TICKET_TTL_MINUTES'),

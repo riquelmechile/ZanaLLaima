@@ -15,3 +15,6 @@ description: Preparar un repositorio nuevo exclusivamente después de aprobar el
 6. Las escrituras externas deben dejar un intento duradero `RESERVED -> UNCERTAIN -> DONE`. Ante pérdida de respuesta, nunca repitas el POST: verifica el ID y reconcilia con el operador.
 7. La instalación de CI, protección de `main` y allowlist es un paso autorizado diferente. No conviertas el token escritor de la misión en administrador del repositorio.
 8. No merges, despliegues, cargos en nube ni cambios de secretos sin aprobación y gates correspondientes.
+## Preparación administrativa automática
+
+Con `ZANA_GITHUB_FULL_ACCESS=true`, tras crear o adoptar el repositorio usa `zana_github_request` para: escribir `.github/workflows/zana-checks.yml` desde `docs/checks-workflow.md` adaptada al lenguaje (solo `workflow_dispatch`, `permissions: contents: read`, sin secretos); invitar a `ZANA_REVIEWER_LOGIN` con push; aceptar la invitación con `identity: reviewer`; proteger la rama default con PR, una aprobación, obsoletas descartadas, check `zana-checks` y conversaciones resueltas. Verifica cada efecto con GET antes de lanzar misiones.

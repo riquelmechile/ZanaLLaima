@@ -1,10 +1,10 @@
 // Panel único para aprobar el plan y autorizar su bootstrap desde la app.
- // Sus dos candados son la identidad del cliente y un nonce secreto de un solo uso.
- // passwordOk:true es legítimo únicamente después de verificar ese nonce dentro de esta transacción.
+// Sus dos candados son la identidad del cliente y un nonce secreto de un solo uso.
+// passwordOk:true es legítimo únicamente después de verificar ese nonce dentro de esta transacción.
 import {createHash,randomBytes,timingSafeEqual} from 'node:crypto';
 import {getProjectWorkspace} from './project-workspace.mjs';
 import {canonicalPlan,prepareBootstrap} from './project-bootstrap.mjs';
-import {requestPlanApproval,decidePlanApproval} from './plan-approval.mjs';
+import {requestPlanApproval,decidePlanApproval,approvedPlan} from './plan-approval.mjs';
 import {requestBootstrap,bootstrapAuthorized} from './bootstrap-request.mjs';
 
 const PREFIX='zana:panel:',TTL=15*60_000,DAY=86400_000,MAX_DAY=20,MAX_FAILURES=6;
@@ -57,9 +57,9 @@ function transaction(db,work){
     db.exec('RELEASE zana_approval_panel');
     return result;
   }catch(error){
-    try{db.exec('ROLLBACK TO zana_approval_panel');}finally{
-      try{db.exec('RELEASE zana_approval_panel');}catch{}
-    }
+    // RAISE(ROLLBACK), SQLITE_FULL e IOERR pueden haber eliminado el savepoint.
+    // Nunca reemplazar el error original con 'no such savepoint'.
+    if(db.isTransaction)try{db.exec('ROLLBACK TO zana_approval_panel');db.exec('RELEASE zana_approval_panel');}catch{}
     throw error;
   }
 }
@@ -85,7 +85,8 @@ export function requestApprovalPanel(db,{clientId,workspaceId,expectedVersion,ow
   if(expectedVersion!==ws.version)fail('STALE_REVISION','Pide el panel sobre la versión vigente del proyecto');
   if(ws.archivedAt)fail('WORKSPACE_ARCHIVED','Restaura el proyecto antes de pedir el panel');
   if(!ws.plan)fail('PLAN_REQUIRED','Guarda un plan antes de pedir el panel');
-  const plan=canonicalPlan(ws.plan),prepared=prepareBootstrap(plan,{owner,name,visibility});
+  const plan=canonicalPlan(ws.plan);
+  prepareBootstrap(plan,{owner,name,visibility}); // valida el destino; su digest temporal no se persiste
   const repository=owner+'/'+name;
   if(typeof allowed!=='function'||allowed(repository)!==true)
     fail('REPO_NOT_ALLOWED',JSON.stringify(repository)+' no está permitido por ZANA_GITHUB_REPOS');
@@ -100,7 +101,7 @@ export function requestApprovalPanel(db,{clientId,workspaceId,expectedVersion,ow
   const nonce=randomBytes(32).toString('base64url');
   const row={schema:'zana.panel.v1',panelId:randomBytes(32).toString('base64url'),ownerClient:clientId,
     workspaceId,version:ws.version,planDigest:plan.digest,
-    intent:{owner,name,visibility,digest:prepared.digest},nonceHash:digest(nonce),status:'PENDING',failures:0,
+    intent:{owner,name,visibility},nonceHash:digest(nonce),status:'PENDING',failures:0,
     createdAt:iso(now),expiresAt:iso(now+TTL),decidedAt:null,result:null};
   for(const old of retained)if(old.workspaceId===workspaceId&&old.status==='PENDING')
     save(db,{...old,status:'REPLACED',decidedAt:iso(now)});
@@ -140,15 +141,21 @@ export function decideApprovalPanel(db,{clientId,panelId,decision,nonce,allowed,
     assertBootstrapNotStarted(db,{clientId,workspaceId:row.workspaceId,repository});
     const planRequest=requestPlanApproval(db,{clientId,workspaceId:row.workspaceId,expectedVersion:row.version,now});
     const planApprovalId=planRequest.approvalId;
-    if(planRequest.status!=='APPROVED')
-      decidePlanApproval(db,{approvalId:planApprovalId,decision:'allow',passwordOk:true,now});
+    if(planRequest.status!=='APPROVED'){
+      const approved=decidePlanApproval(db,{approvalId:planApprovalId,decision:'allow',passwordOk:true,now});
+      if(approved.status!=='APPROVED')fail('PANEL_PLAN_NOT_APPROVED','No se aprobó el plan en esta decisión');
+    }
+    if(approvedPlan(db,{clientId,workspaceId:row.workspaceId})?.planDigest!==row.planDigest)
+      fail('PANEL_PLAN_NOT_APPROVED','La aprobación del plan no está vigente');
     const bootstrap=requestBootstrap(db,{clientId,workspaceId:row.workspaceId,expectedVersion:row.version,
       owner:row.intent.owner,name:row.intent.name,visibility:row.intent.visibility,allowed,now});
     const repoApprovalId=bootstrap.authorization.approvalId;
-    if(bootstrap.authorization.status!=='APPROVED')
-      decidePlanApproval(db,{approvalId:repoApprovalId,decision:'allow',passwordOk:true,now});
+    if(bootstrap.authorization.status!=='APPROVED'){
+      const approved=decidePlanApproval(db,{approvalId:repoApprovalId,decision:'allow',passwordOk:true,now});
+      if(approved.status!=='APPROVED')fail('PANEL_REPOSITORY_NOT_APPROVED','No se aprobó la autorización del repositorio');
+    }
     const authorized=bootstrapAuthorized(db,{clientId,operationId:bootstrap.operationId,now});
-    if(!authorized)fail('PANEL_BOOTSTRAP_UNAUTHORIZED','El bootstrap no quedó autorizado atómicamente');
+    if(!authorized)fail('PANEL_REPOSITORY_NOT_APPROVED','El bootstrap no quedó autorizado atómicamente');
     const result={planApprovalId,operationId:bootstrap.operationId,repoApprovalId};
     save(db,{...row,status:'APPROVED',decidedAt:iso(now),result});
     return {status:'APPROVED',operationId:bootstrap.operationId,planApprovalId,repoApprovalId,planDigest:row.planDigest};

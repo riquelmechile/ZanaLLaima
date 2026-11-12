@@ -11,17 +11,19 @@ class Element{
   addEventListener(type,fn){this.listeners[type]=fn;}
   click(){return this.listeners.click?.({preventDefault(){}});}
 }
-function boot(){
+function boot(options={}){
   const html=panelHtml(),ids={};
   for(const id of ['app','status','plan','actions','approve','deny'])ids[id]=new Element();
   const document={getElementById:id=>ids[id]??null,createElement:tag=>new Element(tag)};
-  const messages=[],parent={postMessage:message=>messages.push(message)};
+  const messages=[],origins=[],parent={postMessage:(message,origin)=>{origins.push(origin);
+    if(options.throwTools&&message.method==='tools/call')throw new Error('POST_FAILED: transporte roto');
+    messages.push(message);}};
   let listener;
   const window={parent,addEventListener:(type,fn)=>{if(type==='message')listener=fn;}};
   const script=html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
   vm.runInNewContext(script,{window,document,console,Promise});
-  const receive=(data,source=parent)=>listener({data,source});
-  return {html,ids,messages,parent,receive};
+  const receive=(data,source=parent,origin='https://host.example')=>listener({data,source,origin});
+  return {html,ids,messages,origins,parent,receive};
 }
 const flush=async()=>{for(let i=0;i<5;i++)await Promise.resolve();};
 const plain=value=>JSON.parse(JSON.stringify(value));
@@ -46,7 +48,9 @@ test('exporta recurso HTML autocontenido y seguro',()=>{
   const html=panelHtml();
   assert.equal(PANEL_URI,'ui://zanallaima/approval-panel-v1.html');
   assert.equal(PANEL_MIME,'text/html;profile=mcp-app');
-  assert.match(html,/^<!doctype html>/i);assert.doesNotMatch(html,/https?:\/\//);assert.doesNotMatch(html,/innerHTML/);
+  assert.match(html,/^<!doctype html>/i);
+  assert.doesNotMatch(html,/(?:src|href)=["']https?:|@import|url\(/i);
+  assert.doesNotMatch(html,/innerHTML/);
 });
 
 test('handshake y aprobación siguen decide, execute y contexto sin filtrar nonce',async()=>{
@@ -120,3 +124,26 @@ test('R5 clic prematuro no bloquea la vista',async()=>{
   app.receive(toolResult());await flush();assert.equal(app.ids.approve.disabled,false);assert.equal(app.ids.actions.hidden,false);
 });
 test('CSS oculta siempre elementos hidden',()=>assert.match(panelHtml(),/\[hidden\]\s*\{\s*display\s*:\s*none\s*!important\s*\}/));
+
+test('origin null conserva targetOrigin seguro y post fallido rehabilita botones',async()=>{
+  const app=boot();const init=app.messages.find(x=>x.method==='ui/initialize');
+  app.receive({jsonrpc:'2.0',id:init.id,result:{protocolVersion:'2026-01-26'}},app.parent,'null');await flush();
+  app.receive(toolResult());await flush();app.ids.approve.click();await flush();
+  const call=app.messages.find(x=>x.method==='tools/call');
+  assert.equal(app.origins[app.messages.indexOf(call)],'*');
+  const broken=boot({throwTools:true});await initialize(broken);broken.receive(toolResult());await flush();
+  broken.ids.approve.click();await flush();
+  assert.equal(broken.ids.approve.disabled,false);assert.match(broken.ids.status.textContent,/POST_FAILED/);
+});
+
+test('doble fallo al avisar al modelo conserva estado DONE',async()=>{
+  const app=boot(),decide=await approveFlow(app);
+  app.receive({jsonrpc:'2.0',id:decide.id,result:{structuredContent:{status:'APPROVED',operationId:'op-1'}}});await flush();
+  const ex=app.messages.find(x=>x.params?.name==='zana_bootstrap_execute');
+  app.receive({jsonrpc:'2.0',id:ex.id,result:{structuredContent:{state:'DONE',created:{fullName:'zana/demo'}}}});await flush();
+  const update=app.messages.find(x=>x.method==='ui/update-model-context');
+  app.receive({jsonrpc:'2.0',id:update.id,error:{message:'rechazo uno'}});await flush();
+  const fallback=app.messages.find(x=>x.method==='ui/message');
+  app.receive({jsonrpc:'2.0',id:fallback.id,error:{message:'rechazo dos'}});await flush();
+  assert.match(app.ids.status.textContent,/DONE/);
+});

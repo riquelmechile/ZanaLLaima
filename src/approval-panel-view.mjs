@@ -6,7 +6,7 @@ export function panelHtml(){
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Aprobar proyecto</title>
 <style>
-:root{color-scheme:light dark;--bg:var(--color-background-primary,light-dark(#fff,#171717));--card:var(--color-background-secondary,light-dark(#f5f5f5,#242424));--text:var(--color-text-primary,light-dark(#171717,#fafafa));--muted:var(--color-text-secondary,light-dark(#555,#bbb));--border:var(--color-border-primary,light-dark(#ddd,#444));--ok:var(--color-background-success,light-dark(#147d3f,#36a269));--danger:var(--color-background-danger,light-dark(#b42318,#d65a52));font-family:var(--font-sans,system-ui,sans-serif)}
+:root{color-scheme:light dark;--bg:var(--color-background-primary,light-dark(#fff,#171717));--card:var(--color-background-secondary,light-dark(#f5f5f5,#242424));--text:var(--color-text-primary,light-dark(#171717,#fafafa));--muted:var(--color-text-secondary,light-dark(#555,#bbb));--border:var(--color-border-primary,light-dark(#ddd,#444));--ok:var(--color-background-success,light-dark(#147d3f,#176d41));--danger:var(--color-background-danger,light-dark(#b42318,#d65a52));font-family:var(--font-sans,system-ui,sans-serif)}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text)}main{width:min(100%,420px);margin:auto;padding:16px}.card{background:var(--card);border:1px solid var(--border);border-radius:var(--border-radius-lg,14px);padding:14px;margin:10px 0}h1{font-size:1.25rem;margin:0 0 6px}h2{font-size:1rem;margin:14px 0 6px}h3{font-size:.95rem;margin:10px 0 4px}p,li{font-size:.9rem;line-height:1.45}.muted{color:var(--muted)}ul{padding-left:20px}[hidden]{display:none!important}.actions{display:grid;gap:8px;margin-top:14px}button{border:0;border-radius:10px;padding:11px 12px;font:inherit;font-weight:650;cursor:pointer}button:disabled{opacity:.55;cursor:not-allowed}.approve{background:var(--ok);color:white}.deny{background:var(--danger);color:white}.link{background:transparent;color:var(--text);border:1px solid var(--border);width:100%;margin-top:8px}
 </style></head><body><main id="app"><h1>Panel de aprobación</h1><p id="status" class="muted" role="status" aria-live="polite">Conectando con el host…</p><section id="plan"></section><div id="actions" class="actions" hidden><button id="approve" class="approve">Aprobar y crear el repositorio</button><button id="deny" class="deny">Rechazar</button></div></main>
 <script>
@@ -17,8 +17,12 @@ var status=document.getElementById('status'),planBox=document.getElementById('pl
 var approve=document.getElementById('approve'),deny=document.getElementById('deny');
 function post(message,origin){window.parent.postMessage(message,origin||targetOrigin||'*');}
 function request(method,params){
-  var id=nextId++;post({jsonrpc:'2.0',id:id,method:method,params:params});
-  return new Promise(function(resolve,reject){pending.set(id,{resolve:resolve,reject:reject});});
+  var id=nextId++;
+  return new Promise(function(resolve,reject){
+    pending.set(id,{resolve:resolve,reject:reject});
+    try{post({jsonrpc:'2.0',id:id,method:method,params:params});}
+    catch(error){pending.delete(id);error.noDelivery=true;reject(error);}
+  });
 }
 function notify(method,params){post({jsonrpc:'2.0',method:method,params:params});}
 function reply(id,result){post({jsonrpc:'2.0',id:id,result:result||{}});}
@@ -68,7 +72,8 @@ function showPanel(value,meta){
   addSection('Repositorio',function(card){
     var visibility=value.repository&&value.repository.visibility==='public'?'público':'privado';
     card.appendChild(node('p',(value.repository&&value.repository.fullName||'Sin repositorio')+' · '+visibility));
-    card.appendChild(node('p','El panel vence: '+value.expiresAt,'muted'));
+    var when=new Date(value.expiresAt);
+    card.appendChild(node('p','El panel vence: '+(Number.isNaN(when.getTime())?value.expiresAt:when.toLocaleString('es-CL')),'muted'));
   });
   if(typeof nonce!=='string'||!nonce||value.status!=='PENDING'){
     status.textContent='Este panel no puede aprobar; usa la página del operador';actions.hidden=true;return;
@@ -86,13 +91,13 @@ function disable(){approve.disabled=true;deny.disabled=true;}
 function context(text){
   return request('ui/update-model-context',{content:[{type:'text',text:text}]}).catch(function(){
     return request('ui/message',{role:'user',content:{type:'text',text:text}});
-  });
+  }).catch(function(){return null;}); // no sobrescribir DONE al fallar el aviso
 }
 function showExecution(value){
   var label=value.state||'SIN_ESTADO';
   if(label==='DONE'&&value.created){
-    status.textContent='DONE: repositorio creado '+value.created.fullName;
-    var expected='https:'+'//github.com/'+value.created.fullName;
+    status.textContent='CREADO (DONE): repositorio '+value.created.fullName;
+    var expected='https://github.com/'+value.created.fullName;
     if(typeof value.created.htmlUrl==='string'&&value.created.htmlUrl.toLowerCase()===expected.toLowerCase()){
       var link=node('button','Abrir '+value.created.fullName,'link');
       link.addEventListener('click',function(){request('ui/open-link',{url:value.created.htmlUrl}).catch(function(error){status.textContent=error.message;});});
@@ -125,6 +130,7 @@ function decide(decision){
     }).catch(function(error){
       var message=String(error&&error.message||error),code=errorCode(error);
       status.textContent=code==='OUTCOME_UNKNOWN'?message+' — resultado incierto, GPT debe reconciliar':message;
+      if(error&&error.noDelivery&&!operationId){decisionStarted=false;approve.disabled=false;deny.disabled=false;}
       if(operationId)context('operationId='+operationId+', error='+code);
     });
 }
@@ -136,7 +142,7 @@ window.addEventListener('message',function(event){
   if(data.method==='ping'||data.method==='ui/resource-teardown'){if(data.id!==undefined)reply(data.id,{});return;}
   if(data.id!==undefined&&!data.method&&('result' in data||'error' in data)&&pending.has(data.id)){
     var slot=pending.get(data.id);pending.delete(data.id);
-    if(data.id===1&&event.origin)targetOrigin=event.origin;
+    if(data.id===1&&new RegExp('^https?://[^/]+'.concat(String.fromCharCode(36))).test(event.origin||''))targetOrigin=event.origin;
     if(data.error)slot.reject(new Error(data.error.message||'JSON_RPC_ERROR: solicitud rechazada'));
     else slot.resolve(data.result);return;
   }

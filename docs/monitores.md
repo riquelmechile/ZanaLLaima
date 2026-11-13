@@ -6,6 +6,8 @@ ZanaLLaima puede mantener dos monitores permanentes para una sola cuenta: uno re
 
 Se suscribe a `zana.review.ready`, cuyo payload es `{ticketId}`.
 
+**Advertencia de separación estricta:** con `ZANA_DISTINCT_REVIEWER_CLIENT=true`, este monitor revisor no sirve. Los eventos se entregan solo al cliente OAuth autor y el reclamo desde ese cliente responde `SAME_CLIENT`. En ese modo la revisión debe hacerse manualmente desde otro cliente OAuth, usando el código `ZR-`.
+
 1. Carga la skill `zana-4r`.
 2. Llama a `zana_review_claim` con `ticketId` (también puede reclamar sin argumentos el ticket abierto más antiguo de la cuenta).
 3. Lee el diff completo, ejecuta los cuatro lentes y finaliza la 4R.

@@ -84,11 +84,12 @@ Your real values (domain, accounts, tokens and operator password) live **only** 
 | Per-project memory, PR size limits and bounded correction rounds | Implemented and tested; in use |
 | Project interview, plan with alternatives and per-client drafts (`zana_discovery_*`, `zana_project_plan_draft`, `zana_workspace_*`) | Deployed and tested by the operator on November 11, 2026. They are drafts: they create no repositories and authorize nothing |
 | MCP Apps approval panel | Observed in real use since November 12, 2026: one operator click in ChatGPT approved the plan and authorized the repository |
+| Operator plan approval (`zana_plan_approval_request`, `zana_plan_approval_status`, `/operator/approve` page) | Fallback when the client does not display panels: the decision is made on the server page with operator authentication |
 | Repository creation (`zana_bootstrap_execute`) | Observed in real use since November 12, 2026: the first repository created this way was a real operator project |
 | Optional full GitHub access for the orchestrator (`zana_github_request`, `ZANA_GITHUB_FULL_ACCESS`) | Observed in real use: GPT configured CI and branch protection on the new repository |
 | Automatic 4R through `zana.review.ready` | Observed in real use: the host monitor woke a new run, claimed the ticket without a `ZR-` code, and published a review that requested changes, without manually opening a conversation |
 | `zana.review.done` and `zana_mission_adopt` | Implemented, tested and deployed with 0.9.0; not yet observed live. The lease lasts `claimTtlMinutes` (240 min by default) and belongs only to the latest adoption |
-| `project-orchestrator`, `project-review-delegation`, `project-delivery` and `project-events` | Tested contracts with no tool executing them; no `src/` module imports them except one another. The milestone orchestrator is not connected: the `zana-project-orchestrator` skill resumes the mission with mission tools |
+| `project-orchestrator`, `project-review-delegation`, `project-delivery` and `project-events` | Tested contracts with no tool executing them; no `src/` module imports them. The milestone orchestrator is not connected: the `zana-project-orchestrator` skill resumes the mission with mission tools |
 | Per-repository CI (`ZANA_REPO_CHECKS_JSON`) and account-wide allowed repositories (`owner/*`) | Implemented and tested |
 | One Actions run per SHA | Observed: a mission with one CI fix and one review correction round used 3 runs, one per SHA |
 | Live negative cases (the reviewer tries to write, the author claims its own ticket, a push after the ticket) | Tested against fake servers; **not observed live** |

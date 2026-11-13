@@ -1,6 +1,6 @@
 # ZanaLLaima: desarrollo integral de proyectos — contrato de implementación
 
-Estado: **primera parte integrada en `main`**. Están conectadas como tools la entrevista, el plan, la propuesta de bootstrap y los borradores por cliente; el resto son contratos con tests que ninguna tool ejecuta todavía. Las secciones de abajo conservan el diseño y las notas de cuando se escribió.
+Estado: **0.9.0 integrada en `main`**. Están conectados la entrevista, el plan, los borradores por cliente, la aprobación del plan (página y panel), `zana_bootstrap_execute`/`zana_bootstrap_reconcile`, los eventos `zana.review.ready`/`zana.review.done` y `zana_mission_adopt`. Siguen sin tool `project-orchestrator`, `project-review-delegation`, `project-delivery` y `project-events`. Las secciones de abajo conservan el diseño y las notas de cuando se escribió.
 Objetivo: GPT-6 Astra (configuración solicitada, esfuerzo `max`) coordina subagentes nativos cuando existan, sin inferencia externa, y ZanaLLaima aplica política, estado durable y revisión 4R sobre GitHub.
 
 ## Principios inmutables

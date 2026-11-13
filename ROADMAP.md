@@ -13,7 +13,7 @@ Hecho en esta versión:
 Lo que sigue:
 
 - [ ] Conectar el orquestador de hitos en el servidor; hoy la continuidad la ejecuta la skill `zana-project-orchestrator` con tools de misión.
-- [ ] Invitar a la revisora e instalar protección de rama desde el bootstrap, en vez de configurarlas a mano.
+- [ ] Invitar a la revisora e instalar protección de rama desde el bootstrap, en vez de configurarlas después con `zana_github_request`.
 - [ ] Observar en vivo `zana.review.done` y los casos negativos de separación.
 - [ ] Adoptar el protocolo MCP `2026-07-28`.
 - [ ] Ordenar la generación de adopción por `seq` en vez de `created_at` para resistir retrocesos del reloj.
@@ -127,6 +127,9 @@ El código queda y sigue probado en stdio, pero **no se toca más**:
 - **WARNING:** frontera única de rutas, evidencia de reconciliación, FD y rollback seguros, temporales WRITE con intención durable y restore con consentimiento explícito ante posible pérdida de datos.
 - **W6:** conservar `BEGIN IMMEDIATE` durante efecto para impedir revocación concurrente; timeout cooperativo de 5 s antes del `rename`. El kernel puede bloquear `fsync` más tiempo; sigue pendiente una solución con I/O aislado si se exige un deadline duro.
 - **Gate:** CI y Codex sobre SHA final, y nueva revisión independiente de la cuenta revisora; `releaseAuthorized:false` hasta atestación firmada, aislamiento del host y aprobación humana. Sin merge ni deploy.
+
+
+<!-- HISTORICAL_VERSIONS_END -->
 
 ## Principios que no deben perderse
 
@@ -290,6 +293,3 @@ Codex identificó un P1 de regrant después de intención WRITE y un P2 de flags
 ### Corrección adicional de revisión Codex · versión histórica (ver CHANGELOG)
 
 `ebd8c9b`: `observeGit()` inspecciona recursivamente los índices de los submódulos para impedir que flags `assume-unchanged` o `skip-worktree` oculten cambios rastreados. Dos regresiones con repositorios reales añadidas a `tests/git-evidence.test.mjs`. Requiere nueva revisión Codex y security review sobre el HEAD posterior a este commit; no implica aprobación independiente.
-
-
-<!-- HISTORICAL_VERSIONS_END -->

@@ -61,4 +61,4 @@ El reporte completo se define en [host-e2e.md](host-e2e.md). Los valores de mode
 
 ## Fuera de alcance
 
-**ChatGPT web no se conecta a stdio.** Para la app de ChatGPT existe el modo remoto de ZanaLLaima 0.8.0: ver [deploy-remote.md](deploy-remote.md) y [host-e2e-remote.md](host-e2e-remote.md).
+**ChatGPT web no se conecta a stdio.** Para la app de ChatGPT existe el modo remoto de ZanaLLaima 0.9.0: ver [deploy-remote.md](deploy-remote.md) y [host-e2e-remote.md](host-e2e-remote.md).

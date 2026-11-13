@@ -41,6 +41,6 @@ La rama \`main\` tiene checks y revisión externa obligatorios. No hacer merge, 
 
 ## Integración y límites
 
-Seguir \`docs/host-codex.md\` para configurar MCP stdio y \`docs/host-e2e.md\` para el E2E real. **PASO HUMANO:** el operador ejecuta y commitea el reporte; no afirmar capacidades observadas desde tests locales. El transporte HTTP OAuth para la app de ChatGPT es el modo remoto de la versión 0.8.0 (`docs/deploy-remote.md`, `docs/host-e2e-remote.md`).
+Seguir \`docs/host-codex.md\` para configurar MCP stdio y \`docs/host-e2e.md\` para el E2E real. **PASO HUMANO:** el operador ejecuta y commitea el reporte; no afirmar capacidades observadas desde tests locales. El transporte HTTP OAuth para la app de ChatGPT es el modo remoto de la versión 0.9.0 (`docs/deploy-remote.md`, `docs/host-e2e-remote.md`).
 
 Mantener secretos, datos y artefactos dentro del repositorio/workspace autorizado. No introducir dependencias de otros sistemas de coordinación; el código reutilizado de otros proyectos lleva su procedencia en un comentario. Ante incertidumbre de permisos o estado, bloquear y reportar en vez de simular cumplimiento.

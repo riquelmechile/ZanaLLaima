@@ -73,7 +73,7 @@ Your real values (domain, accounts, tokens and operator password) live **only** 
 
 ## Project status
 
-**Version 0.8.0, alpha.** This is experimental software for **one instance per operator**. It has been in real use since November 9, 2026, connected to the ChatGPT app.
+**Version 0.9.0, alpha.** This is experimental software for **one instance per operator**. Remote mode has been in real use since November 9, 2026; the project capabilities marked as observed were used live on November 12, 2026.
 
 | Component | Status |
 | --- | --- |
@@ -83,9 +83,13 @@ Your real values (domain, accounts, tokens and operator password) live **only** 
 | Checks, tickets, lenses, review by the reviewer account, delivery and merge | In real use: 3 complete missions. In one, the reviewer conversation found a critical bug, requested changes, and another conversation approved the fix |
 | Per-project memory, PR size limits and bounded correction rounds | Implemented and tested; in use |
 | Project interview, plan with alternatives and per-client drafts (`zana_discovery_*`, `zana_project_plan_draft`, `zana_workspace_*`) | Deployed and tested by the operator on November 11, 2026. They are drafts: they create no repositories and authorize nothing |
-| Operator approval of the plan (`zana_plan_approval_request`, `zana_plan_approval_status`, page `/operator/approve`) | Implemented and tested. Approves one plan by its exact digest with the operator password; the operator sees the whole plan and can revoke it; it creates no repositories, merges nothing and deploys nothing |
+| MCP Apps approval panel | Observed in real use since November 12, 2026: one operator click in ChatGPT approved the plan and authorized the repository |
+| Repository creation (`zana_bootstrap_execute`) | Observed in real use since November 12, 2026: the first repository created this way was a real operator project |
+| Optional full GitHub access for the orchestrator (`zana_github_request`, `ZANA_GITHUB_FULL_ACCESS`) | Observed in real use: GPT configured CI and branch protection on the new repository |
+| Automatic 4R through `zana.review.ready` | Observed in real use: the host monitor woke a new run, claimed the ticket without a `ZR-` code, and published a review that requested changes, without manually opening a conversation |
+| `zana.review.done` and `zana_mission_adopt` | Implemented, tested and deployed with 0.9.0; not yet observed live. The lease lasts `claimTtlMinutes` (240 min by default) and belongs only to the latest adoption |
+| `project-orchestrator`, `project-review-delegation`, `project-delivery` and `project-events` | Tested contracts with no tool executing them; no `src/` module imports them except one another. The milestone orchestrator is not connected: the `zana-project-orchestrator` skill resumes the mission with mission tools |
 | Per-repository CI (`ZANA_REPO_CHECKS_JSON`) and account-wide allowed repositories (`owner/*`) | Implemented and tested |
-| Repository creation (bootstrap), milestone orchestrator, 4R delegated to subagents, project delivery gate and events | Contracts with tests only: **no tool runs them yet**. `zana_bootstrap_prepare` only builds the repository proposal and creates nothing (see [docs/project-evolution.md](docs/project-evolution.md)) |
 | One Actions run per SHA | Observed: a mission with one CI fix and one review correction round used 3 runs, one per SHA |
 | Live negative cases (the reviewer tries to write, the author claims its own ticket, a push after the ticket) | Tested against fake servers; **not observed live** |
 | SQLite WAL, leases, retries and recovery | Implemented and tested |
@@ -107,6 +111,9 @@ The detailed documents are in Spanish.
 | Real E2E with the ChatGPT app (ZL-018) | [docs/host-e2e-remote.md](docs/host-e2e-remote.md) |
 | Functional safety, states and recovery | [docs/safety-lifecycle.md](docs/safety-lifecycle.md) |
 | CI audit, repository security and release | [docs/release-security.md](docs/release-security.md) |
+| MCP Apps approval panel | [docs/approval-panel.md](docs/approval-panel.md) |
+| Optional full GitHub access | [docs/github-full-access.md](docs/github-full-access.md) |
+| Permanent review and continuity monitors | [docs/monitores.md](docs/monitores.md) |
 | Roadmap and changelog | [ROADMAP.md](ROADMAP.md) · [CHANGELOG.md](CHANGELOG.md) |
 
 <details>

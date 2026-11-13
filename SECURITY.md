@@ -6,7 +6,7 @@ ZanaLLaima es software experimental para **una instancia por operador**. No est�
 
 No publiques detalles de explotación, credenciales, llaves ni logs sensibles en issues públicos. Contacta al dueño del repositorio por un canal privado o usa el reporte privado de vulnerabilidades de GitHub si el repositorio lo tiene activo.
 
-## Modo remoto (0.8.0)
+## Modo remoto (0.9.0)
 
 - **Transporte:** MCP Streamable HTTP que escucha solo en la interfaz loopback IPv4 (`src/http.mjs`). Lo publica un túnel saliente (por ejemplo Cloudflare); el servidor no necesita puertos abiertos.
 - **Autenticación:** servidor OAuth 2.1 propio (`src/oauth.mjs`) con registro **cerrado**. El operador abre una ventana de alta de hasta 60 minutos (`node src/cli.mjs remote-enroll <minutos>`); fuera de ella no se registran clientes. Cada conexión nueva exige la clave de consentimiento del operador (`ZANA_OAUTH_CONSENT_PASSWORD`, al menos 32 caracteres). Hay un tope de 50 clientes registrados; `remote-clients` y `remote-revoke` los listan y revocan.
@@ -18,6 +18,9 @@ No publiques detalles de explotación, credenciales, llaves ni logs sensibles en
 - **Avisos de revisión (MCP Events):** el servidor hace una petición saliente al callback que registra el anfitrión. Solo acepta HTTPS a nombres públicos (sin IP, puerto, credenciales ni redirecciones), resuelve el DNS en cada envío, rechaza direcciones privadas y fija la dirección validada; el callback se guarda solo si devuelve un desafío firmado. El aviso lleva únicamente el id del ticket, nunca el código `ZR-`, instrucciones ni tokens, y no concede nada: quien reclama sin el código debe ser una sesión nueva del mismo cliente OAuth que pidió la revisión, y siguen valiendo `AUTHOR_SESSION`, `SESSION_WROTE` y `SESSION_PREDATES_TICKET`. El secreto de firma del anfitrión se guarda en la base de estado (0600). Con `ZANA_DISTINCT_REVIEWER_CLIENT` activo, el reclamo sin código queda rechazado por `SAME_CLIENT`.
 
 - **Panel de aprobación MCP Apps:** `zana_project_approval_panel` requiere que el cliente declare `io.modelcontextprotocol/ui` con `text/html;profile=mcp-app`. `zana_panel_decide` declara `visibility:['app']` y se deshabilita en sesiones sin esa extensión. El nonce se entrega exclusivamente en `_meta`, se consume una sola vez y no aparece en `content`, `structuredContent` ni auditoría. **Límite de confianza:** depende de que el anfitrión respete la visibilidad app-only y no pase `_meta` al modelo. Sin UI, se conserva la página independiente del operador; no existe autorización automática.
+
+- **Acceso GitHub completo opcional:** `zana_github_request` usa un token administrativo separado y solo se habilita con `ZANA_GITHUB_FULL_ACCESS`. Su alcance reviewer está restringido y cada operación queda auditada sin secretos; no amplía el downstream de las misiones ni autoriza merge o deploy.
+- **Continuidad por MCP Events:** `zana.review.ready` y `zana.review.done` entregan webhooks firmados con punteros mínimos. Un 2xx solo confirma recepción; cada ejecución nueva vuelve a autenticarse, contrasta el backend y respeta las fronteras autora/revisora. Las suscripciones vencen y se renuevan antes de `refreshBefore`.
 
 ## Decisiones del operador
 

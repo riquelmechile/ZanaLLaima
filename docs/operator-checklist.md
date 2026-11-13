@@ -1,4 +1,4 @@
-# Checklist del operador: ZanaLLaima 0.8.0
+# Checklist del operador: ZanaLLaima 0.9.0
 
 **PASOS HUMANOS.** Ningún resultado de CI concede permiso de merge ni despliegue. La llave privada permanece fuera del repositorio, de chats y del proceso MCP.
 

@@ -2,6 +2,7 @@
 
 ## [Sin publicar]
 
+- Núcleo idempotente para preparar repositorios recién creados: revisora con Write, protección de la rama default y detección del workflow configurado.
 - La protección de rama de repositorios administrados exige `zana/4r`, no el job lanzado por `workflow_dispatch`; es una segunda llave que no autentica al publicador ni sustituye la verificación de CI e identidad de `zana_merge`. La adopción vigente se elige por `seq` (orden de inserción) en vez de `created_at`; el corte respecto del último ticket finalizado y el vencimiento del lease siguen usando la hora del servidor (limitación conocida ante retrocesos del reloj).
 
 ## [0.9.0] - 2026-11-12

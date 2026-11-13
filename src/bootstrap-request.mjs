@@ -28,6 +28,7 @@ function view(op,authorization){
     planDigest:op.intent.planDigest,intentDigest:op.intent.digest,
     // created: el repositorio ya creado; lastError: por qué falló el último intento.
     created:op.repository??null,lastError:op.lastError??null,
+    setup:op.setup??null,
     authorization:{status:authorization.status,approvalId:open?authorization.approvalId:null,
       expiresAt:open?authorization.expiresAt:null}};
 }

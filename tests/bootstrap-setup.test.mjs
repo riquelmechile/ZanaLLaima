@@ -26,6 +26,7 @@ function clients(opts={}){
       if(path.endsWith('/permission'))return opts.roleName?{role_name:opts.roleName}:{permission:state.permission};
       if(method==='PUT'&&path.includes('/collaborators/')){state.invited=true;return null;}
       if(method==='GET'&&path.includes('/branches/')&&path.endsWith('/protection')){
+        if(opts.getProtectionError&&!state.applied)throw opts.getProtectionError;
         if(opts.protectionMissing&&!state.applied)throw new GitHubApiError(404,'Not Found');
         return state.protection;
       }
@@ -131,5 +132,45 @@ test('error de red se guarda acotado en lastError y se relanza',async()=>{
     await assert.rejects(run(t,clients({networkPath:path})),/SETUP_GITHUB_ERROR/);
     const s=bootstrapStatus(t.f.db,{clientId:t.f.client,operationId:t.operationId,now:T0}).setup;
     assert.match(s.lastError,/SETUP_GITHUB_ERROR/);assert.ok(s.lastError.length<=200);
+  }finally{t.f.db.close();}
+});
+
+
+// Reproducciones documentadas en el review 4R del PR #71.
+const actualGitHubGet={
+  url:'x',
+  required_status_checks:{strict:true,contexts:['zana/4r'],checks:[{context:'zana/4r',app_id:null}]},
+  required_pull_request_reviews:{dismiss_stale_reviews:true,require_code_owner_reviews:false,
+    require_last_push_approval:true,required_approving_review_count:1},
+  required_signatures:{enabled:false},enforce_admins:{enabled:true},
+  required_linear_history:{enabled:false},allow_force_pushes:{enabled:false},
+  allow_deletions:{enabled:false},block_creations:{enabled:false},
+  required_conversation_resolution:{enabled:true},lock_branch:{enabled:false},
+  allow_fork_syncing:{enabled:false}
+};
+
+test('REPRO 4R: GET real ya correcto no debe hacer PUT',async()=>{
+  const t=operation(),c=clients({protection:actualGitHubGet,afterProtection:actualGitHubGet});
+  try{
+    const r=await run(t,c);
+    assert.equal(r.setup.protection,'APPLIED');
+    assert.equal(c.calls.some(x=>x[0]==='PUT'&&x[1].endsWith('/protection')),false);
+  }finally{t.f.db.close();}
+});
+test('REPRO 4R: 403 de plan en GET produce UNAVAILABLE y revisa workflow',async()=>{
+  const t=operation(),c=clients({getProtectionError:new GitHubApiError(403,
+    'GitHub HTTP 403: Upgrade to GitHub Pro or make this repository public to enable this feature.')});
+  try{
+    const result=await run(t,c);
+    assert.deepEqual([result.setup.protection,result.setup.workflow],['UNAVAILABLE','PRESENT']);
+  }finally{t.f.db.close();}
+});
+test('REPRO 4R: fallo previo no inventa MISMATCH ni MISSING',async()=>{
+  const t=operation(),c=clients({networkPath:'/repos/acme/gestor/collaborators/review-bot/permission'});
+  try{
+    await assert.rejects(run(t,c),/SETUP_GITHUB_ERROR/);
+    const setup=bootstrapStatus(t.f.db,{clientId:t.f.client,operationId:t.operationId,now:T0}).setup;
+    assert.notEqual(setup.protection,'MISMATCH');
+    assert.notEqual(setup.workflow,'MISSING');
   }finally{t.f.db.close();}
 });

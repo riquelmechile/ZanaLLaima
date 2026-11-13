@@ -32,6 +32,7 @@ test('crear el repositorio exige plan aprobado y deja una autorización pendient
       {effect:'CREATE_REPOSITORY',status:'PENDING',repository:{fullName:'acme/gestor',visibility:'private',intentDigest:r.intentDigest},plan:null});
     assert.equal(view.idea,f.w.brief.idea);
     assert.equal(bootstrapStatus(f.db,{clientId:f.client,operationId:r.operationId,now:T0}).authorization.status,'PENDING');
+    assert.equal(bootstrapStatus(f.db,{clientId:f.client,operationId:r.operationId,now:T0}).setup,null);
     assert.throws(()=>bootstrapStatus(f.db,{clientId:'oauth-other',operationId:r.operationId,now:T0}),/BOOTSTRAP_NOT_FOUND/);
   }finally{f.db.close();}
 });

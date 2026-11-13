@@ -311,3 +311,16 @@ test('timestamps por campo y runSeq interno, sin duplicar códigos de error',asy
     assert.doesNotMatch(st.setup.lastError,/SETUP_GITHUB_ERROR: SETUP_GITHUB_ERROR:/);
   }finally{e.f.db.close();}
 });
+
+test('una corrida nueva reemplaza el error preciso de una corrida anterior',async()=>{
+  const t=operation();
+  try{
+    await assert.rejects(run(t,clients({permission:'read',invitations:[]})),/SETUP_REVIEWER_FAILED/);
+    const before=bootstrapStatus(t.f.db,{clientId:t.f.client,operationId:t.operationId,now:T0}).setup;
+    assert.match(before.lastError,/^SETUP_REVIEWER_FAILED:/);
+    await assert.rejects(run(t,clients({repoError:new GitHubApiError(502,'GitHub unreachable')})),/SETUP_GITHUB_ERROR/);
+    const after=bootstrapStatus(t.f.db,{clientId:t.f.client,operationId:t.operationId,now:T0}).setup;
+    assert.match(after.lastError,/^SETUP_GITHUB_ERROR:/);
+    assert.doesNotMatch(after.lastError,/SETUP_REVIEWER_FAILED/);
+  }finally{t.f.db.close();}
+});

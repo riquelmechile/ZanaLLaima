@@ -7,7 +7,7 @@
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {canonicalJson} from './actor-assertion.mjs';
 import {missionPull} from './github-delivery.mjs';
-import {recordActivity,sessionRow,sessionWrote,nowIso,writeAudit,missionClients,remoteMission} from './remote-state.mjs';
+import {recordActivity,sessionRow,sessionWrote,sessionIsPureReviewer,nowIso,writeAudit,missionClients,remoteMission} from './remote-state.mjs';
 import {UNTESTED_REASON} from './checks.mjs';
 import {budgetOf} from './budget.mjs';
 import {redactText,envSecrets} from './redact.mjs';
@@ -385,7 +385,9 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
           return {error:['SESSION_WROTE','this session wrote in mission '+t.mission_id]};
         const me=sessionRow(db,session.sessionId);
         if(!me)return {error:['SESSION_UNKNOWN','session not registered']};
-        if(Date.parse(me.created_at)<=Date.parse(t.created_at))
+        // El monitor permanente reutiliza conversación: si NUNCA escribió ni
+        // fue autora de ninguna misión/ticket, no arrastra contexto autoral.
+        if(Date.parse(me.created_at)<=Date.parse(t.created_at)&&!sessionIsPureReviewer(db,session.sessionId))
           return {error:['SESSION_PREDATES_TICKET','this session was created before the ticket; open a new conversation']};
         db.prepare("UPDATE review_tickets SET state='CLAIMED',reviewer_session=?,claimed_at=?,updated_at=? WHERE ticket_id=?")
           .run(session.sessionId,nowIso(),nowIso(),t.ticket_id);

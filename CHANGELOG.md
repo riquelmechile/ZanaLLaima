@@ -2,6 +2,8 @@
 
 ## [Sin publicar]
 
+- El monitor revisor permanente puede reclamar tickets posteriores con la misma sesión **solo si nunca escribió/adoptó en ninguna misión, creó una misión ni pidió un ticket**. Se conserva `SESSION_PREDATES_TICKET` para las sesiones con historial autoral y todas las barreras del reclamo.
+
 - `zana_bootstrap_setup` conecta el setup de repositorios nuevos al servidor MCP y al panel: revisora Write, protección `zana/4r`, checks por repositorio y auditoría sin secretos; corrige timestamps, errores y visibilidad de `runSeq`.
 
 - Núcleo idempotente para preparar repositorios recién creados: revisora con Write, protección de la rama default y detección del workflow configurado.

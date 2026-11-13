@@ -12,7 +12,7 @@ Se suscribe a `zana.review.ready`, cuyo payload es `{ticketId}`.
 2. Llama a `zana_review_claim` con `ticketId` (también puede reclamar sin argumentos el ticket abierto más antiguo del mismo cliente OAuth).
 3. Lee el diff completo, ejecuta los cuatro lentes y finaliza la 4R.
 4. Publica la revisión con la cuenta revisora.
-5. Nunca escribe código, fusiona ni adopta la misión.
+5. Nunca escribe código, fusiona ni adopta la misión. **Esta debe ser una tarea dedicada solo a revisar**: si la conversación escribe/adopta cualquier misión, crea una misión o solicita un ticket, pierde la excepción para reclamar tickets futuros desde la misma sesión.
 
 ### Prompt de ejemplo
 
@@ -35,4 +35,4 @@ Se suscribe a `zana.review.done`, cuyo payload es `{ticketId, verdict}`. El avis
 
 ## Separación con una sola cuenta
 
-La separación autor/revisor se conserva porque cada webhook despierta una sesión nueva y el backend aplica `AUTHOR_SESSION`, `SESSION_WROTE` y `REVIEWER_READ_ONLY`. La sesión revisora no puede escribir ni adoptar; la autora no puede reclamar su propio ticket. El límite es honesto: ambas sesiones pertenecen al mismo dueño. Es separación de sesiones y credenciales de GitHub, no independencia organizacional ni una auditoría externa.
+La separación autor/revisor no depende de que cada webhook abra una conversación nueva: el anfitrión puede reusar la misma sesión para varios tickets. En ese caso el backend permite la antigüedad solo a la **revisora pura** (sin ninguna `remote_activity` en ninguna misión, sin crear misiones ni pedir tickets) y sigue aplicando `AUTHOR_SESSION`, `SAME_CLIENT` cuando está configurado, `SESSION_WROTE` y `REVIEWER_READ_ONLY`. La sesión revisora no puede escribir ni adoptar; la autora no puede reclamar su propio ticket. El límite es honesto: ambas sesiones pertenecen al mismo dueño. Es separación de sesiones y credenciales de GitHub, no independencia organizacional ni una auditoría externa.

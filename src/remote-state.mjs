@@ -50,6 +50,12 @@ export const missionClients=(db,missionId)=>db.prepare(
   'SELECT DISTINCT client_id FROM remote_activity WHERE mission_id=? AND client_id IS NOT NULL').all(missionId).map(r=>r.client_id);
 export const sessionWrote=(db,sessionId,missionId)=>Boolean(db?.prepare(
   'SELECT 1 FROM remote_activity WHERE session_id=? AND mission_id=? LIMIT 1').get(sessionId,missionId));
+// Un monitor revisor puede vivir durante muchos tickets, pero pierde esta
+// excepción al escribir/adoptar en CUALQUIER misión o al haber sido autor.
+export const sessionIsPureReviewer=(db,sessionId)=>Boolean(db&&
+  !db.prepare('SELECT 1 FROM remote_activity WHERE session_id=? LIMIT 1').get(sessionId)&&
+  !db.prepare('SELECT 1 FROM remote_missions WHERE created_session=? LIMIT 1').get(sessionId)&&
+  !db.prepare('SELECT 1 FROM review_tickets WHERE author_session=? LIMIT 1').get(sessionId));
 // Author rule for zana_merge: the session that created the mission, or one
 // that held (started or rebound) one of its units.
 export const sessionIsMissionAuthor=(db,sessionId,missionId)=>Boolean(db&&(

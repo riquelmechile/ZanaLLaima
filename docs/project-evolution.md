@@ -1,6 +1,6 @@
 # ZanaLLaima: desarrollo integral de proyectos — contrato de implementación
 
-Estado: **primera parte integrada en `main`**. Están conectadas como tools la entrevista, el plan, la propuesta de bootstrap y los borradores por cliente; el resto son contratos con tests que ninguna tool ejecuta todavía. Las secciones de abajo conservan el diseño y las notas de cuando se escribió.
+Estado: **0.9.0 integrada en `main`**. Están conectados la entrevista, el plan, los borradores por cliente, la aprobación del plan (página y panel), `zana_bootstrap_execute`/`zana_bootstrap_reconcile`, los eventos `zana.review.ready`/`zana.review.done` y `zana_mission_adopt`. Siguen sin tool `project-orchestrator`, `project-review-delegation`, `project-delivery` y `project-events`. Las secciones de abajo conservan el diseño y las notas de cuando se escribió.
 Objetivo: GPT-6 Astra (configuración solicitada, esfuerzo `max`) coordina subagentes nativos cuando existan, sin inferencia externa, y ZanaLLaima aplica política, estado durable y revisión 4R sobre GitHub.
 
 ## Principios inmutables
@@ -71,7 +71,7 @@ Los dos puntos siguientes ya existen como `zana_workspace_create`, `_get`, `_upd
 
 ## Limitaciones observadas antes de escribir al repositorio
 
-- La sesión MCP rechazó `zana_mission_init` para `riquelmechile/ZanaLLaima`: `REPO_NOT_ALLOWED`. Debe habilitarse explícitamente en `ZANA_GITHUB_REPOS`, preservando los repos actualmente permitidos. En esta evolución el usuario autorizó expresamente crear ramas y PR mediante el conector GitHub, **sin afirmar cobertura del gate de misión ZanaLLaima**; los PR requieren 4R independiente antes de integración.
+- La sesión MCP rechazó `zana_mission_init` para `owner/ZanaLLaima`: `REPO_NOT_ALLOWED`. Debe habilitarse explícitamente en `ZANA_GITHUB_REPOS`, preservando los repos actualmente permitidos. En esta evolución el usuario autorizó expresamente crear ramas y PR mediante el conector GitHub, **sin afirmar cobertura del gate de misión ZanaLLaima**; los PR requieren 4R independiente antes de integración.
 - `zana_capability_status` indicó `executionMode: INLINE` y `verifiedNativeLaunches: 0` para esta sesión. No afirmar que se lanzaron cuatro subagentes.
 - Xanxito confirmó después la autonomía `IMPLEMENT_AND_VERIFY` para un contrato de trabajo local. No se usa para delegar trabajos a otros hosts ni como sustituto de las garantías de ZanaLLaima.
 - Cuando se escribió esta sección el código D1 estaba aislado. Después pasó CI y revisión con la cuenta revisora y se conectó como tools; la aprobación del plan por el usuario se implementó después (D2): la pide `zana_plan_approval_request` y la concede solo el operador en `/operator/approve`, sobre el digest exacto.

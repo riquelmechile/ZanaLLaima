@@ -73,7 +73,7 @@ Tus valores reales (dominio, cuentas, tokens y clave del operador) viven **solo*
 
 ## Estado del proyecto
 
-**Versión 0.8.0, alfa.** Es software experimental para **una instancia por operador**. Está en uso real desde el 9 de noviembre de 2026, conectado a la app de ChatGPT.
+**Versión 0.9.0, alfa.** Es software experimental para **una instancia por operador**. El modo remoto está en uso real desde el 9 de noviembre de 2026; las capacidades de proyecto indicadas como observadas se usaron en vivo el 12 de noviembre de 2026.
 
 | Componente | Estado |
 | --- | --- |
@@ -83,9 +83,14 @@ Tus valores reales (dominio, cuentas, tokens y clave del operador) viven **solo*
 | Checks, tickets, lentes, review con cuenta revisora, delivery y merge | En uso real: 3 misiones completas. En una, la conversación revisora encontró un error crítico y pidió cambios, y otra conversación aprobó la corrección |
 | Memoria por proyecto, límites de tamaño del PR y rondas de corrección acotadas | Implementado y probado; en uso |
 | Entrevista de proyecto, plan con alternativas y borradores por cliente (`zana_discovery_*`, `zana_project_plan_draft`, `zana_workspace_*`) | Desplegados y probados por el operador el 11 de noviembre de 2026. Son borradores: no crean repos ni autorizan nada |
-| Aprobación del plan por el operador (`zana_plan_approval_request`, `zana_plan_approval_status`, página `/operator/approve`) | Implementado y probado. Aprueba un plan por su digest exacto con la contraseña del operador, que lo ve completo y puede revocarlo; no crea repos, no fusiona y no despliega |
+| Panel MCP Apps de aprobación | Observado en uso real desde el 12 de noviembre de 2026: un clic del operador en ChatGPT aprobó el plan y autorizó el repositorio |
+| Aprobación del plan por el operador (`zana_plan_approval_request`, `zana_plan_approval_status`, página `/operator/approve`) | Respaldo disponible cuando el cliente no muestra paneles: la decisión se toma en la página del servidor con autenticación del operador |
+| Creación del repositorio (`zana_bootstrap_execute`) | Observada en uso real desde el 12 de noviembre de 2026: el primer repositorio creado así fue un proyecto real del operador |
+| Acceso GitHub completo opcional del orquestador (`zana_github_request`, `ZANA_GITHUB_FULL_ACCESS`) | Observado en uso real: GPT configuró CI y protección del repositorio nuevo |
+| 4R automática por evento `zana.review.ready` | Observada en uso real: el monitor del anfitrión despertó una ejecución nueva, reclamó el ticket sin código `ZR-` y publicó una revisión que pidió cambios, sin abrir una conversación manual |
+| Evento `zana.review.done` y `zana_mission_adopt` | Implementados, probados y desplegados con 0.9.0; todavía no observados en vivo. El lease dura `claimTtlMinutes` (240 min por defecto) y solo vale para la adopción más reciente |
+| `project-orchestrator`, `project-review-delegation`, `project-delivery` y `project-events` | Contratos con tests, sin tool que los ejecute; ningún módulo de `src/` los importa. El orquestador de hitos no está conectado: la skill `zana-project-orchestrator` retoma la misión usando las tools de misión |
 | CI por repositorio (`ZANA_REPO_CHECKS_JSON`) y repos permitidos por cuenta (`owner/*`) | Implementado y probado |
-| Creación de repos (bootstrap), orquestador de hitos, 4R delegada a subagentes, gate de entrega de proyecto y eventos | Solo contratos con tests: **ninguna tool los ejecuta todavía**. `zana_bootstrap_prepare` solo arma la propuesta de repo, sin crearlo (ver [docs/project-evolution.md](docs/project-evolution.md)) |
 | Una corrida de Actions por SHA | Observado: una misión con una corrección de CI y una ronda de corrección de la revisión gastó 3 corridas, una por SHA |
 | Casos negativos en vivo (la revisora intenta escribir, la autora reclama su ticket, push después del ticket) | Probados contra servidores falsos; **sin observar en vivo** |
 | SQLite WAL, leases, reintentos y recuperación | Implementado y probado |
@@ -105,6 +110,9 @@ Lo que esta versión **no** es: una auditoría de seguridad ni un producto certi
 | E2E real con la app de ChatGPT (ZL-018) | [docs/host-e2e-remote.md](docs/host-e2e-remote.md) |
 | Seguridad funcional, estados y recuperación | [docs/safety-lifecycle.md](docs/safety-lifecycle.md) |
 | Auditoría de CI, seguridad del repo y release | [docs/release-security.md](docs/release-security.md) |
+| Panel MCP Apps de aprobación | [docs/approval-panel.md](docs/approval-panel.md) |
+| Acceso GitHub completo opcional | [docs/github-full-access.md](docs/github-full-access.md) |
+| Monitores permanentes de revisión y continuidad | [docs/monitores.md](docs/monitores.md) |
 | Roadmap y registro de cambios | [ROADMAP.md](ROADMAP.md) · [CHANGELOG.md](CHANGELOG.md) |
 
 <details>

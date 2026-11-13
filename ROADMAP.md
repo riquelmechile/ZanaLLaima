@@ -1,3 +1,26 @@
+## 0.9.0: del plan al repositorio revisado (12 nov 2026)
+
+**Objetivo.** Que GPT lleve un proyecto desde la idea hasta un repositorio creado, configurado y revisado, manteniendo decisiones explícitas del operador y separación de sesiones.
+
+Hecho en esta versión:
+
+- [x] Panel MCP Apps de aprobación: un clic del operador aprueba el plan y autoriza el repositorio; se conserva la página independiente cuando el host no ofrece la extensión.
+- [x] Bootstrap ejecutado con `zana_bootstrap_execute`; el primer repositorio creado así fue un proyecto real del operador.
+- [x] Acceso GitHub completo opcional del orquestador con `zana_github_request` y token separado.
+- [x] Eventos `zana.review.ready` y `zana.review.done` para continuidad por webhook firmado.
+- [x] Adopción de misión con lease: solo la generación `MISSION_ADOPT` más reciente puede renovarlo.
+
+Lo que sigue:
+
+- [ ] Conectar el orquestador de hitos en el servidor; hoy la continuidad la ejecuta la skill `zana-project-orchestrator` con tools de misión.
+- [ ] Invitar a la revisora e instalar protección de rama desde el bootstrap, en vez de configurarlas después con `zana_github_request`.
+- [ ] Observar en vivo `zana.review.done` y los casos negativos de separación.
+- [ ] Adoptar el protocolo MCP `2026-07-28`.
+- [ ] Ordenar la generación de adopción por `seq` en vez de `created_at` para resistir retrocesos del reloj.
+
+<!-- HISTORICAL_VERSIONS_START -->
+
+
 ## 0.8.0: de una misión a un proyecto, primera parte (11 nov 2026)
 
 **Objetivo.** Que GPT pueda llevar un proyecto completo desde una idea: entrevista, plan aprobado por el operador, repositorio, misiones encadenadas, revisión 4R y entrega. Esta versión trae la base y lo que ya se puede usar; el resto queda como contrato probado, sin conectar.
@@ -20,7 +43,8 @@ Lo que sigue:
 - [ ] Revisión que converge: el revisor recibe los hallazgos de las rondas anteriores y el operador puede aceptar un riesgo.
 - [ ] Gate de entrega con evidencia definida para merge squash.
 - [ ] Borrado y recuperación de borradores; tabla propia en vez de `metadata`.
-- [ ] MCP Events para continuidad entre misiones.
+- [x] Panel MCP Apps de aprobación (hecho en 0.9.0): decisión con un clic en ChatGPT, con alternativa en la página del operador.
+- [x] MCP Events para continuidad entre misiones. Hecho en 0.9.0 con `zana.review.ready` y `zana.review.done`.
 - [ ] Rechazar al inicio una misión sobre un repo que no existe (`REPO_NOT_FOUND`).
 
 ## Versión anterior: MCP remoto para la app de ChatGPT, en uso real desde el 9 nov 2026
@@ -44,7 +68,7 @@ Lo que sigue:
 - [ ] **ZL-018 (parcial).** Observado: el camino feliz, una ronda de corrección y la sesión por conversación (`examples/host-e2e-remote.json`). Falta: los casos negativos en vivo (la revisora intenta escribir, la autora reclama su ticket, push después del ticket, merge por el downstream) y recibos de modelo, esfuerzo y subagentes, que siguen siendo palabra del host.
 - [x] Workflow de checks configurable por repo (hecho en la versión siguiente con `ZANA_REPO_CHECKS_JSON`).
 - [ ] Escritura por archivo adjunto (`openai/fileParams`) para cambios grandes sin pasar el contenido por el chat.
-- [ ] Panel MCP Apps con el estado de la misión y la memoria del proyecto.
+- [x] Panel MCP Apps de aprobación. Hecho en 0.9.0; el panel de estado y memoria sigue pendiente.
 - [ ] Cerco de merge entre procesos: solo si se corre más de un proceso.
 - Pendiente menor: las skills `review-*` se adaptaron desde gentle-shell; compararlas con la copia de referencia y alinear si difieren.
 
@@ -59,7 +83,6 @@ El código queda y sigue probado en stdio, pero **no se toca más**:
 - los warnings pendientes de la ronda 11 (atributos y `crlf`, `**/.gitignore` del hilo Codex `4485193524`, lock con fd en Node, alias `nlink=2`, `setup-python` en CI, epoch clampeado).
 - límite conocido del storage local que tampoco se toca: si se pierde la DB SQLite el `state.json` heredado se reimporta solo (preexistente). Las rondas de revisión y el presupuesto consumido ya son monótonos en restore desde la versión anterior.
 
-<!-- HISTORICAL_VERSIONS_START -->
 ## Historial de versiones (no vigente)
 
 - 0.3.1: contratos iniciales SOLO y guías del ejecutor.
@@ -70,7 +93,6 @@ El código queda y sigue probado en stdio, pero **no se toca más**:
 - 0.5.2: presupuesto monótono en restore y adopt (`CONSUMED_BUDGET`) y congelamiento de la línea local.
 - 0.6.0: MCP remoto para la app de ChatGPT. No se publicó por separado: quedó dentro de la 0.7.0.
 - 0.7.0: primera versión publicada. MCP remoto en uso real, sesión por conversación de ChatGPT y una corrida de Actions por SHA.
-<!-- HISTORICAL_VERSIONS_END -->
 
 # Roadmap técnico de ZanaLLaima
 
@@ -105,6 +127,9 @@ El código queda y sigue probado en stdio, pero **no se toca más**:
 - **WARNING:** frontera única de rutas, evidencia de reconciliación, FD y rollback seguros, temporales WRITE con intención durable y restore con consentimiento explícito ante posible pérdida de datos.
 - **W6:** conservar `BEGIN IMMEDIATE` durante efecto para impedir revocación concurrente; timeout cooperativo de 5 s antes del `rename`. El kernel puede bloquear `fsync` más tiempo; sigue pendiente una solución con I/O aislado si se exige un deadline duro.
 - **Gate:** CI y Codex sobre SHA final, y nueva revisión independiente de la cuenta revisora; `releaseAuthorized:false` hasta atestación firmada, aislamiento del host y aprobación humana. Sin merge ni deploy.
+
+
+<!-- HISTORICAL_VERSIONS_END -->
 
 ## Principios que no deben perderse
 

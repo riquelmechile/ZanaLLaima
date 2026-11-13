@@ -1,10 +1,12 @@
 # Fase 5: auditoría de CI, seguridad del repositorio y release
 
-**Versión del proyecto: ZanaLLaima 0.8.0.** Firma CI por `workflow_run` en `ci-attestation.yml`, política **main-only** y reviewer humano requerido en el environment `ci-attestation`.
+**Versión del proyecto: ZanaLLaima 0.9.0.** Firma CI por `workflow_run` en `ci-attestation.yml`, política **main-only** y reviewer humano requerido en el environment `ci-attestation`.
 
-## Qué es la release 0.8.0 y qué no
+## Qué es la release 0.9.0 y qué no
 
-Es una versión **alfa** para instalaciones de un solo operador. El modo remoto está en uso real desde el 9 de noviembre de 2026; la entrevista, el plan y los borradores se desplegaron y probaron el 11 de noviembre. Se publica con el tag `v0.8.0` por decisión del operador. Respecto de la anterior agrega la entrevista y el plan de proyecto, los borradores por cliente, el CI por repositorio y los repos permitidos por cuenta; de los módulos de bootstrap, orquestación, revisión delegada, entrega y eventos solo está conectada la propuesta de bootstrap (`zana_bootstrap_prepare`): el resto son contratos probados que ninguna tool ejecuta todavía. El resto de este documento es la auditoría de la fase 5, hecha antes del modo remoto: sus hallazgos sobre el modo stdio siguen valiendo para ese modo, que está congelado.
+ZanaLLaima 0.9.0 sigue siendo una versión alfa para una instancia por operador. En uso real se observaron el panel MCP Apps de aprobación, la creación de un repositorio, el acceso GitHub completo opcional del orquestador y el monitor `zana.review.ready` que despertó una revisión 4R automática. `zana.review.done` y la reanudación mediante `zana_mission_adopt` están implementados, probados y desplegados, pero todavía no se han observado en vivo.
+
+No es una auditoría independiente ni un servicio multiusuario. El panel confía en que el anfitrión respete la visibilidad app-only y no entregue `_meta` al modelo: un host que filtrara `_meta` y expusiera la tool app-only rompería esa garantía. La revisión sigue separando sesiones y credenciales bajo un mismo dueño; no demuestra independencia organizacional.
 
 | Puerta | Estado en esta versión |
 | --- | --- |

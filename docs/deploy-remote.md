@@ -73,7 +73,7 @@ Cada repo que GPT va a tocar necesita tres cosas, y **las haces tú** (ZanaLLaim
 1. **El workflow de checks**: copia la plantilla de [checks-workflow.md](checks-workflow.md) a `.github/workflows/zana-checks.yml` y adapta los pasos al lenguaje del repo. Tiene que aceptar `workflow_dispatch`; no le agregues `push` ni `pull_request`, para que cada misión gaste una sola corrida.
 2. **Protección de la rama default** (Settings → Branches o Rulesets):
    - exigir PR antes de mergear, con 1 aprobación;
-   - exigir el estado `zana/4r` como required status check. Los checks lanzados por `workflow_dispatch` no cuentan para la protección del PR; `zana/4r` solo se publica después de aprobar la 4R sobre ese SHA y `zana_merge` vuelve a verificar el CI;
+   - exigir el estado `zana/4r` como required status check. Los checks lanzados por `workflow_dispatch` no cuentan para la protección del PR. Finalize publica `zana/4r` en `success` solo con APPROVE y en `failure` con REQUEST_CHANGES, tras exigir CI verde sobre ese SHA. Es una segunda llave: GitHub no verifica quién publicó el estado, un actor con Write o `statuses: write` puede suplantarlo, un éxito reemplazado permanece y la protección no exige CI por sí sola. La garantía fuerte la dan `zana_merge` y `zana_delivery_status`, que verifican CI sobre el SHA exacto y la identidad `ZANA_REVIEWER_LOGIN`; fusionar fuera de `zana_merge` no tiene esa red;
    - exigir aprobación del último push y que se resuelvan las conversaciones.
 3. **Que `ZANA_GITHUB_REPOS` lo cubra** (paso 4): por nombre, o con `owner/*` si quieres permitir todos los repos de la cuenta sin tocar el servidor cada vez.
 

@@ -374,10 +374,12 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         const latest=db.prepare('SELECT state FROM review_tickets WHERE mission_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1').get(id);
         if(latest&&!['FINALIZED','STALE_SHA','EXPIRED','ABANDONED'].includes(latest.state))
           throw new Error('ADOPT_REVIEW_IN_PROGRESS: existe una revisión en curso');
-        const finalizedAt=db.prepare("SELECT finalized_at FROM review_tickets WHERE mission_id=? AND state='FINALIZED' ORDER BY created_at DESC,rowid DESC LIMIT 1")
-          .get(id)?.finalized_at??'';
-        const latestAdopt=db.prepare("SELECT session_id,created_at adopted_at FROM remote_activity WHERE mission_id=? AND kind='MISSION_ADOPT' AND created_at>? ORDER BY seq DESC LIMIT 1")
-          .get(id,finalizedAt);
+        // Una solicitud de revisión invalida las adopciones anteriores. seq es
+        // monotónico en SQLite y no depende de retrocesos del reloj del host.
+        const reviewSeq=db.prepare("SELECT seq FROM remote_activity WHERE mission_id=? AND kind='REVIEW_REQUEST' ORDER BY seq DESC LIMIT 1")
+          .get(id)?.seq??0;
+        const latestAdopt=db.prepare("SELECT session_id,created_at adopted_at FROM remote_activity WHERE mission_id=? AND kind='MISSION_ADOPT' AND seq>? ORDER BY seq DESC LIMIT 1")
+          .get(id,reviewSeq);
         const leaseFor=sessionId=>{
           if(!latestAdopt||latestAdopt.session_id!==sessionId)return null;
           const start=latestAdopt.adopted_at;

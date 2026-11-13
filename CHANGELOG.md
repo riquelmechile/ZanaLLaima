@@ -2,7 +2,7 @@
 
 ## [Sin publicar]
 
-- La protección de rama de repositorios administrados exige `zana/4r`, no el job lanzado por `workflow_dispatch`; la adopción vigente y su última actividad se eligen por `seq`, resistente a retrocesos del reloj.
+- La protección de rama de repositorios administrados exige `zana/4r`, no el job lanzado por `workflow_dispatch`; es una segunda llave que no autentica al publicador ni sustituye la verificación de CI e identidad de `zana_merge`. Las adopciones posteriores a una solicitud de revisión se delimitan y ordenan por `seq`, sin depender de `finalized_at` ni del reloj.
 
 ## [0.9.0] - 2026-11-12
 

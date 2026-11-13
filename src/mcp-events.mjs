@@ -156,7 +156,7 @@ export function queueEvent(db,{clientId,ticketId,name=REVIEW_EVENT,data=null,now
   for(const old of all)if(terminal(old)&&now-(old.terminalAt??0)>=HISTORY_MS)del(db,OUT,old.id);
   let added=0,outstanding=all.filter(d=>!terminal(d)).length;
   for(const sub of rows(db,SUB).filter(s=>s.ownerClient===clientId&&live(s,now)&&(s.name??REVIEW_EVENT)===name)){
-    const id='evt_'+hash(sub.id+':'+name+':'+ticketId).slice(0,32);
+    const id='evt_'+hash(sub.id+':'+(name===REVIEW_DONE_EVENT?name+':':'')+ticketId).slice(0,32);
     if(all.some(d=>d.id===id))continue;
     if(outstanding>=MAX_OUTSTANDING)fail('EVENT_BACKLOG_LIMIT','MCP event backlog limit reached');
     put(db,OUT,{schema:'zana.evout.v1',id,subId:sub.id,ticketId,name,data:name===REVIEW_DONE_EVENT?{ticketId,verdict:data.verdict}:{ticketId},state:'PENDING',attempts:0,nextAt:now,lastStatus:null,terminalAt:null});

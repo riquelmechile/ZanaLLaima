@@ -2,7 +2,7 @@
 
 ## [Sin publicar]
 
-- Adopción segura de misiones entre sesiones OAuth y aviso MCP `zana.review.done` tras finalizar una 4R.
+- Adopción segura de misiones entre sesiones OAuth: solo la generación `MISSION_ADOPT` más reciente conserva y renueva el lease; una adopción posterior invalida la anterior. Aviso MCP `zana.review.done` tras finalizar una 4R.
 
 - Acceso GitHub completo opcional para el orquestador mediante `zana_github_request`, con token separado, alcance reviewer restringido y auditoría sin secretos.
 

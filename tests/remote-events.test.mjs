@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {createHash,randomUUID} from 'node:crypto';
 import {remoteFixture} from './helpers/remote-fixture.mjs';
-import {REVIEW_EVENT,REVIEW_DONE_EVENT} from '../src/mcp-events.mjs';
+import {remoteWrite,remoteRead} from '../src/store.mjs';
+import {queueEvent,REVIEW_EVENT,REVIEW_DONE_EVENT} from '../src/mcp-events.mjs';
 
 const SECRET='whsec_'+Buffer.alloc(32,9).toString('base64'),URL1='https://hooks.chatgpt.test.openai.com/cb/1';
+const put=(db,key,value)=>db.prepare('INSERT INTO metadata(key,value) VALUES(?,?)').run(key,JSON.stringify(value));
 // Anfitrión de mentira: devuelve el desafío y guarda cada aviso recibido.
 async function setup(){
   const posts=[];
@@ -101,6 +104,130 @@ test('adopción rechaza una unidad viva de otra sesión',async()=>{
     const ready=await t.f.authorReady({green:false,pull:false,complete:false});
     const next=await t.f.session('zana-chatgpt',ready.author.clientId);
     assert.match((await t.f.call('zana_mission_adopt',{missionId:ready.missionId},next)).error,/ADOPT_MISSION_BUSY/);
+  }finally{await t.f.cleanup();}
+});
+
+test('adopt expira de forma perezosa un ticket OPEN vencido',async()=>{
+  const t=await setup();
+  try{
+    const ready=await t.f.authorReady(),missionId=ready.missionId;
+    const req=await t.f.call('zana_review_request',{missionId},ready.author);
+    assert.ok(req.ticket);
+    await remoteWrite(db=>db.prepare('UPDATE review_tickets SET expires_at=? WHERE mission_id=?')
+      .run(new Date(Date.now()-60_000).toISOString(),missionId));
+    const session=await t.f.session('zana-chatgpt',ready.author.clientId);
+    const result=await t.f.call('zana_mission_adopt',{missionId},session);
+    assert.equal(result.adopted,true,JSON.stringify(result));
+  }finally{await t.f.cleanup();}
+});
+
+test('review.ready conserva el id legado para deduplicar una entrega ACCEPTED',async()=>{
+  const t=await setup();
+  try{
+    const clientId='zc_legacy',ticketId='11111111-1111-4111-8111-111111111111',subId='sub_legacy';
+    const legacyId='evt_'+createHash('sha256').update(subId+':'+ticketId).digest('hex').slice(0,32);
+    const added=await remoteWrite(db=>{
+      put(db,'zana:evsub:'+subId,{schema:'zana.evsub.v1',id:subId,ownerClient:clientId,host:'zana-chatgpt',
+        url:URL1,secret:SECRET,expiresAt:new Date(Date.now()+86_400_000).toISOString(),verifiedAt:new Date().toISOString()});
+      put(db,'zana:evout:'+legacyId,{schema:'zana.evout.v1',id:legacyId,subId,ticketId,state:'ACCEPTED',attempts:1,
+        nextAt:Date.now(),lastStatus:200,terminalAt:Date.now()});
+      return queueEvent(db,{clientId,ticketId});
+    });
+    assert.equal(added,0,'se reencoló un aviso ya entregado porque cambió su id');
+  }finally{await t.f.cleanup();}
+});
+
+test('solo una de dos sesiones simultáneas adopta la misión',async()=>{
+  const t=await setup();
+  try{
+    const ready=await t.f.authorReady(),missionId=ready.missionId;
+    const [a,b]=await Promise.all([t.f.session('zana-chatgpt',ready.author.clientId),t.f.session('zana-chatgpt',ready.author.clientId)]);
+    const results=await Promise.all([
+      t.f.call('zana_mission_adopt',{missionId},a),t.f.call('zana_mission_adopt',{missionId},b)
+    ]);
+    assert.equal(results.filter(result=>result.adopted).length,1,JSON.stringify(results));
+    assert.equal(results.filter(result=>/ADOPT_MISSION_BUSY/.test(result.error??'')).length,1,JSON.stringify(results));
+  }finally{await t.f.cleanup();}
+});
+
+test('repetir adopt en la misma sesión no emite STATE_CHANGED',async()=>{
+  const t=await setup();
+  try{
+    const ready=await t.f.authorReady(),missionId=ready.missionId;
+    const session=await t.f.session('zana-chatgpt',ready.author.clientId);
+    assert.equal((await t.f.call('zana_mission_adopt',{missionId},session)).adopted,true);
+    const count=()=>remoteRead(db=>db.prepare("SELECT COUNT(*) count FROM state_events WHERE category='STATE_CHANGED'").get().count);
+    const before=await count();
+    assert.equal((await t.f.call('zana_mission_adopt',{missionId},session)).alreadyAdopted,true);
+    assert.equal(await count(),before);
+  }finally{await t.f.cleanup();}
+});
+
+test('una adopción posterior invalida la generación anterior aunque registre actividad',async()=>{
+  const t=await setup();
+  try{
+    const ready=await t.f.authorReady(),missionId=ready.missionId;
+    const a=await t.f.session('zana-chatgpt',ready.author.clientId);
+    const b=await t.f.session('zana-chatgpt',ready.author.clientId);
+    assert.equal((await t.f.call('zana_mission_adopt',{missionId},a)).adopted,true);
+    const old=new Date(Date.now()-24*60*60_000).toISOString();
+    await remoteWrite(db=>db.prepare('UPDATE remote_activity SET created_at=? WHERE mission_id=? AND session_id=?').run(old,missionId,a.sessionId));
+    assert.equal((await t.f.call('zana_mission_adopt',{missionId},b)).adopted,true);
+    const batch=await t.f.call('zana_start_batch',{},a);
+    assert.ok(batch.packets?.length,JSON.stringify(batch));
+    const result=await t.f.call('zana_mission_adopt',{missionId},a);
+    assert.match(result.error,/ADOPT_MISSION_BUSY.*hasta .*Z$/,JSON.stringify(result));
+  }finally{await t.f.cleanup();}
+});
+
+test('la sesión de una generación invalidada puede adoptar de nuevo tras vencer la vigente',async()=>{
+  const t=await setup();
+  try{
+    const ready=await t.f.authorReady(),missionId=ready.missionId;
+    const a=await t.f.session('zana-chatgpt',ready.author.clientId);
+    const b=await t.f.session('zana-chatgpt',ready.author.clientId);
+    assert.equal((await t.f.call('zana_mission_adopt',{missionId},a)).adopted,true);
+    const old=new Date(Date.now()-24*60*60_000).toISOString();
+    await remoteWrite(db=>db.prepare('UPDATE remote_activity SET created_at=? WHERE mission_id=? AND session_id=?').run(old,missionId,a.sessionId));
+    assert.equal((await t.f.call('zana_mission_adopt',{missionId},b)).adopted,true);
+    const batch=await t.f.call('zana_start_batch',{},a);
+    assert.ok(batch.packets?.length,JSON.stringify(batch));
+    await remoteWrite(db=>db.prepare('UPDATE remote_activity SET created_at=? WHERE mission_id=? AND session_id=?').run(old,missionId,b.sessionId));
+    const result=await t.f.call('zana_mission_adopt',{missionId},a);
+    assert.deepEqual(result,{missionId,adopted:true,alreadyAdopted:false});
+  }finally{await t.f.cleanup();}
+});
+
+test('finalize revierte un encolado parcial sin perder la finalización',async()=>{
+  const t=await setup();
+  try{
+    const ready=await t.f.authorReady(),missionId=ready.missionId;
+    const req=await t.f.call('zana_review_request',{missionId},ready.author);
+    const reviewer=await t.f.session('zana-chatgpt',ready.author.clientId);
+    assert.equal((await t.f.call('zana_review_claim',{ticket:req.ticket},reviewer)).state,'CLAIMED');
+    const page=await t.f.call('zana_review_diff',{ticket:req.ticket,page:0},reviewer);
+    for(let i=1;i<page.manifest.totalPages;i++)await t.f.call('zana_review_diff',{ticket:req.ticket,page:i},reviewer);
+    for(const lens of ['risk','readability','reliability','resilience'])
+      assert.equal((await t.f.call('zana_review_lens_submit',{ticket:req.ticket,lens,findings:[],evidence:['Diff completo']},reviewer)).error,undefined);
+    const ticketId=await remoteRead(db=>db.prepare('SELECT ticket_id FROM review_tickets WHERE mission_id=?').get(missionId).ticket_id);
+    await remoteWrite(db=>{
+      const now=Date.now(),expiresAt=new Date(now+86_400_000).toISOString();
+      for(let i=0;i<2;i++){
+        const id='sub_done_'+i;
+        put(db,'zana:evsub:'+id,{schema:'zana.evsub.v1',id,ownerClient:ready.author.clientId,host:'zana-chatgpt',
+          name:REVIEW_DONE_EVENT,url:'https://hooks.chatgpt.test.openai.com/cb/'+i,secret:SECRET,expiresAt,verifiedAt:new Date().toISOString()});
+      }
+      for(let i=0;i<199;i++){
+        const id='evt_'+String(i).padStart(32,'0');
+        put(db,'zana:evout:'+id,{schema:'zana.evout.v1',id,subId:'missing',ticketId:randomUUID(),name:REVIEW_DONE_EVENT,
+          data:{ticketId:randomUUID(),verdict:'APPROVE'},state:'PENDING',attempts:0,nextAt:now,lastStatus:null,terminalAt:null});
+      }
+    });
+    const done=await t.f.call('zana_review_finalize',{ticket:req.ticket,execution:'SEQUENTIAL_SAME_CONVERSATION'},reviewer);
+    assert.equal(done.state,'FINALIZED',JSON.stringify(done));
+    const queued=await remoteRead(db=>db.prepare("SELECT COUNT(*) count FROM metadata WHERE key LIKE 'zana:evout:%' AND value LIKE ?")
+      .get('%'+ticketId+'%').count);
+    assert.equal(queued,0,'quedó la primera escritura parcial de events.queue');
   }finally{await t.f.cleanup();}
 });
 

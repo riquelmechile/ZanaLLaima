@@ -39,9 +39,10 @@ export async function runBootstrapSetup({rw,rr,github,reviewer,reviewerLogin,wor
   const initial=await rr(db=>readOperation(db,at));
   if(initial.state!=='DONE')fail('SETUP_NOT_READY','La operación debe estar DONE');
   if(!reviewerLogin||!reviewer?.configured)fail('SETUP_REVIEWER_MISSING','Falta la identidad o el cliente GitHub de la revisora');
-  if(!/^[A-Za-z0-9._-]{1,100}\.ya?ml$/.test(String(workflow)))
-    fail('SETUP_WORKFLOW_INVALID','El workflow configurado no es un nombre de archivo válido');
   const repo=String(initial.repository?.fullName??''),owner=String(initial.intent?.owner??'');
+  const workflowName=typeof workflow==='function'?workflow(repo):workflow;
+  if(!/^[A-Za-z0-9._-]{1,100}\.ya?ml$/.test(String(workflowName)))
+    fail('SETUP_WORKFLOW_INVALID','El workflow configurado no es un nombre de archivo válido');
   const checkedAt=()=>new Date(now()).toISOString();
   // Una ejecución vieja no debe sobrescribir un dato comprobado por una ejecución posterior.
   const runSeq=await rw(db=>{
@@ -53,6 +54,8 @@ export async function runBootstrapSetup({rw,rr,github,reviewer,reviewerLogin,wor
     saveOperation(db,{...current,setup:{...prior,runSeq:seq},updatedAt:checkedAt()});
     return seq;
   });
+  // El mensaje preciso solo pertenece a la ejecución actual, nunca a una corrida anterior.
+  let currentDetailedError=null;
   const save=fields=>rw(db=>{
     const current=readOperation(db,at);
     if(current.state!=='DONE'||current.repository?.id!==initial.repository?.id)
@@ -72,9 +75,9 @@ export async function runBootstrapSetup({rw,rr,github,reviewer,reviewerLogin,wor
     await rw(db=>{
       const current=readOperation(db,at);
       if(current.setup?.runSeq!==runSeq)return;
-      const prior=current.setup?.lastError;
-      const precise=/^SETUP_(?:REVIEWER_FAILED|PROTECTION_MISMATCH): /.test(String(prior));
-      saveOperation(db,{...current,setup:{...current.setup,lastError:precise?prior:errorText(wrapped)},updatedAt:checkedAt()});
+      const precise=currentDetailedError?.startsWith(wrapped.code+': ');
+      saveOperation(db,{...current,setup:{...current.setup,
+        lastError:precise?currentDetailedError:errorText(wrapped)},updatedAt:checkedAt()});
     });
     throw wrapped;
   };
@@ -99,7 +102,8 @@ export async function runBootstrapSetup({rw,rr,github,reviewer,reviewerLogin,wor
       }
       if(invitation)await reviewer.request('PATCH','/user/repository_invitations/'+enc(invitation.id));
       if(!await permission()){
-        await save({reviewer:'FAILED',lastError:'SETUP_REVIEWER_FAILED: la revisora no obtuvo Write'});
+        currentDetailedError='SETUP_REVIEWER_FAILED: la revisora no obtuvo Write';
+        await save({reviewer:'FAILED',lastError:currentDetailedError});
         fail('SETUP_REVIEWER_FAILED','La revisora no obtuvo Write sobre el repositorio');
       }
     }
@@ -124,7 +128,8 @@ export async function runBootstrapSetup({rw,rr,github,reviewer,reviewerLogin,wor
       if(!unavailable){
         const verified=await github.request('GET',protectionPath);
         if(!protectionMatches(verified)){
-          await save({protection:'MISMATCH',lastError:'SETUP_PROTECTION_MISMATCH: GitHub devolvió otra protección'});
+          currentDetailedError='SETUP_PROTECTION_MISMATCH: GitHub devolvió otra protección';
+          await save({protection:'MISMATCH',lastError:currentDetailedError});
           fail('SETUP_PROTECTION_MISMATCH','La protección verificada no coincide');
         }
         await save({protection:'APPLIED',lastError:null});
@@ -132,7 +137,7 @@ export async function runBootstrapSetup({rw,rr,github,reviewer,reviewerLogin,wor
     }else if(!unavailable)await save({protection:'APPLIED',lastError:null});
 
     try{
-      await github.request('GET',base+'/contents/.github/workflows/'+enc(workflow));
+      await github.request('GET',base+'/contents/.github/workflows/'+enc(workflowName));
       await save({workflow:'PRESENT'});
     }catch(error){
       if(!is404(error))throw error;

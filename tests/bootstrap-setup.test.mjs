@@ -172,7 +172,6 @@ test('REPRO 4R: 403 de plan en GET produce UNAVAILABLE y revisa workflow',async(
   }finally{t.f.db.close();}
 });
 
-
 test('GET acepta checks en contexts, y rechaza bandera enabled ausente',async()=>{
   const a=operation(),b=operation();
   try{
@@ -303,6 +302,12 @@ test('timestamps por campo y runSeq interno, sin duplicar códigos de error',asy
     assert.equal(first.setup.reviewer,'WRITE');
     assert.deepEqual(Object.keys(first.setup.checkedAt).sort(),['protection','reviewer','workflow']);
     assert.equal(Object.hasOwn(first.setup,'runSeq'),false);
+    const oldDates={...first.setup.checkedAt},later=T0+60_000;
+    await assert.rejects(run(t,clients({permission:'read',invitations:[]}),{now:()=>later}),/SETUP_REVIEWER_FAILED/);
+    const updated=bootstrapStatus(t.f.db,{clientId:t.f.client,operationId:t.operationId,now:later}).setup;
+    assert.equal(updated.checkedAt.reviewer,new Date(later).toISOString());
+    assert.equal(updated.checkedAt.protection,oldDates.protection);
+    assert.equal(updated.checkedAt.workflow,oldDates.workflow);
   }finally{t.f.db.close();}
   const e=operation(),broken=clients({networkPath:'/repos/acme/gestor/collaborators/review-bot/permission'});
   try{

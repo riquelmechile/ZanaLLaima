@@ -351,12 +351,10 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     zana_bootstrap_execute:({operationId},session)=>bootstrapDone(session,null,()=>runBootstrap(bootstrapDeps(session,operationId)),'CREATED'),
     async zana_bootstrap_setup({operationId},session){
       const deps=bootstrapDeps(session,operationId);
-      const op=await rr(db=>readOperation(db,{clientId:session.clientId,operationId}));
-      const fullName=op.repository?.fullName;
       const result=await runBootstrapSetup({...deps,reviewer:reviewerGithub,reviewerLogin:config.reviewerLogin,
-        workflow:checksForRepo(config,fullName).workflow});
+        workflow:fullName=>checksForRepo(config,fullName).workflow});
       await audit({caller:session,tool:'bootstrap_setup',outcome:'DONE',category:'write',
-        detail:{operationId,fullName,reviewer:result.setup?.reviewer,
+        detail:{operationId,fullName:result.created?.fullName,reviewer:result.setup?.reviewer,
           protection:result.setup?.protection,workflow:result.setup?.workflow}});
       return withApprovalUrl(result);
     },

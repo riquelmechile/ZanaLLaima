@@ -44,6 +44,7 @@ test('MCP Apps: herramientas con visibilidad correcta y fallback sin extensión'
     noUi=await rawClient(t.f.runtime,t.session,false);
     const without=(await noUi.request('tools/list')).result.tools;
     assert.equal(without.some(x=>x.name==='zana_panel_decide'),false);
+    assert.ok(without.some(x=>x.name==='zana_bootstrap_setup'),'setup debe anunciarse sin UI');
     const unavailable=await call(noUi,'zana_project_approval_panel',t.args);
     assert.match(JSON.stringify(unavailable),/UI_UNAVAILABLE/);
     const forbidden=await call(noUi,'zana_panel_decide',{panelId:'x',nonce:'secret',decision:'allow'});
@@ -55,6 +56,9 @@ test('MCP Apps: herramientas con visibilidad correcta y fallback sin extensión'
     assert.equal(decide._meta['openai/widgetAccessible'],true);
     assert.equal(withUi.find(x=>x.name==='zana_project_approval_panel')._meta.ui.resourceUri,PANEL_URI);
     assert.equal(withUi.find(x=>x.name==='zana_bootstrap_execute')._meta?.ui?.visibility,undefined);
+    const setup=withUi.find(x=>x.name==='zana_bootstrap_setup');
+    assert.ok(setup,'setup debe aparecer en tools/list');
+    assert.equal(setup._meta?.ui?.visibility,undefined);
   }finally{if(app)await app.close();if(noUi)await noUi.close();await t.f.cleanup();}
 });
 

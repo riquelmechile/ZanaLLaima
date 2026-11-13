@@ -180,6 +180,45 @@ test('una adopción posterior invalida la generación anterior aunque registre a
   }finally{await t.f.cleanup();}
 });
 
+test('la adopción vigente se decide por seq aunque el reloj retroceda',async()=>{
+  const t=await setup();
+  try{
+    const ready=await t.f.authorReady(),missionId=ready.missionId;
+    const a=await t.f.session('zana-chatgpt',ready.author.clientId);
+    const b=await t.f.session('zana-chatgpt',ready.author.clientId);
+    assert.equal((await t.f.call('zana_mission_adopt',{missionId},a)).adopted,true);
+    const expired=new Date(Date.now()-24*60*60_000).toISOString();
+    await remoteWrite(db=>db.prepare("UPDATE remote_activity SET created_at=? WHERE mission_id=? AND session_id=? AND kind='MISSION_ADOPT'")
+      .run(expired,missionId,a.sessionId));
+    assert.equal((await t.f.call('zana_mission_adopt',{missionId},b)).adopted,true);
+    const laterClock=new Date().toISOString(),earlierClock=new Date(Date.now()-60_000).toISOString();
+    await remoteWrite(db=>{
+      db.prepare("UPDATE remote_activity SET created_at=? WHERE mission_id=? AND session_id=? AND kind='MISSION_ADOPT'")
+        .run(laterClock,missionId,a.sessionId);
+      db.prepare("UPDATE remote_activity SET created_at=? WHERE mission_id=? AND session_id=? AND kind='MISSION_ADOPT'")
+        .run(earlierClock,missionId,b.sessionId);
+    });
+    const result=await t.f.call('zana_mission_adopt',{missionId},b);
+    assert.equal(result.alreadyAdopted,true,JSON.stringify(result));
+  }finally{await t.f.cleanup();}
+});
+
+for(const state of ['EXPIRED','STALE_SHA','ABANDONED'])
+  test('una adopción viva previa a un ticket '+state+' bloquea otra sesión',async()=>{
+    const t=await setup();
+    try{
+      const ready=await t.f.authorReady(),missionId=ready.missionId;
+      const a=await t.f.session('zana-chatgpt',ready.author.clientId);
+      const b=await t.f.session('zana-chatgpt',ready.author.clientId);
+      assert.equal((await t.f.call('zana_mission_adopt',{missionId},a)).adopted,true);
+      assert.ok((await t.f.call('zana_review_request',{missionId},a)).ticket);
+      await remoteWrite(db=>db.prepare('UPDATE review_tickets SET state=?,updated_at=? WHERE mission_id=?')
+        .run(state,new Date().toISOString(),missionId));
+      const result=await t.f.call('zana_mission_adopt',{missionId},b);
+      assert.match(result.error??JSON.stringify(result),/ADOPT_MISSION_BUSY/);
+    }finally{await t.f.cleanup();}
+  });
+
 test('la sesión de una generación invalidada puede adoptar de nuevo tras vencer la vigente',async()=>{
   const t=await setup();
   try{

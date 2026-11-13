@@ -376,12 +376,12 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
           throw new Error('ADOPT_REVIEW_IN_PROGRESS: existe una revisión en curso');
         const finalizedAt=db.prepare("SELECT finalized_at FROM review_tickets WHERE mission_id=? AND state='FINALIZED' ORDER BY created_at DESC,rowid DESC LIMIT 1")
           .get(id)?.finalized_at??'';
-        const latestAdopt=db.prepare("SELECT session_id,created_at adopted_at FROM remote_activity WHERE mission_id=? AND kind='MISSION_ADOPT' AND created_at>? ORDER BY created_at DESC,seq DESC LIMIT 1")
+        const latestAdopt=db.prepare("SELECT session_id,created_at adopted_at FROM remote_activity WHERE mission_id=? AND kind='MISSION_ADOPT' AND created_at>? ORDER BY seq DESC LIMIT 1")
           .get(id,finalizedAt);
         const leaseFor=sessionId=>{
           if(!latestAdopt||latestAdopt.session_id!==sessionId)return null;
           const start=latestAdopt.adopted_at;
-          const last=db.prepare('SELECT created_at FROM remote_activity WHERE mission_id=? AND session_id=? AND created_at>=? ORDER BY created_at DESC,seq DESC LIMIT 1')
+          const last=db.prepare('SELECT created_at FROM remote_activity WHERE mission_id=? AND session_id=? AND created_at>=? ORDER BY seq DESC LIMIT 1')
             .get(id,sessionId,start)?.created_at??start;
           const expiresAt=new Date(Date.parse(last)+config.claimTtlMinutes*60_000).toISOString();
           return {expiresAt,active:Date.parse(expiresAt)>Date.now()};

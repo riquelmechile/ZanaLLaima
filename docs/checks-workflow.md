@@ -29,7 +29,9 @@ jobs:
       - run: npm test
 ```
 
-Adaptar los pasos al lenguaje del repo. Reglas:
+Adaptar los pasos al lenguaje del repo. **No configures el nombre del job de `zana-checks` como required status check de la protección de rama:** los checks de `workflow_dispatch` no cuentan para esa protección. Usa el contexto `zana/4r`, que solo se publica tras una 4R aprobada sobre el SHA cuyo CI vuelve a comprobar `zana_merge`.
+
+Reglas:
 
 - El job debe producir check runs sobre el SHA del commit (`zana_checks_status` lee `GET /commits/{sha}/check-runs`).
 - Si se configura `ZANA_REQUIRED_CHECKS`, esos nombres deben existir; si no, cuentan todos los check runs del SHA. En overrides por repo, `requiredChecks` es obligatorio y no vacío.
@@ -38,7 +40,7 @@ Adaptar los pasos al lenguaje del repo. Reglas:
 - **Si el repo ya tiene su propio CI en `pull_request`**, sáltalo en las ramas de ZanaLLaima con `if: ${{ !startsWith(github.head_ref, 'zana/') }}` en el job (un job saltado no se cobra). Para ZanaLLaima un check saltado no prueba nada: un SHA que solo tiene checks saltados queda `PENDING` hasta que corra el workflow de checks. Tres cosas a saber:
   - GitHub cuenta un check requerido saltado como aprobado. Lo que exige la corrida real es ZanaLLaima, que pide al menos un check exitoso sobre el SHA; un PR `zana/**` aprobado a mano por fuera de ZanaLLaima no tiene esa red.
   - Si en las ramas `zana/**` corren otros workflows (lint, CodeQL), su éxito también cuenta como "un check exitoso". Para que solo valga el de checks, pon el nombre de su job en `ZANA_REQUIRED_CHECKS`. En la configuración global es una sola lista; con `ZANA_REPO_CHECKS_JSON` cada repo puede exigir sus propios jobs.
-  - Los PR que no son de ZanaLLaima (personas, Dependabot) siguen probándose con el CI propio del repo. Si la protección de la rama exige un check que solo produce este workflow, esos PR quedan esperando: usa en el CI propio el mismo nombre de job, o dispara este workflow a mano en esa rama.
+  - La protección con `zana/4r` también alcanza los PR que no son de ZanaLLaima. Esos PR deben pasar por el flujo 4R para publicar el contexto, o el operador debe separarlos mediante otra política de ramas; no intentes satisfacer la protección con el nombre del job de `zana-checks`.
 - `zana_checks_start` dispara `workflow_dispatch` sobre la rama de la misión solo si ese SHA no tiene ya un run de este workflow. El run disparado corre sobre el head de la rama en ese momento; el estado siempre se lee por SHA exacto.
 
 

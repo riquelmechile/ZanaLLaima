@@ -8,6 +8,8 @@ ZanaLLaima 0.9.0 sigue siendo una versión alfa para una instancia por operador.
 
 No es una auditoría independiente ni un servicio multiusuario. El panel confía en que el anfitrión respete la visibilidad app-only y no entregue `_meta` al modelo: un host que filtrara `_meta` y expusiera la tool app-only rompería esa garantía. La revisión sigue separando sesiones y credenciales bajo un mismo dueño; no demuestra independencia organizacional.
 
+El resto de este documento es la auditoría de la fase 5, hecha antes del modo remoto; sus hallazgos sobre el modo stdio siguen valiendo para ese modo, que está congelado.
+
 | Puerta | Estado en esta versión |
 | --- | --- |
 | `main` protegida: 3 checks, 1 aprobación sobre el último push, sin excepción para admins | Activa |

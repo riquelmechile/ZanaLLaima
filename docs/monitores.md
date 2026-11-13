@@ -1,6 +1,6 @@
 # Monitores permanentes en ChatGPT
 
-ZanaLLaima puede mantener dos monitores permanentes para una sola cuenta: uno revisa y el otro retoma la misión. Un monitor es una tarea o automatización del anfitrión que usa el conector ZanaLLaima, se suscribe con `events/subscribe` a un evento, recibe un webhook firmado con un payload mínimo y despierta una ejecución **nueva**. Un HTTP 2xx solo confirma que el anfitrión recibió el aviso; el despertar se comprueba cuando esa ejecución nueva actúa. Cada suscripción dura como máximo siete días y debe renovarse antes de `refreshBefore`.
+ZanaLLaima puede mantener dos monitores permanentes para una sola cuenta: uno revisa y el otro retoma la misión. Un monitor es una tarea o automatización del anfitrión que usa el conector ZanaLLaima, se suscribe con `events/subscribe` a un evento, recibe un webhook firmado con un payload mínimo y despierta una ejecución **nueva**. Un HTTP 2xx solo confirma que el anfitrión recibió el aviso; el despertar se comprueba cuando esa ejecución nueva actúa. Cada suscripción dura como máximo siete días y el anfitrión debe renovarla antes de `refreshBefore`. Si se borra la tarea del monitor, la suscripción termina venciendo y hay que crear de nuevo la tarea y su suscripción.
 
 ## Monitor revisor
 
@@ -9,7 +9,7 @@ Se suscribe a `zana.review.ready`, cuyo payload es `{ticketId}`.
 **Advertencia de separación estricta:** con `ZANA_DISTINCT_REVIEWER_CLIENT=true`, este monitor revisor no sirve. Los eventos se entregan solo al cliente OAuth autor y el reclamo desde ese cliente responde `SAME_CLIENT`. En ese modo la revisión debe hacerse manualmente desde otro cliente OAuth, usando el código `ZR-`.
 
 1. Carga la skill `zana-4r`.
-2. Llama a `zana_review_claim` con `ticketId` (también puede reclamar sin argumentos el ticket abierto más antiguo de la cuenta).
+2. Llama a `zana_review_claim` con `ticketId` (también puede reclamar sin argumentos el ticket abierto más antiguo del mismo cliente OAuth).
 3. Lee el diff completo, ejecuta los cuatro lentes y finaliza la 4R.
 4. Publica la revisión con la cuenta revisora.
 5. Nunca escribe código, fusiona ni adopta la misión.

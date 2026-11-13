@@ -14,15 +14,17 @@ const protectionBody=()=>({
   allow_deletions:false,
 });
 const enabled=value=>value===true||value?.enabled===true;
+const disabled=value=>value===false||value?.enabled===false;
 function protectionMatches(value){
-  const checks=value?.required_status_checks?.checks;
-  const review=value?.required_pull_request_reviews;
-  return value?.required_status_checks?.strict===true&&Array.isArray(checks)&&checks.length===1&&checks[0]?.context==='zana/4r'&&
+  const required=value?.required_status_checks,review=value?.required_pull_request_reviews;
+  const checks=Array.isArray(required?.checks)?required.checks.map(x=>x?.context):required?.contexts;
+  return required?.strict===true&&Array.isArray(checks)&&checks.length===1&&checks[0]==='zana/4r'&&
     enabled(value?.enforce_admins)&&review?.required_approving_review_count===1&&review?.dismiss_stale_reviews===true&&
-    review?.require_last_push_approval===true&&enabled(value?.required_conversation_resolution)&&value?.restrictions===null&&
-    !enabled(value?.allow_force_pushes)&&!enabled(value?.allow_deletions);
+    review?.require_last_push_approval===true&&enabled(value?.required_conversation_resolution)&&
+    (value?.restrictions==null)&&disabled(value?.allow_force_pushes)&&disabled(value?.allow_deletions);
 }
-const upgradeError=error=>error?.status===403&&/upgrade|github pro|protected branch/i.test(String(error.message));
+const upgradeError=error=>error?.status===403&&
+  /upgrade\s+to\s+github\s+(?:pro|team|enterprise)|(?:upgrade|paid)\s+(?:your\s+)?plan/i.test(String(error.message));
 const is404=error=>error?.status===404;
 const errorText=error=>text((error?.code?error.code+': ':'')+(error instanceof Error?error.message:String(error)));
 const sameRepo=(found,op)=>Number.isSafeInteger(found?.id)&&found.id===op.repository?.id&&
@@ -38,16 +40,33 @@ export async function runBootstrapSetup({rw,rr,github,reviewer,reviewerLogin,wor
     fail('SETUP_WORKFLOW_INVALID','El workflow configurado no es un nombre de archivo válido');
   const repo=String(initial.repository?.fullName??''),owner=String(initial.intent?.owner??'');
   const checkedAt=()=>new Date(now()).toISOString();
-  let setup={reviewer:'FAILED',protection:'MISMATCH',workflow:'MISSING',checkedAt:checkedAt(),lastError:null,...initial.setup};
+  // Una ejecución vieja no debe sobrescribir un dato comprobado por una ejecución posterior.
+  const runSeq=await rw(db=>{
+    const current=readOperation(db,at);
+    if(current.state!=='DONE'||current.repository?.id!==initial.repository?.id)
+      fail('SETUP_REPO_CHANGED','La operación o su repositorio cambió');
+    const prior=current.setup??{reviewer:null,protection:null,workflow:null,checkedAt:null,lastError:null};
+    const seq=(prior.runSeq??0)+1;
+    saveOperation(db,{...current,setup:{...prior,runSeq:seq},updatedAt:checkedAt()});
+    return seq;
+  });
   const save=fields=>rw(db=>{
     const current=readOperation(db,at);
-    if(current.state!=='DONE'||current.repository?.id!==initial.repository?.id)fail('SETUP_REPO_CHANGED','La operación o su repositorio cambió');
-    setup={...setup,...fields,checkedAt:checkedAt()};
+    if(current.state!=='DONE'||current.repository?.id!==initial.repository?.id)
+      fail('SETUP_REPO_CHANGED','La operación o su repositorio cambió');
+    if(current.setup?.runSeq!==runSeq)return;
+    const verified=['reviewer','protection','workflow'].some(field=>Object.hasOwn(fields,field));
+    const setup={...current.setup,...fields,...(verified?{checkedAt:checkedAt()}:{})};
     saveOperation(db,{...current,setup,updatedAt:checkedAt()});
   });
   const raise=async error=>{
     const wrapped=error?.code?error:Object.assign(new Error('SETUP_GITHUB_ERROR: '+errorText(error)),{code:'SETUP_GITHUB_ERROR'});
-    await save({lastError:errorText(wrapped)});
+    // Incluso si cambió el repositorio, registrar el error sin alterar los checks previos.
+    await rw(db=>{
+      const current=readOperation(db,at);
+      if(current.setup?.runSeq!==runSeq)return;
+      saveOperation(db,{...current,setup:{...current.setup,lastError:errorText(wrapped)},updatedAt:checkedAt()});
+    });
     throw wrapped;
   };
   try{
@@ -61,9 +80,14 @@ export async function runBootstrapSetup({rw,rr,github,reviewer,reviewerLogin,wor
     };
     if(!await permission()){
       await github.request('PUT',base+'/collaborators/'+enc(reviewerLogin),{body:{permission:'push'}});
-      const invitations=await reviewer.request('GET','/user/repository_invitations');
-      const invitation=Array.isArray(invitations)?invitations.find(item=>
-        item?.repository?.id===found.id&&String(item?.inviter?.login??'').toLowerCase()===owner.toLowerCase()):null;
+      let invitation=null;
+      for(let page=1;page<=10;page++){
+        const invitations=await reviewer.request('GET','/user/repository_invitations?per_page=100&page='+page);
+        if(!Array.isArray(invitations))fail('SETUP_INVITATIONS_INVALID','GitHub devolvió invitaciones inválidas');
+        invitation=invitations.find(item=>item?.repository?.id===found.id&&
+          String(item?.inviter?.login??'').toLowerCase()===owner.toLowerCase());
+        if(invitation||invitations.length<100)break;
+      }
       if(invitation)await reviewer.request('PATCH','/user/repository_invitations/'+enc(invitation.id));
       if(!await permission()){
         await save({reviewer:'FAILED',lastError:'SETUP_REVIEWER_FAILED: la revisora no obtuvo Write'});
@@ -72,18 +96,23 @@ export async function runBootstrapSetup({rw,rr,github,reviewer,reviewerLogin,wor
     }
     await save({reviewer:'WRITE',lastError:null});
 
-    const branch=String(found.default_branch??initial.repository?.defaultBranch??'');
+    const branch=String(found.default_branch??initial.repository?.defaultBranch??'').trim();
+    if(!branch)fail('SETUP_BRANCH_MISSING','El repositorio no tiene rama por defecto');
     const protectionPath=base+'/branches/'+enc(branch)+'/protection';
-    let current=null;
-    try{current=await github.request('GET',protectionPath);}catch(error){if(!is404(error))throw error;}
-    if(!protectionMatches(current)){
+    let current=null,unavailable=false;
+    try{current=await github.request('GET',protectionPath);}
+    catch(error){
+      if(upgradeError(error)){unavailable=true;await save({protection:'UNAVAILABLE',lastError:text(error.message)});}
+      else if(!is404(error))throw error;
+    }
+    if(!unavailable&&!protectionMatches(current)){
       try{await github.request('PUT',protectionPath,{body:protectionBody()});}
       catch(error){
         if(!upgradeError(error))throw error;
+        unavailable=true;
         await save({protection:'UNAVAILABLE',lastError:text(error.message)});
-        current='UNAVAILABLE';
       }
-      if(current!=='UNAVAILABLE'){
+      if(!unavailable){
         const verified=await github.request('GET',protectionPath);
         if(!protectionMatches(verified)){
           await save({protection:'MISMATCH',lastError:'SETUP_PROTECTION_MISMATCH: GitHub devolvió otra protección'});
@@ -91,19 +120,15 @@ export async function runBootstrapSetup({rw,rr,github,reviewer,reviewerLogin,wor
         }
         await save({protection:'APPLIED',lastError:null});
       }
-    }else await save({protection:'APPLIED',lastError:null});
+    }else if(!unavailable)await save({protection:'APPLIED',lastError:null});
 
     try{
-      await github.request('GET',base+'/contents/.github/workflows/'+enc(workflow),{withStatus:true});
+      await github.request('GET',base+'/contents/.github/workflows/'+enc(workflow));
       await save({workflow:'PRESENT'});
     }catch(error){
       if(!is404(error))throw error;
       await save({workflow:'MISSING'});
     }
     return status();
-  }catch(error){
-    if(['SETUP_NOT_READY','SETUP_REPO_CHANGED','SETUP_REVIEWER_MISSING','SETUP_REVIEWER_FAILED',
-      'SETUP_PROTECTION_MISMATCH','SETUP_WORKFLOW_INVALID'].includes(error?.code))throw error;
-    return raise(error);
-  }
+  }catch(error){return raise(error);}
 }

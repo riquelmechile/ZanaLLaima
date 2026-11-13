@@ -31,10 +31,12 @@ function clients(opts={}){
         return state.protection;
       }
       if(method==='PUT'&&path.includes('/branches/')&&path.endsWith('/protection')){
+        if(opts.putProtectionError)throw opts.putProtectionError;
         if(opts.protection403)throw new GitHubApiError(403,'Upgrade to GitHub Pro to use protected branches');
-        state.applied=true;state.protection=opts.afterProtection??body;return null;
+        state.applied=true;state.protection=opts.afterProtection??actualGitHubGet;return null;
       }
       if(method==='GET'&&path.includes('/contents/.github/workflows/')){
+        if(opts.workflowError)throw opts.workflowError;
         if(opts.workflow===false)throw new GitHubApiError(404,'Not Found');
         return withStatus?{status:200,data:{type:'file'}}:{type:'file'};
       }
@@ -42,7 +44,10 @@ function clients(opts={}){
     }};
   const reviewer={configured:opts.reviewerConfigured!==false,calls,async request(method,path){
     calls.push(['R:'+method,path]);
-    if(method==='GET')return opts.invitations??(state.invited?[{id:9,repository:{id:77},inviter:{login:'acme'}}]:[]);
+    if(method==='GET'){
+      const page=Number(new URLSearchParams(path.split('?')[1]).get('page')??1);
+      return opts.invitationPages?.[page-1]??opts.invitations??(state.invited?[{id:9,repository:{id:77},inviter:{login:'acme'}}]:[]);
+    }
     if(method==='PATCH'){state.permission='push';return null;}
     throw new Error('unexpected reviewer '+method+' '+path);
   }};
@@ -172,5 +177,128 @@ test('REPRO 4R: fallo previo no inventa MISMATCH ni MISSING',async()=>{
     const setup=bootstrapStatus(t.f.db,{clientId:t.f.client,operationId:t.operationId,now:T0}).setup;
     assert.notEqual(setup.protection,'MISMATCH');
     assert.notEqual(setup.workflow,'MISSING');
+  }finally{t.f.db.close();}
+});
+
+
+test('GET acepta checks en contexts, y rechaza bandera enabled ausente',async()=>{
+  const a=operation(),b=operation();
+  try{
+    const ca=clients({protection:{...actualGitHubGet,required_status_checks:{strict:true,contexts:['zana/4r']}}});
+    await run(a,ca);
+    assert.equal(ca.calls.some(x=>x[0]==='PUT'&&x[1].endsWith('/protection')),false);
+    const cb=clients({protection:{...actualGitHubGet,allow_deletions:undefined}});
+    await run(b,cb);
+    assert.equal(cb.calls.some(x=>x[0]==='PUT'&&x[1].endsWith('/protection')),true);
+  }finally{a.f.db.close();b.f.db.close();}
+});
+
+test('GET protección: 403 no-plan y 5xx propagan error sin inventar protección',async()=>{
+  for(const [code,message] of [[403,'Resource not accessible by integration'],[502,'GitHub unavailable']]){
+    const t=operation(),c=clients({getProtectionError:new GitHubApiError(code,message)});
+    try{
+      await assert.rejects(run(t,c),/SETUP_GITHUB_ERROR/);
+      const setup=bootstrapStatus(t.f.db,{clientId:t.f.client,operationId:t.operationId,now:T0}).setup;
+      assert.equal(setup.reviewer,'WRITE');
+      assert.equal(setup.protection,null);
+      assert.equal(setup.workflow,null);
+      assert.match(setup.lastError,/SETUP_GITHUB_ERROR/);
+    }finally{t.f.db.close();}
+  }
+});
+
+test('PUT protección 403 sin upgrade no se clasifica UNAVAILABLE',async()=>{
+  const t=operation(),c=clients({protectionMissing:true,
+    putProtectionError:new GitHubApiError(403,'Resource not accessible by integration')});
+  try{
+    await assert.rejects(run(t,c),/SETUP_GITHUB_ERROR/);
+    const setup=bootstrapStatus(t.f.db,{clientId:t.f.client,operationId:t.operationId,now:T0}).setup;
+    assert.equal(setup.protection,null);
+    assert.match(setup.lastError,/SETUP_GITHUB_ERROR/);
+  }finally{t.f.db.close();}
+});
+
+test('error no 404 al leer workflow conserva resultados ya verificados',async()=>{
+  const t=operation(),c=clients({workflowError:new GitHubApiError(503,'Server Error')});
+  try{
+    await assert.rejects(run(t,c),/SETUP_GITHUB_ERROR/);
+    const setup=bootstrapStatus(t.f.db,{clientId:t.f.client,operationId:t.operationId,now:T0}).setup;
+    assert.deepEqual([setup.reviewer,setup.protection,setup.workflow],['WRITE','APPLIED',null]);
+    assert.match(setup.lastError,/SETUP_GITHUB_ERROR/);
+  }finally{t.f.db.close();}
+});
+
+test('invitaciones paginadas hasta encontrar repo+invitador exactos',async()=>{
+  const t=operation();
+  const other=Array.from({length:100},(_,i)=>({id:i+100,repository:{id:100+i},inviter:{login:'acme'}}));
+  const c=clients({permission:'read',invitationPages:[other,[{id:9,repository:{id:77},inviter:{login:'acme'}}]]});
+  try{
+    await run(t,c);
+    assert.ok(c.calls.some(x=>x[0]==='R:GET'&&x[1].includes('per_page=100&page=2')));
+    assert.ok(c.calls.some(x=>x[0]==='R:PATCH'&&x[1].endsWith('/9')));
+  }finally{t.f.db.close();}
+});
+
+test('rechaza invitador distinto y lista de invitaciones inválida',async()=>{
+  const a=operation(),b=operation();
+  try{
+    const ca=clients({permission:'read',invitations:[{id:9,repository:{id:77},inviter:{login:'otro'}}]});
+    await assert.rejects(run(a,ca),/SETUP_REVIEWER_FAILED/);
+    assert.equal(ca.calls.some(x=>x[0]==='R:PATCH'),false);
+    await assert.rejects(run(b,clients({permission:'read',invitations:{invalid:true}})),/SETUP_INVITATIONS_INVALID/);
+  }finally{a.f.db.close();b.f.db.close();}
+});
+
+test('operación que cambia durante setup guarda SETUP_REPO_CHANGED en lastError',async()=>{
+  const t=operation(),c=clients();
+  const original=c.github.request.bind(c.github);
+  let changed=false;
+  c.github.request=async(...args)=>{
+    if(!changed&&args[1].endsWith('/permission')){
+      changed=true;
+      const op=readOperation(t.f.db,{clientId:t.f.client,operationId:t.operationId});
+      saveOperation(t.f.db,{...op,repository:{...op.repository,id:88}});
+    }
+    return original(...args);
+  };
+  try{
+    await assert.rejects(run(t,c),/SETUP_REPO_CHANGED/);
+    const s=bootstrapStatus(t.f.db,{clientId:t.f.client,operationId:t.operationId,now:T0}).setup;
+    assert.match(s.lastError,/SETUP_REPO_CHANGED/);
+  }finally{t.f.db.close();}
+});
+
+test('cliente ajeno no puede leer ni alterar setup',async()=>{
+  const t=operation(),c=clients();
+  try{
+    await assert.rejects(run(t,c,{clientId:'otro-cliente'}),/BOOTSTRAP_NOT_FOUND/);
+    assert.equal(bootstrapStatus(t.f.db,{clientId:t.f.client,operationId:t.operationId,now:T0}).setup,null);
+  }finally{t.f.db.close();}
+});
+
+test('rama default vacía se rechaza sin construir ruta incompleta',async()=>{
+  const t=operation(),c=clients({repo:{...REPO,default_branch:''}});
+  try{
+    await assert.rejects(run(t,c),/SETUP_BRANCH_MISSING/);
+    assert.equal(c.calls.some(x=>String(x[1]).includes('/branches//protection')),false);
+  }finally{t.f.db.close();}
+});
+
+test('dos ejecuciones intercaladas: la vieja no pisa workflow ni error de la nueva',async()=>{
+  const t=operation(),slow=clients({workflow:false}),fast=clients();
+  let resume,signal;
+  const paused=new Promise(resolve=>{signal=resolve;});
+  slow.github.repo=async()=>{signal();await new Promise(resolve=>{resume=resolve;});return REPO;};
+  try{
+    const old=run(t,slow);
+    await paused;
+    const fresh=await run(t,fast);
+    assert.equal(fresh.setup.workflow,'PRESENT');
+    resume();
+    await old;
+    const latest=bootstrapStatus(t.f.db,{clientId:t.f.client,operationId:t.operationId,now:T0}).setup;
+    assert.equal(latest.workflow,'PRESENT');
+    assert.equal(latest.lastError,null);
+    assert.equal(latest.runSeq,2);
   }finally{t.f.db.close();}
 });

@@ -62,5 +62,5 @@ export async function remoteFixture({envExtra={},mcp={},runtimeOptions={}}={}){
   return {dir,api,ds,env,runtime,session,call,spec,authorReady,
     cleanup:async()=>{await runtime.close();await api.close();await ds.close();
       if(previous===undefined)delete process.env.ZANA_STATE_FILE;else process.env.ZANA_STATE_FILE=previous;
-      await rm(dir,{recursive:true,force:true});}};
+      await rm(dir,{recursive:true,force:true,maxRetries:5,retryDelay:50});}};
 }

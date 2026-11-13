@@ -29,7 +29,8 @@ test('discovery y plan MCP funcionan sin misión ni repositorio',async()=>{
     assert.equal(proposal.visibility,'private');
     assert.deepEqual(f.api.state.dispatches,[],'no CI or external write');
     assert.deepEqual(f.api.state.pulls,[],'no PR or repository created');
-    assert.equal(REMOTE_TOOL_NAMES.length,53,'se registran dos herramientas del panel, una es app-only');
+    assert.equal(REMOTE_TOOL_NAMES.length,54,'se añade bootstrap_setup al catálogo con las dos herramientas del panel');
+    assert.ok(REMOTE_TOOL_NAMES.includes('zana_bootstrap_setup'));
   }finally{await f.cleanup();}
 });
 test('tampers y documentos sin fuente no crean propuesta',async()=>{

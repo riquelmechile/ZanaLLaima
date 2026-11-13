@@ -2,7 +2,7 @@
 
 Los tests que cuentan corren en GitHub Actions. Cada repo donde se abran misiones (los que cubre `ZANA_GITHUB_REPOS`, por nombre o con `owner/*`) necesita un workflow `workflow_dispatch`. Por defecto se llama como `ZANA_CHECKS_WORKFLOW` (`zana-checks.yml`), salvo que el operador configure un override explícito por repositorio mediante `ZANA_REPO_CHECKS_JSON`. Con eso basta: `zana_checks_start` lo dispara **una vez por SHA**, cuando la autora terminó de escribir. Así una misión gasta una corrida, y no una por cada push.
 
-**Lo agrega el operador.** ZanaLLaima nunca escribe en `.github/workflows/**` de otro repo (la política lo deniega) y esta plantilla no se instala sola.
+**Lo agrega el operador o GPT con `ZANA_GITHUB_FULL_ACCESS` ya activo.** `zana_bootstrap_setup` prepara la revisora y la protección del repositorio nuevo, pero solo informa `workflow=MISSING` si falta el archivo de checks: no instala la plantilla.
 
 ```yaml
 name: zana-checks

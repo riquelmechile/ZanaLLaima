@@ -8,7 +8,7 @@ export function panelHtml(){
 <style>
 :root{color-scheme:light dark;--bg:var(--color-background-primary,light-dark(#fff,#171717));--card:var(--color-background-secondary,light-dark(#f5f5f5,#242424));--text:var(--color-text-primary,light-dark(#171717,#fafafa));--muted:var(--color-text-secondary,light-dark(#555,#bbb));--border:var(--color-border-primary,light-dark(#ddd,#444));--ok:var(--color-background-success,light-dark(#147d3f,#176d41));--danger:var(--color-background-danger,light-dark(#b42318,#d65a52));font-family:var(--font-sans,system-ui,sans-serif)}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text)}main{width:min(100%,420px);margin:auto;padding:16px}.card{background:var(--card);border:1px solid var(--border);border-radius:var(--border-radius-lg,14px);padding:14px;margin:10px 0}h1{font-size:1.25rem;margin:0 0 6px}h2{font-size:1rem;margin:14px 0 6px}h3{font-size:.95rem;margin:10px 0 4px}p,li{font-size:.9rem;line-height:1.45}.muted{color:var(--muted)}ul{padding-left:20px}[hidden]{display:none!important}.actions{display:grid;gap:8px;margin-top:14px}button{border:0;border-radius:10px;padding:11px 12px;font:inherit;font-weight:650;cursor:pointer}button:disabled{opacity:.55;cursor:not-allowed}.approve{background:var(--ok);color:white}.deny{background:var(--danger);color:white}.link{background:transparent;color:var(--text);border:1px solid var(--border);width:100%;margin-top:8px}
-</style></head><body><main id="app"><h1>Panel de aprobación</h1><p id="status" class="muted" role="status" aria-live="polite">Conectando con el host…</p><section id="plan"></section><div id="actions" class="actions" hidden><button id="approve" class="approve">Aprobar y crear el repositorio</button><button id="deny" class="deny">Rechazar</button></div></main>
+</style></head><body><main id="app"><h1>Panel de aprobación</h1><p id="status" class="muted" role="status" aria-live="polite">Conectando con el host…</p><section id="plan"></section><div id="actions" class="actions" hidden><button id="approve" class="approve">Aprobar, crear y preparar el repositorio</button><button id="deny" class="deny">Rechazar</button></div></main>
 <script>
 (function(){
 'use strict';
@@ -125,7 +125,25 @@ function decide(decision){
       return request('tools/call',{name:'zana_bootstrap_execute',arguments:{operationId:operationId}})
         .then(resultOf).then(function(execution){
           var state=showExecution(execution);
-          return context('El operador aprobó en el panel. operationId='+value.operationId+', estado='+state);
+          var resultText='El operador aprobó en el panel. operationId='+value.operationId+', estado='+state;
+          if(state!=='DONE')return context(resultText);
+          return request('tools/call',{name:'zana_bootstrap_setup',arguments:{operationId:operationId}})
+            .then(resultOf).then(function(prepared){
+              var setup=prepared.setup||{};
+              var safe=function(field){var v=String(setup[field]||'UNKNOWN');
+                return /^(WRITE|FAILED|APPLIED|UNAVAILABLE|MISMATCH|PRESENT|MISSING)$/.test(v)?v:'UNKNOWN';};
+              var reviewer=safe('reviewer'),protection=safe('protection'),workflow=safe('workflow');
+              addSection('Preparación del repositorio',function(card){
+                card.appendChild(node('p','Revisora: '+reviewer));
+                card.appendChild(node('p','Protección: '+protection));
+                card.appendChild(node('p','Workflow: '+workflow));
+              });
+              return context(resultText+', setup=reviewer:'+reviewer+',protection:'+protection+',workflow:'+workflow);
+            }).catch(function(error){
+              var message=String(error&&error.message||error),code=errorCode(error);
+              addSection('Error al preparar el repositorio',function(card){card.appendChild(node('p',message));});
+              return context(resultText+', setup=error:'+code);
+            });
         });
     }).catch(function(error){
       var message=String(error&&error.message||error),code=errorCode(error);

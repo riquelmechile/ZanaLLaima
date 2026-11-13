@@ -68,20 +68,20 @@ openssl rand -base64 36
 
 ## 2. Preparar cada repo administrado
 
-Cada repo que GPT va a tocar necesita tres cosas, y **las haces tú** (ZanaLLaima nunca escribe en `.github/workflows/**`):
+Cada repo administrado necesita tres cosas. Tras crear un repo, `zana_bootstrap_setup` agrega automáticamente la revisora con Write y protege la rama por defecto con `zana/4r`; también comprueba si falta el workflow. La instalación del workflow sigue a cargo del operador o de GPT si `ZANA_GITHUB_FULL_ACCESS` ya está activado:
 
 1. **El workflow de checks**: copia la plantilla de [checks-workflow.md](checks-workflow.md) a `.github/workflows/zana-checks.yml` y adapta los pasos al lenguaje del repo. Tiene que aceptar `workflow_dispatch`; no le agregues `push` ni `pull_request`, para que cada misión gaste una sola corrida.
-2. **Protección de la rama default** (Settings → Branches o Rulesets):
+2. **Protección de la rama default**: `zana_bootstrap_setup` la aplica y verifica automáticamente. Revisa el resultado en GitHub (Settings → Branches o Rulesets):
    - exigir PR antes de mergear, con 1 aprobación;
    - exigir el estado `zana/4r` como required status check. Los checks lanzados por `workflow_dispatch` no cuentan para la protección del PR. Finalize publica `zana/4r` en `success` solo con APPROVE y en `failure` con REQUEST_CHANGES, tras exigir CI verde sobre ese SHA. Es una segunda llave: GitHub no verifica quién publicó el estado, un actor con Write o `statuses: write` puede suplantarlo, un éxito reemplazado permanece y la protección no exige CI por sí sola. La garantía fuerte la dan `zana_merge` y `zana_delivery_status`, que verifican CI sobre el SHA exacto y la identidad `ZANA_REVIEWER_LOGIN`; fusionar fuera de `zana_merge` no tiene esa red;
    - exigir aprobación del último push y que se resuelvan las conversaciones.
 3. **Que `ZANA_GITHUB_REPOS` lo cubra** (paso 4): por nombre, o con `owner/*` si quieres permitir todos los repos de la cuenta sin tocar el servidor cada vez.
 
-Permitir un repo solo deja abrir misiones en él. Para que una misión termine bien, el repo igual necesita los pasos 1 y 2 de esta lista. Sin la cuenta revisora no hay merge. Sin el workflow de checks solo hay CI verde si el repo tiene otro CI en sus PR (con `ZANA_REQUIRED_CHECKS` vacío vale cualquier check exitoso). La protección de rama no la verifica el servidor: es tu segunda llave en GitHub. Detalle en [SECURITY.md](../SECURITY.md).
+Permitir un repo solo deja abrir misiones en él. Para que una misión termine bien, instala el paso 1 y verifica que la protección automática del paso 2 no esté `UNAVAILABLE`. Sin la cuenta revisora no hay merge. Sin el workflow de checks solo hay CI verde si el repo tiene otro CI en sus PR (con `ZANA_REQUIRED_CHECKS` vacío vale cualquier check exitoso). La protección se aplica y verifica al crear el repositorio mediante `zana_bootstrap_setup`, pero el servidor no vigila alteraciones posteriores ni `zana_merge` exige por sí mismo esta configuración. Sigue siendo una segunda llave en GitHub. Detalle en [SECURITY.md](../SECURITY.md).
 
 Para la primera prueba conviene un repo sandbox vacío con un `package.json` y un test.
 
-Con `ZANA_GITHUB_FULL_ACCESS=true`, el orquestador puede ejecutar esta preparación con `zana_github_request` y verificar cada efecto con GET antes de iniciar misiones. Consulte [github-full-access.md](github-full-access.md).
+Con `ZANA_GITHUB_FULL_ACCESS=true`, el orquestador puede instalar el workflow con `zana_github_request` y comprobarlo con GET. La revisora y la protección son responsabilidad exclusiva de `zana_bootstrap_setup`. Consulte [github-full-access.md](github-full-access.md).
 
 ## 3. Instalar el código en el servidor
 
@@ -117,7 +117,7 @@ Edítalo con un editor en el servidor, nunca en el repo ni en un chat. **Rutas a
 | `ZANA_GITHUB_REPOS` | sí | Repos donde GPT puede abrir misiones, separados por coma. Cada entrada es `owner/repo` (ese repo) u `owner/*` (todos los repos de esa cuenta, incluidos los que se creen después). No existe `*` solo: la cuenta siempre va nombrada, con un login de letras, números y guiones (una cuenta con `_` en el nombre lista sus repos uno por uno). GPT no puede escribir en ningún otro. |
 | `ZANA_DOWNSTREAM_GITHUB_TOKEN` | sí | Token de la cuenta autora (1.1). |
 | `ZANA_REVIEWER_TOKEN` | sí | Token de la cuenta revisora (1.2). |
-| `ZANA_BOOTSTRAP_GITHUB_TOKEN` | no | Token de la cuenta dueña solo para crear repositorios (bootstrap). Debe ser distinto del de misiones: si son iguales, `zana_bootstrap_execute` responde `BOOTSTRAP_TOKEN_SHARED` y `/health` lo avisa. Sin él responde `BOOTSTRAP_TOKEN_MISSING`. Permiso: un token clásico necesita el scope `repo`; uno fine-grained necesita *Administration: write* sobre todos los repositorios de la cuenta, que también permite borrarlos y cambiar su configuración. Solo crea repositorios de la cuenta del token: las organizaciones no están soportadas (`OWNER_MISMATCH`). |
+| `ZANA_BOOTSTRAP_GITHUB_TOKEN` | no | Token de la cuenta dueña para crear repositorios, invitar colaboradores (incluida la revisora) y aplicar/verificar protección de rama (bootstrap). Debe ser distinto del de misiones: si son iguales, `zana_bootstrap_execute` responde `BOOTSTRAP_TOKEN_SHARED` y `/health` lo avisa. Sin él responde `BOOTSTRAP_TOKEN_MISSING`. Permisos: un token clásico necesita el scope `repo`; uno fine-grained necesita *Administration: write* para administrar el repositorio, sus colaboradores/invitaciones y las reglas de protección, con acceso a todos los repositorios de la cuenta. Ese permiso también permite borrarlos o cambiar su configuración. Solo crea repositorios de la cuenta del token: las organizaciones no están soportadas (`OWNER_MISMATCH`). |
 | `ZANA_GITHUB_FULL_ACCESS` | no | `false` por defecto. En `true`, expone `zana_github_request` para la preparación administrativa de §2; exige un token de bootstrap separado del de misiones. |
 | `ZANA_REVIEWER_LOGIN` | sí | Login de GitHub de la cuenta revisora. No tiene valor por defecto: sin él el servidor no arranca, y `node src/cli.mjs remote-health` lo muestra como `degraded`. |
 | `ZANA_HTTP_PORT` | no | Puerto local, 8787 por defecto. |

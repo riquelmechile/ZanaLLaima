@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {remoteFixture} from './helpers/remote-fixture.mjs';
+import {REMOTE_TOOL_NAMES} from '../src/remote.mjs';
 import {BOOTSTRAP_TOKEN,AUTHOR_TOKEN} from './helpers/fake-github.mjs';
 import {answers,alternatives} from './helpers/plan-fixture.mjs';
 
 // Borrador con plan aprobado y creación del repositorio pedida (y autorizada si se indica).
-async function ready({token=true,authorized=true,name='gestor'}={}){
+async function ready({token=true,authorized=true,name='gestor',envExtra={},runtimeOptions={}}={}){
   const f=await remoteFixture({envExtra:{ZANA_PUBLIC_HOST:'zanallaima.test',ZANA_GITHUB_REPOS:'O/*',
-    ...(token?{ZANA_BOOTSTRAP_GITHUB_TOKEN:BOOTSTRAP_TOKEN}:{})}});
+     ...(token?{ZANA_BOOTSTRAP_GITHUB_TOKEN:BOOTSTRAP_TOKEN}:{}),...envExtra},runtimeOptions});
   const s=await f.session('zana-chatgpt','oauth-one');
   const w0=await f.call('zana_workspace_create',{idea:'Plataforma privada para gestionar proyectos de desarrollo'},s);
   const w1=await f.call('zana_workspace_update',{workspaceId:w0.workspaceId,expectedVersion:0,answers},s);
@@ -106,4 +107,59 @@ test('el token de bootstrap no puede ser el de misiones, y pedir de nuevo un rep
     assert.deepEqual([again.operationId,again.state,again.created.fullName,again.authorization.approvalUrl],[t.op.operationId,'DONE','O/gestor',null],
       'devuelve la operación hecha, sin pedir otra autorización');
   }finally{await t.f.cleanup();}
+});
+
+test('setup del repo DONE: revisora, protección, workflow por repositorio y auditoría',async()=>{
+  const setupCalls=[],setupState={protection:null};
+  const response=(status,data)=>new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json'}});
+  const fetcher=async(url,options)=>{
+    const path=new URL(url).pathname,method=options.method;
+    if(path.startsWith('/repos/O/gestor/')){
+      setupCalls.push({method,path});
+      if(path.endsWith('/collaborators/reviewer-bot/permission'))return response(200,{permission:'push'});
+      if(path.endsWith('/branches/main/protection')){
+        if(method==='GET')return setupState.protection?response(200,setupState.protection):response(404,{message:'Not Found'});
+        if(method==='PUT'){setupState.protection=JSON.parse(options.body);return response(200,setupState.protection);}
+      }
+      if(path.endsWith('/contents/.github/workflows/ci-alt.yml'))return response(404,{message:'Not Found'});
+    }
+    return globalThis.fetch(url,options);
+  };
+  const t=await ready({envExtra:{ZANA_REPO_CHECKS_JSON:JSON.stringify({'O/gestor':{
+    workflow:'ci-alt.yml',requiredChecks:['test']}})},runtimeOptions:{fetcher}});
+  try{
+    assert.ok(REMOTE_TOOL_NAMES.includes('zana_bootstrap_setup'));
+    assert.equal((await t.f.call('zana_bootstrap_execute',t.args,t.s)).state,'DONE');
+    const result=await t.f.call('zana_bootstrap_setup',t.args,t.s);
+    assert.deepEqual([result.setup?.reviewer,result.setup?.protection,result.setup?.workflow],['WRITE','APPLIED','MISSING']);
+    assert.ok(setupCalls.some(x=>x.path.endsWith('/contents/.github/workflows/ci-alt.yml')));
+    const audit=(await t.f.runtime.readAudit({limit:100})).filter(x=>x.tool==='bootstrap_setup');
+    assert.equal(audit.length,1);
+    assert.deepEqual(audit[0].detail,{operationId:t.op.operationId,fullName:'O/gestor',
+      reviewer:'WRITE',protection:'APPLIED',workflow:'MISSING'});
+    assert.equal((await t.f.call('zana_bootstrap_setup',t.args,t.s)).setup.reviewer,'WRITE');
+  }finally{await t.f.cleanup();}
+});
+
+test('setup aplica las guardas de token, cliente y revisora',async()=>{
+  const t=await ready();
+  try{
+    assert.equal((await t.f.call('zana_bootstrap_execute',t.args,t.s)).state,'DONE');
+    const other=await t.f.session('zana-chatgpt','oauth-other');
+    assert.match((await t.f.call('zana_bootstrap_setup',t.args,other)).error,/BOOTSTRAP_NOT_FOUND/);
+  }finally{await t.f.cleanup();}
+  const missing=await ready({token:false});
+  try{
+    assert.match((await missing.f.call('zana_bootstrap_setup',missing.args,missing.s)).error,/BOOTSTRAP_TOKEN_MISSING/);
+  }finally{await missing.f.cleanup();}
+  const shared=await remoteFixture({envExtra:{ZANA_GITHUB_REPOS:'O/*',ZANA_BOOTSTRAP_GITHUB_TOKEN:AUTHOR_TOKEN}});
+  try{
+    const session=await shared.session('zana-chatgpt','oauth-one');
+    assert.match((await shared.call('zana_bootstrap_setup',{operationId:'11111111-1111-4111-8111-111111111111'},session)).error,/BOOTSTRAP_TOKEN_SHARED/);
+  }finally{await shared.cleanup();}
+  const reviewer=await ready({envExtra:{ZANA_REVIEWER_LOGIN:''}});
+  try{
+    assert.equal((await reviewer.f.call('zana_bootstrap_execute',reviewer.args,reviewer.s)).state,'DONE');
+    assert.match((await reviewer.f.call('zana_bootstrap_setup',reviewer.args,reviewer.s)).error,/SETUP_REVIEWER_MISSING/);
+  }finally{await reviewer.f.cleanup();}
 });

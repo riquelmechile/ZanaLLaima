@@ -53,7 +53,7 @@ test('exporta recurso HTML autocontenido y seguro',()=>{
   assert.doesNotMatch(html,/innerHTML/);
 });
 
-test('handshake y aprobación siguen decide, execute y contexto sin filtrar nonce',async()=>{
+test('handshake y aprobación siguen decide, execute, setup y contexto sin filtrar nonce',async()=>{
   const app=boot();await initialize(app);app.receive(toolResult());await flush();
   assert.equal(app.ids.actions.hidden,false);assert.match(app.ids.plan.textContent,/Crear demo/);
   app.ids.approve.click();await flush();
@@ -63,8 +63,15 @@ test('handshake y aprobación siguen decide, execute y contexto sin filtrar nonc
   const execute=app.messages.find(x=>x.method==='tools/call'&&x.params.name==='zana_bootstrap_execute');
   assert.deepEqual(plain(execute.params.arguments),{operationId:'op-1'});
   app.receive({jsonrpc:'2.0',id:execute.id,result:{structuredContent:{state:'DONE',created:{fullName:'zana/demo',htmlUrl:'repo.example.invalid/zana/demo'}}}});await flush();
+  const setup=app.messages.find(x=>x.method==='tools/call'&&x.params.name==='zana_bootstrap_setup');
+  assert.ok(setup,'la vista debe llamar setup después de DONE');
+  assert.deepEqual(plain(setup.params.arguments),{operationId:'op-1'});
+  assert.equal(app.messages.some(x=>x.method==='ui/update-model-context'),false);
+  app.receive({jsonrpc:'2.0',id:setup.id,result:{structuredContent:{setup:{reviewer:'WRITE',protection:'APPLIED',workflow:'MISSING'}}}});await flush();
   const update=app.messages.find(x=>x.method==='ui/update-model-context');
   assert.match(update.params.content[0].text,/operationId=op-1, estado=DONE/);
+  assert.match(update.params.content[0].text,/setup=reviewer:WRITE,protection:APPLIED,workflow:MISSING/);
+  assert.match(app.ids.plan.textContent,/WRITE.*APPLIED.*MISSING/);
   for(const message of app.messages)if(message!==decide)assert.equal(JSON.stringify(message).includes('secret-nonce'),false);
 });
 
@@ -141,9 +148,27 @@ test('doble fallo al avisar al modelo conserva estado DONE',async()=>{
   app.receive({jsonrpc:'2.0',id:decide.id,result:{structuredContent:{status:'APPROVED',operationId:'op-1'}}});await flush();
   const ex=app.messages.find(x=>x.params?.name==='zana_bootstrap_execute');
   app.receive({jsonrpc:'2.0',id:ex.id,result:{structuredContent:{state:'DONE',created:{fullName:'zana/demo'}}}});await flush();
+  const setup=app.messages.find(x=>x.params?.name==='zana_bootstrap_setup');
+  assert.ok(setup);
+  app.receive({jsonrpc:'2.0',id:setup.id,result:{structuredContent:{setup:{reviewer:'WRITE',protection:'APPLIED',workflow:'MISSING'}}}});await flush();
   const update=app.messages.find(x=>x.method==='ui/update-model-context');
   app.receive({jsonrpc:'2.0',id:update.id,error:{message:'rechazo uno'}});await flush();
   const fallback=app.messages.find(x=>x.method==='ui/message');
   app.receive({jsonrpc:'2.0',id:fallback.id,error:{message:'rechazo dos'}});await flush();
   assert.match(app.ids.status.textContent,/DONE/);
+});
+
+test('error de setup mantiene el repo DONE y entrega el error literal al panel',async()=>{
+  const app=boot(),decide=await approveFlow(app);
+  app.receive({jsonrpc:'2.0',id:decide.id,result:{structuredContent:{status:'APPROVED',operationId:'op-1'}}});await flush();
+  const execute=app.messages.find(x=>x.params?.name==='zana_bootstrap_execute');
+  app.receive({jsonrpc:'2.0',id:execute.id,result:{structuredContent:{state:'DONE',created:{fullName:'zana/demo'}}}});await flush();
+  const setup=app.messages.find(x=>x.params?.name==='zana_bootstrap_setup');
+  assert.ok(setup,'la vista debe llamar setup después de DONE');
+  app.receive({jsonrpc:'2.0',id:setup.id,result:{isError:true,content:[{type:'text',text:'SETUP_REVIEWER_FAILED: invitación falló'}]}});await flush();
+  assert.match(app.ids.status.textContent,/DONE/);
+  assert.match(app.ids.plan.textContent,/SETUP_REVIEWER_FAILED: invitación falló/);
+  const update=app.messages.find(x=>x.method==='ui/update-model-context');
+  assert.match(update.params.content[0].text,/estado=DONE.*setup=error:SETUP_REVIEWER_FAILED/);
+  for(const message of app.messages)if(message!==decide)assert.equal(JSON.stringify(message).includes('secret-nonce'),false);
 });

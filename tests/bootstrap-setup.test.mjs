@@ -6,6 +6,17 @@ import {runBootstrapSetup} from '../src/bootstrap-setup.mjs';
 import {planFixture,T0} from './helpers/plan-fixture.mjs';
 
 const REPO={id:77,full_name:'acme/gestor',private:true,default_branch:'trunk',owner:{login:'acme'}};
+const actualGitHubGet={
+  url:'x',
+  required_status_checks:{strict:true,contexts:['zana/4r'],checks:[{context:'zana/4r',app_id:null}]},
+  required_pull_request_reviews:{dismiss_stale_reviews:true,require_code_owner_reviews:false,
+    require_last_push_approval:true,required_approving_review_count:1},
+  required_signatures:{enabled:false},enforce_admins:{enabled:true},
+  required_linear_history:{enabled:false},allow_force_pushes:{enabled:false},
+  allow_deletions:{enabled:false},block_creations:{enabled:false},
+  required_conversation_resolution:{enabled:true},lock_branch:{enabled:false},
+  allow_fork_syncing:{enabled:false}
+};
 const protection=()=>({required_status_checks:{strict:true,checks:[{context:'zana/4r'}]},enforce_admins:{enabled:true},
   required_pull_request_reviews:{required_approving_review_count:1,dismiss_stale_reviews:true,require_last_push_approval:true},
   required_conversation_resolution:{enabled:true},allow_force_pushes:{enabled:false},allow_deletions:{enabled:false}});
@@ -20,7 +31,7 @@ function operation(state='DONE',repository={id:77,fullName:'acme/gestor',private
 function clients(opts={}){
   const calls=[],state={permission:opts.permission??'admin',protection:opts.protection??protection(),invited:false};
   const github={configured:true,calls,async repo(){calls.push(['REPO']);if(opts.repoError)throw opts.repoError;return opts.repo??REPO;},
-    async request(method,path,{body,withStatus}={}){
+    async request(method,path,{body}={}){
       calls.push([method,path,body]);
       if(opts.networkPath===path)throw new GitHubApiError(502,'GitHub unreachable');
       if(path.endsWith('/permission'))return opts.roleName?{role_name:opts.roleName}:{permission:state.permission};
@@ -38,7 +49,7 @@ function clients(opts={}){
       if(method==='GET'&&path.includes('/contents/.github/workflows/')){
         if(opts.workflowError)throw opts.workflowError;
         if(opts.workflow===false)throw new GitHubApiError(404,'Not Found');
-        return withStatus?{status:200,data:{type:'file'}}:{type:'file'};
+        return {type:'file'};
       }
       throw new Error('unexpected '+method+' '+path);
     }};
@@ -137,22 +148,12 @@ test('error de red se guarda acotado en lastError y se relanza',async()=>{
     await assert.rejects(run(t,clients({networkPath:path})),/SETUP_GITHUB_ERROR/);
     const s=bootstrapStatus(t.f.db,{clientId:t.f.client,operationId:t.operationId,now:T0}).setup;
     assert.match(s.lastError,/SETUP_GITHUB_ERROR/);assert.ok(s.lastError.length<=200);
+    assert.notEqual(s.protection,'MISMATCH');
+    assert.notEqual(s.workflow,'MISSING');
   }finally{t.f.db.close();}
 });
 
-
 // Reproducciones documentadas en el review 4R del PR #71.
-const actualGitHubGet={
-  url:'x',
-  required_status_checks:{strict:true,contexts:['zana/4r'],checks:[{context:'zana/4r',app_id:null}]},
-  required_pull_request_reviews:{dismiss_stale_reviews:true,require_code_owner_reviews:false,
-    require_last_push_approval:true,required_approving_review_count:1},
-  required_signatures:{enabled:false},enforce_admins:{enabled:true},
-  required_linear_history:{enabled:false},allow_force_pushes:{enabled:false},
-  allow_deletions:{enabled:false},block_creations:{enabled:false},
-  required_conversation_resolution:{enabled:true},lock_branch:{enabled:false},
-  allow_fork_syncing:{enabled:false}
-};
 
 test('REPRO 4R: GET real ya correcto no debe hacer PUT',async()=>{
   const t=operation(),c=clients({protection:actualGitHubGet,afterProtection:actualGitHubGet});
@@ -170,16 +171,6 @@ test('REPRO 4R: 403 de plan en GET produce UNAVAILABLE y revisa workflow',async(
     assert.deepEqual([result.setup.protection,result.setup.workflow],['UNAVAILABLE','PRESENT']);
   }finally{t.f.db.close();}
 });
-test('REPRO 4R: fallo previo no inventa MISMATCH ni MISSING',async()=>{
-  const t=operation(),c=clients({networkPath:'/repos/acme/gestor/collaborators/review-bot/permission'});
-  try{
-    await assert.rejects(run(t,c),/SETUP_GITHUB_ERROR/);
-    const setup=bootstrapStatus(t.f.db,{clientId:t.f.client,operationId:t.operationId,now:T0}).setup;
-    assert.notEqual(setup.protection,'MISMATCH');
-    assert.notEqual(setup.workflow,'MISSING');
-  }finally{t.f.db.close();}
-});
-
 
 test('GET acepta checks en contexts, y rechaza bandera enabled ausente',async()=>{
   const a=operation(),b=operation();
@@ -299,6 +290,42 @@ test('dos ejecuciones intercaladas: la vieja no pisa workflow ni error de la nue
     const latest=bootstrapStatus(t.f.db,{clientId:t.f.client,operationId:t.operationId,now:T0}).setup;
     assert.equal(latest.workflow,'PRESENT');
     assert.equal(latest.lastError,null);
-    assert.equal(latest.runSeq,2);
+    assert.equal(readOperation(t.f.db,{clientId:t.f.client,operationId:t.operationId}).setup.runSeq,2);
+    assert.equal(Object.hasOwn(latest,'runSeq'),false);
+  }finally{t.f.db.close();}
+});
+
+test('timestamps por campo y runSeq interno, sin duplicar códigos de error',async()=>{
+  const t=operation(),c=clients();
+  try{
+    const first=await run(t,c);
+    assert.equal(first.setup.reviewer,'WRITE');
+    assert.deepEqual(Object.keys(first.setup.checkedAt).sort(),['protection','reviewer','workflow']);
+    assert.equal(Object.hasOwn(first.setup,'runSeq'),false);
+    const oldDates={...first.setup.checkedAt},later=T0+60_000;
+    await assert.rejects(run(t,clients({permission:'read',invitations:[]}),{now:()=>later}),/SETUP_REVIEWER_FAILED/);
+    const updated=bootstrapStatus(t.f.db,{clientId:t.f.client,operationId:t.operationId,now:later}).setup;
+    assert.equal(updated.checkedAt.reviewer,new Date(later).toISOString());
+    assert.equal(updated.checkedAt.protection,oldDates.protection);
+    assert.equal(updated.checkedAt.workflow,oldDates.workflow);
+  }finally{t.f.db.close();}
+  const e=operation(),broken=clients({networkPath:'/repos/acme/gestor/collaborators/review-bot/permission'});
+  try{
+    await assert.rejects(run(e,broken),/SETUP_GITHUB_ERROR/);
+    const st=bootstrapStatus(e.f.db,{clientId:e.f.client,operationId:e.operationId,now:T0});
+    assert.doesNotMatch(st.setup.lastError,/SETUP_GITHUB_ERROR: SETUP_GITHUB_ERROR:/);
+  }finally{e.f.db.close();}
+});
+
+test('una corrida nueva reemplaza el error preciso de una corrida anterior',async()=>{
+  const t=operation();
+  try{
+    await assert.rejects(run(t,clients({permission:'read',invitations:[]})),/SETUP_REVIEWER_FAILED/);
+    const before=bootstrapStatus(t.f.db,{clientId:t.f.client,operationId:t.operationId,now:T0}).setup;
+    assert.match(before.lastError,/^SETUP_REVIEWER_FAILED:/);
+    await assert.rejects(run(t,clients({repoError:new GitHubApiError(502,'GitHub unreachable')})),/SETUP_GITHUB_ERROR/);
+    const after=bootstrapStatus(t.f.db,{clientId:t.f.client,operationId:t.operationId,now:T0}).setup;
+    assert.match(after.lastError,/^SETUP_GITHUB_ERROR:/);
+    assert.doesNotMatch(after.lastError,/SETUP_REVIEWER_FAILED/);
   }finally{t.f.db.close();}
 });

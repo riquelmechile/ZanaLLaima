@@ -23,7 +23,7 @@ function clients(opts={}){
     async request(method,path,{body,withStatus}={}){
       calls.push([method,path,body]);
       if(opts.networkPath===path)throw new GitHubApiError(502,'GitHub unreachable');
-      if(path.endsWith('/permission'))return {permission:state.permission};
+      if(path.endsWith('/permission'))return opts.roleName?{role_name:opts.roleName}:{permission:state.permission};
       if(method==='PUT'&&path.includes('/collaborators/')){state.invited=true;return null;}
       if(method==='GET'&&path.includes('/branches/')&&path.endsWith('/protection')){
         if(opts.protectionMissing&&!state.applied)throw new GitHubApiError(404,'Not Found');
@@ -58,6 +58,18 @@ test('rechaza operación no DONE, repositorio cambiado y revisora ausente',async
     await assert.rejects(run(c,clients({reviewerConfigured:false})),/SETUP_REVIEWER_MISSING/);
   }finally{a.f.db.close();b.f.db.close();c.f.db.close();}
 });
+
+test('valida nombre, dueño, workflow y role_name del repositorio',async()=>{
+  const a=operation(),b=operation(),c=operation(),d=operation();
+  try{
+    await assert.rejects(run(a,clients({repo:{...REPO,full_name:'acme/otro'}})),/SETUP_REPO_CHANGED/);
+    await assert.rejects(run(b,clients({repo:{...REPO,owner:{login:'otro'}}})),/SETUP_REPO_CHANGED/);
+    await assert.rejects(run(c,clients(),{workflow:'../x.yml'}),/SETUP_WORKFLOW_INVALID/);
+    const cd=clients({permission:'read',roleName:'write'});assert.equal((await run(d,cd)).setup.reviewer,'WRITE');
+    assert.equal(cd.calls.some(x=>x[0]==='PUT'&&x[1].includes('/collaborators/')),false);
+  }finally{a.f.db.close();b.f.db.close();c.f.db.close();d.f.db.close();}
+});
+
 test('revisora existente evita invitación y una nueva acepta solo la invitación exacta',async()=>{
   const a=operation(),b=operation();
   try{
@@ -65,13 +77,17 @@ test('revisora existente evita invitación y una nueva acepta solo la invitació
     assert.equal(ca.calls.some(x=>x[0]==='PUT'&&x[1].includes('/collaborators/')),false);
     assert.equal(ca.calls.some(x=>x[0]==='R:PATCH'),false);
     const cb=clients({permission:'read',invitations:[{id:8,repository:{id:99},inviter:{login:'acme'}},{id:9,repository:{id:77},inviter:{login:'acme'}}]});
-    await run(b,cb);assert.ok(cb.calls.some(x=>x[0]==='R:PATCH'&&x[1].endsWith('/9')));
+    await run(b,cb);
+    assert.ok(cb.calls.some(x=>x[0]==='R:PATCH'&&x[1].endsWith('/9')));
   }finally{a.f.db.close();b.f.db.close();}
 });
+
 test('ignora invitación de otro repo con el mismo nombre',async()=>{
   const t=operation(),c=clients({permission:'read',invitations:[{id:8,repository:{id:99,full_name:'acme/gestor'},inviter:{login:'acme'}}]});
-  try{await assert.rejects(run(t,c),/SETUP_REVIEWER_FAILED/);}finally{t.f.db.close();}
+  try{await assert.rejects(run(t,c),/SETUP_REVIEWER_FAILED/);}
+  finally{t.f.db.close();}
 });
+
 test('aplica y verifica protección exacta sobre la rama default',async()=>{
   const t=operation(),c=clients({permission:'admin',protectionMissing:true});
   try{
@@ -82,26 +98,33 @@ test('aplica y verifica protección exacta sobre la rama default',async()=>{
     assert.equal(r.setup.protection,'APPLIED');
   }finally{t.f.db.close();}
 });
+
 test('protección divergente queda MISMATCH y 403 de plan queda UNAVAILABLE sin cortar workflow',async()=>{
   const a=operation(),b=operation();
   try{
     const ca=clients({protectionMissing:true,afterProtection:{...protection(),allow_deletions:{enabled:true}}});
     await assert.rejects(run(a,ca),/SETUP_PROTECTION_MISMATCH/);
     assert.equal(bootstrapStatus(a.f.db,{clientId:a.f.client,operationId:a.operationId,now:T0}).setup.protection,'MISMATCH');
-    const cb=clients({protectionMissing:true,protection403:true,workflow:true}),r=await run(b,cb);
+    const cb=clients({protectionMissing:true,protection403:true,workflow:true});
+    const r=await run(b,cb);
     assert.deepEqual([r.setup.protection,r.setup.workflow],['UNAVAILABLE','PRESENT']);
   }finally{a.f.db.close();b.f.db.close();}
 });
+
 test('workflow PRESENT y MISSING, setup null antes y segunda corrida sin escrituras',async()=>{
   const a=operation(),b=operation();
   try{
     assert.equal(bootstrapStatus(a.f.db,{clientId:a.f.client,operationId:a.operationId,now:T0}).setup,null);
-    const ca=clients({permission:'admin'}),first=await run(a,ca);assert.equal(first.setup.workflow,'PRESENT');
+    const ca=clients({permission:'admin'}),first=await run(a,ca);
+    assert.equal(first.setup.workflow,'PRESENT');
     const writes=ca.calls.filter(x=>['PUT','PATCH','R:PATCH'].includes(x[0])).length;
-    await run(a,ca);assert.equal(ca.calls.filter(x=>['PUT','PATCH','R:PATCH'].includes(x[0])).length,writes);
-    assert.equal((await run(b,clients({permission:'admin',workflow:false}))).setup.workflow,'MISSING');
+    await run(a,ca);
+    assert.equal(ca.calls.filter(x=>['PUT','PATCH','R:PATCH'].includes(x[0])).length,writes);
+    const cb=clients({permission:'admin',workflow:false});
+    assert.equal((await run(b,cb)).setup.workflow,'MISSING');
   }finally{a.f.db.close();b.f.db.close();}
 });
+
 test('error de red se guarda acotado en lastError y se relanza',async()=>{
   const t=operation(),path='/repos/acme/gestor/collaborators/review-bot/permission';
   try{

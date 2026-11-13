@@ -203,6 +203,23 @@ test('la adopción vigente se decide por seq aunque el reloj retroceda',async()=
   }finally{await t.f.cleanup();}
 });
 
+test('una adopción posterior al cierre sigue vigente aunque su reloj quede bajo finalized_at',async()=>{
+  const t=await setup();
+  try{
+    const ready=await t.f.authorReady(),missionId=ready.missionId;
+    const request=await t.f.call('zana_review_request',{missionId},ready.author);
+    assert.ok(request.ticket);
+    const future=new Date(Date.now()+60_000).toISOString();
+    await remoteWrite(db=>db.prepare("UPDATE review_tickets SET state='FINALIZED',finalized_at=?,updated_at=? WHERE mission_id=?")
+      .run(future,future,missionId));
+    const a=await t.f.session('zana-chatgpt',ready.author.clientId);
+    const b=await t.f.session('zana-chatgpt',ready.author.clientId);
+    assert.equal((await t.f.call('zana_mission_adopt',{missionId},a)).adopted,true);
+    const result=await t.f.call('zana_mission_adopt',{missionId},b);
+    assert.match(result.error,/ADOPT_MISSION_BUSY/,JSON.stringify(result));
+  }finally{await t.f.cleanup();}
+});
+
 test('la sesión de una generación invalidada puede adoptar de nuevo tras vencer la vigente',async()=>{
   const t=await setup();
   try{

@@ -68,20 +68,20 @@ openssl rand -base64 36
 
 ## 2. Preparar cada repo administrado
 
-Cada repo que GPT va a tocar necesita tres cosas, y **las haces tú** (ZanaLLaima nunca escribe en `.github/workflows/**`):
+Cada repo administrado necesita tres cosas. Tras crear un repo, `zana_bootstrap_setup` agrega automáticamente la revisora con Write y protege la rama por defecto con `zana/4r`; también comprueba si falta el workflow. La instalación del workflow sigue a cargo del operador o de GPT si `ZANA_GITHUB_FULL_ACCESS` ya está activado:
 
 1. **El workflow de checks**: copia la plantilla de [checks-workflow.md](checks-workflow.md) a `.github/workflows/zana-checks.yml` y adapta los pasos al lenguaje del repo. Tiene que aceptar `workflow_dispatch`; no le agregues `push` ni `pull_request`, para que cada misión gaste una sola corrida.
-2. **Protección de la rama default** (Settings → Branches o Rulesets):
+2. **Protección de la rama default**: `zana_bootstrap_setup` la aplica y verifica automáticamente. Revisa el resultado en GitHub (Settings → Branches o Rulesets):
    - exigir PR antes de mergear, con 1 aprobación;
    - exigir el estado `zana/4r` como required status check. Los checks lanzados por `workflow_dispatch` no cuentan para la protección del PR. Finalize publica `zana/4r` en `success` solo con APPROVE y en `failure` con REQUEST_CHANGES, tras exigir CI verde sobre ese SHA. Es una segunda llave: GitHub no verifica quién publicó el estado, un actor con Write o `statuses: write` puede suplantarlo, un éxito reemplazado permanece y la protección no exige CI por sí sola. La garantía fuerte la dan `zana_merge` y `zana_delivery_status`, que verifican CI sobre el SHA exacto y la identidad `ZANA_REVIEWER_LOGIN`; fusionar fuera de `zana_merge` no tiene esa red;
    - exigir aprobación del último push y que se resuelvan las conversaciones.
 3. **Que `ZANA_GITHUB_REPOS` lo cubra** (paso 4): por nombre, o con `owner/*` si quieres permitir todos los repos de la cuenta sin tocar el servidor cada vez.
 
-Permitir un repo solo deja abrir misiones en él. Para que una misión termine bien, el repo igual necesita los pasos 1 y 2 de esta lista. Sin la cuenta revisora no hay merge. Sin el workflow de checks solo hay CI verde si el repo tiene otro CI en sus PR (con `ZANA_REQUIRED_CHECKS` vacío vale cualquier check exitoso). La protección de rama no la verifica el servidor: es tu segunda llave en GitHub. Detalle en [SECURITY.md](../SECURITY.md).
+Permitir un repo solo deja abrir misiones en él. Para que una misión termine bien, instala el paso 1 y verifica que la protección automática del paso 2 no esté `UNAVAILABLE`. Sin la cuenta revisora no hay merge. Sin el workflow de checks solo hay CI verde si el repo tiene otro CI en sus PR (con `ZANA_REQUIRED_CHECKS` vacío vale cualquier check exitoso). La protección de rama no la verifica el servidor: es tu segunda llave en GitHub. Detalle en [SECURITY.md](../SECURITY.md).
 
 Para la primera prueba conviene un repo sandbox vacío con un `package.json` y un test.
 
-Con `ZANA_GITHUB_FULL_ACCESS=true`, el orquestador puede ejecutar esta preparación con `zana_github_request` y verificar cada efecto con GET antes de iniciar misiones. Consulte [github-full-access.md](github-full-access.md).
+Con `ZANA_GITHUB_FULL_ACCESS=true`, el orquestador puede instalar el workflow con `zana_github_request` y comprobarlo con GET. La revisora y la protección son responsabilidad exclusiva de `zana_bootstrap_setup`. Consulte [github-full-access.md](github-full-access.md).
 
 ## 3. Instalar el código en el servidor
 

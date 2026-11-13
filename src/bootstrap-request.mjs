@@ -24,11 +24,13 @@ export function readOperation(db,{clientId,operationId}){
 const repoOf=intent=>intent.owner+'/'+intent.name;
 function view(op,authorization){
   const open=['PENDING','APPROVED'].includes(authorization.status);
+  const setup=op.setup?{...op.setup}:null;
+  if(setup)delete setup.runSeq; // contador de concurrencia privado
   return {operationId:op.operationId,state:op.state,repository:repoOf(op.intent),visibility:op.intent.visibility,
     planDigest:op.intent.planDigest,intentDigest:op.intent.digest,
     // created: el repositorio ya creado; lastError: por qué falló el último intento.
     created:op.repository??null,lastError:op.lastError??null,
-    setup:op.setup??null,
+    setup,
     authorization:{status:authorization.status,approvalId:open?authorization.approvalId:null,
       expiresAt:open?authorization.expiresAt:null}};
 }

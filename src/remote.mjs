@@ -27,7 +27,9 @@ import {createProjectWorkspace,getProjectWorkspace,updateProjectWorkspace,listPr
 import {requestPlanApproval,planApprovalStatus,describePlanApproval,decidePlanApproval} from './plan-approval.mjs';
 import {requestApprovalPanel,decideApprovalPanel,approvalPanelStatus} from './approval-panel.mjs';
 import {PANEL_URI,PANEL_MIME,panelHtml} from './approval-panel-view.mjs';
-import {requestBootstrap,bootstrapStatus} from './bootstrap-request.mjs';
+import {requestBootstrap,bootstrapStatus,readOperation} from './bootstrap-request.mjs';
+import {runBootstrapSetup} from './bootstrap-setup.mjs';
+import {checksForRepo} from './checks-policy.mjs';
 import {runBootstrap,reconcileBootstrap} from './bootstrap-execute.mjs';
 import {REVIEW_EVENT,REVIEW_DONE_EVENT,safeWebhookPost,listEvents,subscribeEvent,unsubscribeEvent,queueEvent,flushEvents,eventStatus} from './mcp-events.mjs';
 import {ActorSigner} from './actor-assertion.mjs';
@@ -93,6 +95,8 @@ const NEW_TOOLS={
   zana_panel_decide:['Decisión privada del operador desde el panel MCP Apps; no llamar desde el modelo',false,
     z.object({panelId:z.string().min(1).max(128),nonce:z.string().min(1).max(128),decision:z.enum(['allow','deny'])}).strict()],
   zana_bootstrap_execute:['Create the GitHub repository of a bootstrap operation the operator already authorized. One authorization is one attempt. If GitHub rejects it the cause is kept and a new authorization is needed; if the outcome is unknown it answers OUTCOME_UNKNOWN and must be settled with zana_bootstrap_reconcile, never retried',false,
+    z.object({operationId:z.string().uuid()}).strict()],
+  zana_bootstrap_setup:['Prepare a DONE bootstrap repository idempotently: ensure reviewer Write permission and default branch protection requiring zana/4r, and report if the checks workflow is missing. Safe to repeat',false,
     z.object({operationId:z.string().uuid()}).strict()],
   zana_bootstrap_reconcile:['Settle a bootstrap operation whose creation attempt had an unknown outcome: looks at GitHub and adopts the repository only if an authorized attempt of this same operation created it (also when a replaced attempt created it late)',false,
     z.object({operationId:z.string().uuid()}).strict()],
@@ -345,6 +349,17 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       return decided;
     }),
     zana_bootstrap_execute:({operationId},session)=>bootstrapDone(session,null,()=>runBootstrap(bootstrapDeps(session,operationId)),'CREATED'),
+    async zana_bootstrap_setup({operationId},session){
+      const deps=bootstrapDeps(session,operationId);
+      const op=await rr(db=>readOperation(db,{clientId:session.clientId,operationId}));
+      const fullName=op.repository?.fullName;
+      const result=await runBootstrapSetup({...deps,reviewer:reviewerGithub,reviewerLogin:config.reviewerLogin,
+        workflow:checksForRepo(config,fullName).workflow});
+      await audit({caller:session,tool:'bootstrap_setup',outcome:'DONE',category:'write',
+        detail:{operationId,fullName,reviewer:result.setup?.reviewer,
+          protection:result.setup?.protection,workflow:result.setup?.workflow}});
+      return withApprovalUrl(result);
+    },
     zana_bootstrap_reconcile:({operationId},session)=>bootstrapDone(session,null,()=>reconcileBootstrap(bootstrapDeps(session,operationId)),'ADOPTED'),
     zana_bootstrap_status:({operationId},session)=>rr(db=>withApprovalUrl(bootstrapStatus(db,{clientId:session.clientId,operationId}))),
     zana_discovery_start:({idea})=>startDiscovery(idea),

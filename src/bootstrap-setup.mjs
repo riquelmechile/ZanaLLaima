@@ -26,7 +26,10 @@ function protectionMatches(value){
 const upgradeError=error=>error?.status===403&&
   /upgrade\s+to\s+github\s+(?:pro|team|enterprise)|(?:upgrade|paid)\s+(?:your\s+)?plan/i.test(String(error.message));
 const is404=error=>error?.status===404;
-const errorText=error=>text((error?.code?error.code+': ':'')+(error instanceof Error?error.message:String(error)));
+const errorText=error=>{
+  const message=text(error instanceof Error?error.message:String(error));
+  return error?.code&&!message.startsWith(error.code+': ')?text(error.code+': '+message):message;
+};
 const sameRepo=(found,op)=>Number.isSafeInteger(found?.id)&&found.id===op.repository?.id&&
   String(found.full_name??'').toLowerCase()===String(op.repository?.fullName??'').toLowerCase()&&
   String(found.owner?.login??'').toLowerCase()===String(op.intent?.owner??'').toLowerCase();
@@ -56,7 +59,11 @@ export async function runBootstrapSetup({rw,rr,github,reviewer,reviewerLogin,wor
       fail('SETUP_REPO_CHANGED','La operación o su repositorio cambió');
     if(current.setup?.runSeq!==runSeq)return;
     const verified=['reviewer','protection','workflow'].some(field=>Object.hasOwn(fields,field));
-    const setup={...current.setup,...fields,...(verified?{checkedAt:checkedAt()}:{})};
+    const priorDates=current.setup?.checkedAt;
+    const dates=priorDates&&typeof priorDates==='object'?{...priorDates}:
+      {reviewer:null,protection:null,workflow:null};
+    if(verified)for(const field of ['reviewer','protection','workflow'])if(Object.hasOwn(fields,field))dates[field]=checkedAt();
+    const setup={...current.setup,...fields,checkedAt:dates};
     saveOperation(db,{...current,setup,updatedAt:checkedAt()});
   });
   const raise=async error=>{
@@ -65,7 +72,9 @@ export async function runBootstrapSetup({rw,rr,github,reviewer,reviewerLogin,wor
     await rw(db=>{
       const current=readOperation(db,at);
       if(current.setup?.runSeq!==runSeq)return;
-      saveOperation(db,{...current,setup:{...current.setup,lastError:errorText(wrapped)},updatedAt:checkedAt()});
+      const prior=current.setup?.lastError;
+      const precise=/^SETUP_(?:REVIEWER_FAILED|PROTECTION_MISMATCH): /.test(String(prior));
+      saveOperation(db,{...current,setup:{...current.setup,lastError:precise?prior:errorText(wrapped)},updatedAt:checkedAt()});
     });
     throw wrapped;
   };

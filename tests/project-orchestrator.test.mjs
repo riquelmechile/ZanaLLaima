@@ -124,3 +124,7 @@ test('acepta UUID de misión y no cambia el estado anterior',()=>{
   assert.equal(v.milestones[0].running.missionId,uuid);assert.equal(s.milestones[0].running,null);
   assert.ok(Object.isFrozen(v.milestones[0].running));assert.equal(complete(v,uuid).milestones[0].status,'DONE');
 });
+
+test('regresión A3 rojo: no acepta repo como arreglo',()=>{
+  broken(init(),x=>{x.repo=['riquelmechile/ZanaLLaima'];});
+});

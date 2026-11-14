@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {remoteFixture,REVIEWER_TOKEN,REVIEWER_LOGIN,AUTHOR_TOKEN,sha,sleep,readDiff} from './helpers/remote-fixture.mjs';
 import {BOOTSTRAP_TOKEN} from './helpers/fake-github.mjs';
-import {remoteRead,remoteWrite} from '../src/store.mjs';
-import {sessionIsWriter,markSessionWriter,pruneRemote,RETENTION_DAYS} from '../src/remote-state.mjs';
+import {remoteRead,remoteWrite,backupState,restoreBackup} from '../src/store.mjs';
+import {sessionIsWriter,markSessionWriter,pruneRemote,registerSession,RETENTION_DAYS} from '../src/remote-state.mjs';
 import {ticketCode,validateLens,reviewBody} from '../src/remote-review.mjs';
 
 const clean=lens=>({lens,findings:[],evidence:['Read the full diff of src/sum.mjs and its test']});
@@ -351,8 +351,14 @@ test('finalize without ZANA_REVIEWER_LOGIN fails closed and publishes nothing',a
 // Regresión: el monitor revisor conserva la conversación entre tickets.
 const lenses=['risk','readability','reliability','resilience'];
 
-async function finalize(f,ticket,reviewer){
+async function finalize(f,ticket,reviewer,{skipPrRead=false}={}){
   await readDiff(f.call,ticket,reviewer);
+  // Paso 2 real de la skill 4R: leer cuerpo del PR por el downstream.
+  if(!skipPrRead){
+    const body=await f.call('zana_ds_github',{operation:'pull_request_read',
+      arguments:{owner:'o',repo:'r',pullNumber:7,method:'get'}},reviewer);
+    assert.equal(body.error,undefined,body.error);
+  }
   for(const lens of lenses){
     const r=await f.call('zana_review_lens_submit',{ticket,lens,findings:[],evidence:['Leí el diff completo']},reviewer);
     assert.equal(r.error,undefined,r.error);
@@ -387,13 +393,13 @@ test('el monitor revisor puro puede reclamar otro ticket posterior de la misma m
   }finally{await f.cleanup();}
 });
 
-async function reviewerWithNextMission(f){
+async function reviewerWithNextMission(f,{ticket=true,skipPrRead=false}={}){
   const a=await f.authorReady();
   const first=await f.call('zana_review_request',{missionId:a.missionId},a.author);
   assert.equal(first.error,undefined,first.error);
   const reviewer=await f.session();
   assert.equal((await f.call('zana_review_claim',{ticket:first.ticket},reviewer)).state,'CLAIMED');
-  await finalize(f,first.ticket,reviewer);
+  await finalize(f,first.ticket,reviewer,{skipPrRead});
   const notesBatch=await f.call('zana_start_batch',{},a.author);
   assert.equal(notesBatch.error,undefined,notesBatch.error);
   const notes=notesBatch.packets.find(p=>p.unitId==='notes');
@@ -409,8 +415,8 @@ async function reviewerWithNextMission(f){
   const b=await f.authorReady();
   f.api.state.pulls.at(-1).number=8;
   assert.notEqual(b.missionId,a.missionId);
-  const second=await f.call('zana_review_request',{missionId:b.missionId},b.author);
-  assert.equal(second.error,undefined,second.error);
+  const second=ticket?await f.call('zana_review_request',{missionId:b.missionId},b.author):null;
+  if(second)assert.equal(second.error,undefined,second.error);
   return {a,b,reviewer,second};
 }
 
@@ -525,5 +531,114 @@ test('GitHub full access apagado rechaza sin marcar la sesión',async()=>{
     const result=await f.call('zana_github_request',{method:'PUT',path:'/repos/o/r/branches/main/protection'},session);
     assert.match(result.error,/GITHUB_FULL_ACCESS_DISABLED/);
     assert.equal(await remoteRead(db=>sessionIsWriter(db,session.sessionId)),false);
+  }finally{await f.cleanup();}
+});
+
+// 4R #76: pruebas de regresión por dispatch real; sin fabricar actividad o tickets.
+const FULL_ACCESS={ZANA_GITHUB_FULL_ACCESS:'true',ZANA_BOOTSTRAP_GITHUB_TOKEN:BOOTSTRAP_TOKEN};
+const writer=s=>remoteRead(db=>sessionIsWriter(db,s.sessionId));
+const put=(f,branch,s)=>f.call('zana_github_request',{method:'PUT',
+  path:'/repos/o/r/contents/.github/workflows/zana-checks.yml',
+  body:{branch,message:'cambio',content:'YQ=='}},s);
+
+test('4R: index y lecturas downstream no marcan sesiones',async()=>{
+  const f=await remoteFixture();
+  try{
+    await f.authorReady();
+    const s=await f.session();
+    for(const [operation,args] of [['index',{}],['pull_request_read',{owner:'o',repo:'r',pullNumber:7,method:'get'}],
+      ['get_file_contents',{owner:'o',repo:'r',path:'README.md',ref:'main'}]]){
+      const r=await f.call('zana_ds_github',{operation,arguments:args},s);
+      assert.equal(r.error,undefined,r.error);
+      assert.equal(await writer(s),false,operation+' marcó sesión');
+    }
+  }finally{await f.cleanup();}
+});
+
+test('4R: downstream write en otra misión marca y bloquea segundo ticket',async()=>{
+  const f=await remoteFixture();
+  try{
+    const {b,reviewer,second}=await reviewerWithNextMission(f);
+    const r=await f.call('zana_ds_github',{operation:'create_or_update_file',missionId:b.missionId,
+      arguments:{owner:'o',repo:'r',branch:b.branch,path:'docs/prueba.md',content:'prueba',message:'cambio'}},reviewer);
+    assert.equal(await writer(reviewer),true,r.error);
+    assert.match(String((await f.call('zana_review_claim',{ticket:second.ticket},reviewer)).error),/SESSION_PREDATES_TICKET/);
+  }finally{await f.cleanup();}
+});
+
+test('4R: restore sin pérdida de datos conserva marca de escritura en otra misión',async()=>{
+  const f=await remoteFixture({envExtra:FULL_ACCESS});
+  try{
+    const {b,reviewer}=await reviewerWithNextMission(f,{ticket:false,skipPrRead:true});
+    const backup=f.dir+'/previo.sqlite';
+    await backupState(backup);
+    assert.equal((await put(f,b.branch,reviewer)).status,201);
+    assert.equal(await writer(reviewer),true);
+    process.env.ZANA_RESTORE_OFFLINE='1';
+    try{await restoreBackup(backup,undefined,{offline:true});}
+    finally{delete process.env.ZANA_RESTORE_OFFLINE;}
+    assert.equal(await writer(reviewer),true,'restore perdió la marca');
+    await sleep(5);
+    const next=await f.call('zana_review_request',{missionId:b.missionId},b.author);
+    assert.match(String((await f.call('zana_review_claim',{ticket:next.ticket},reviewer)).error),/SESSION_PREDATES_TICKET/);
+  }finally{await f.cleanup();}
+});
+
+test('4R: poda y recreación del id no heredan el reclamo de la sesión antigua',async()=>{
+  const f=await remoteFixture({envExtra:FULL_ACCESS});
+  try{
+    const {b,reviewer}=await reviewerWithNextMission(f,{ticket:false,skipPrRead:true});
+    assert.equal((await put(f,b.branch,reviewer)).status,201);
+    await remoteWrite(db=>pruneRemote(db,Date.now()+31*86_400_000));
+    const renewed=await registerSession(reviewer);
+    await sleep(5);
+    const t=await f.call('zana_review_request',{missionId:b.missionId},b.author);
+    assert.match(String((await f.call('zana_review_claim',{ticket:t.ticket},renewed)).error),/SESSION_PREDATES_TICKET/);
+  }finally{await f.cleanup();}
+});
+
+test('4R: rechazo downstream de revisora deja auditoría REFUSED y no marca',async()=>{
+  const f=await remoteFixture();
+  try{
+    const {author,missionId,branch}=await f.authorReady();
+    const t=await f.call('zana_review_request',{missionId},author);
+    const reviewer=await f.session();
+    assert.equal((await f.call('zana_review_claim',{ticket:t.ticket},reviewer)).state,'CLAIMED');
+    const r=await f.call('zana_ds_github',{operation:'create_or_update_file',missionId,
+      arguments:{owner:'o',repo:'r',branch,path:'test.txt',content:'x',message:'test'}},reviewer);
+    assert.match(String(r.error),/REVIEWER_READ_ONLY/);
+    assert.equal(await writer(reviewer),false);
+    const rows=await remoteRead(db=>db.prepare(
+      "SELECT tool,outcome,category FROM remote_audit WHERE session_id=? AND tool='github.create_or_update_file'").all(reviewer.sessionId));
+    assert.ok(rows.some(x=>x.outcome==='REFUSED'&&x.category==='refused'),JSON.stringify(rows));
+  }finally{await f.cleanup();}
+});
+
+test('4R: los cinco rechazos REVIEWER_READ_ONLY no marcan al monitor',async()=>{
+  const f=await remoteFixture();
+  try{
+    const {author,missionId,packet}=await f.authorReady();
+    const t=await f.call('zana_review_request',{missionId},author);
+    assert.equal(t.error,undefined,t.error);
+    const reviewer=await f.session();
+    assert.equal((await f.call('zana_review_claim',{ticket:t.ticket},reviewer)).state,'CLAIMED');
+    for(const [tool,args] of [
+      ['zana_mission_close',{summary:{done:'Resumen suficiente del trabajo completado',decisions:[],conventions:[],pending:[],keyFiles:[]}}],
+      ['zana_mission_archive',{}],['zana_correction_start',{missionId}],
+      ['zana_session_rebind',{missionId,unitId:'code',token:packet.token,leaseGeneration:packet.leaseGeneration}],
+      ['zana_budget_extend',{missionId,lines:100,reason:'regresión'}]]){
+      const r=await f.call(tool,args,reviewer);
+      assert.match(String(r.error),/REVIEWER_READ_ONLY/,tool+': '+r.error);
+      assert.equal(await writer(reviewer),false,tool+' marcó a la revisora');
+    }
+  }finally{await f.cleanup();}
+});
+
+test('4R: dispatch directo no ejecuta un write sin marcar aunque el esquema falle',async()=>{
+  const f=await remoteFixture();
+  try{
+    const s=await f.session();
+    await f.call('zana_workspace_create',{idea:'Proyecto de automatización para pruebas de regresión',extra:1},s);
+    assert.equal(await writer(s),true);
   }finally{await f.cleanup();}
 });

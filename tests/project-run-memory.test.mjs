@@ -521,3 +521,33 @@ test('4R: simulación de memoria viva después de reclamo, liberación, conversi
     apply(runMemoryEntries(prev,next));assertLive(next);prev=next;
   }
 });
+
+
+test('A4 memoria: espacios Unicode, FEFF y corte exacto de surrogate',()=>{
+  const prev=state();
+  const next=step(prev,milestone('x'.repeat(73)+'😀z',{
+    status:'RUNNING',
+    running:running('m'),
+    objective:'uno\u0085dos\u001Ctres\uFEFFcuatro',
+    acceptance:'cinco\nseis'
+  }));
+  const body=runMemoryEntries(prev,next).save.find(e=>e.kind==='pending').body;
+  assert.match(body,/Objetivo: uno dos trescuatro\./);
+  assert.match(body,/Aceptación: cinco seis\./);
+  const board=runBoard(state([milestone('x'.repeat(73)+'😀z')]));
+  assert.match(board,/^.*x{73}…: PENDING$/m);
+  assert.doesNotMatch(board,/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u);
+});
+
+test('A4 memoria: issue es idempotente cuando prev y next son el mismo estado',()=>{
+  const current=state([milestone('a',{attempts:[a2cAttempt('m','Falló CI')]})]);
+  const out=runMemoryEntries(current,current);
+  assert.equal(out.save.filter(e=>e.kind==='issue').length,0);
+  assert.equal(out.retire.filter(e=>e.kind==='issue').length,0);
+});
+
+test('A4 memoria: createdAt distinto fuerza reconciliación total',()=>{
+  const next=state([milestone('a',{attempts:[a2cAttempt('m')]})]);
+  const prev={...next,createdAt:'2026-11-13T15:00:00.000Z'};
+  assert.deepEqual(runMemoryEntries(prev,next),runMemoryEntries(null,next));
+});

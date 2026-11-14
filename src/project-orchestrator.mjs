@@ -7,14 +7,15 @@ const SHA=/^[0-9a-f]{40}$/, DIGEST=/^[0-9a-f]{64}$/, PROJECT_ID=/^zp_[0-9a-f]{16
 const sha=x=>typeof x==='string'&&SHA.test(x);
 const ID=/^[a-z][a-z0-9-]{0,47}$/;
 const MISSION_ID=/^(?:[a-z][a-z0-9-]{0,47}|[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i;
-const REPO=/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+const REPO=/^[A-Za-z0-9][A-Za-z0-9_-]{0,99}\/(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$/;
 const fail=(code,msg)=>{const e=new Error(code+': '+msg);e.code=code;throw e;};
 const freeze=x=>{if(x&&typeof x==='object'){Object.values(x).forEach(freeze);Object.freeze(x);}return x;};
 const own=(v,allowed,required=allowed)=>v!==null&&typeof v==='object'&&!Array.isArray(v)&&
   [Object.prototype,null].includes(Object.getPrototypeOf(v))&&Object.keys(v).every(k=>allowed.includes(k))&&required.every(k=>Object.hasOwn(v,k));
 const iso=x=>typeof x==='string'&&Number.isFinite(Date.parse(x))&&new Date(x).toISOString()===x;
 const time=x=>{if(!iso(x))fail('INVALID_TIME','Hora ISO UTC inválida');};
-const clean=x=>x.replace(/\p{White_Space}+/gu,' ').replace(/[\p{Cc}\p{Cf}]/gu,'').trim();
+const clean=x=>x.replace(/\p{White_Space}+/gu,' ').replace(/[\p{Cc}\p{Cf}]/gu,'')
+  .replace(/ +/g,' ').trim();
 const validReason=x=>typeof x==='string'&&x===clean(x)&&Array.from(x).length>=8&&Array.from(x).length<=300;
 const guard=x=>{if(!x)fail('INVALID_PROJECT','Estado de proyecto inválido');};
 const reason=x=>{const v=typeof x==='string'?clean(x):'',size=Array.from(v).length;
@@ -35,7 +36,9 @@ const evidenceOk=(e,head,merge)=>{
 };
 const partArgs=(pr,head,merge,at)=>{if(!Number.isSafeInteger(pr)||pr<1)fail('INVALID_PR','Número de PR inválido');
   if(!sha(head)||!sha(merge))fail('INVALID_SHA','SHA inválido');time(at);};
-const bump=(s,now,edit)=>{time(now);const v=structuredClone(s);edit(v);v.revision++;v.updatedAt=now;
+const bump=(s,now,edit)=>{time(now);
+  if(Date.parse(now)<Date.parse(s.updatedAt))fail('INVALID_TIME','La hora no puede retroceder');
+  const v=structuredClone(s);edit(v);v.revision++;v.updatedAt=now;
   if(v.status!=='CANCELLED')v.status=v.milestones.every(m=>m.status==='DONE')?'READY_TO_DELIVER':'ACTIVE';
   validateRun(v);return freeze(v);};
 const change=(s,id,now,edit)=>bump(s,now,v=>{const m=v.milestones.find(x=>x.id===id);edit(m);});
@@ -46,7 +49,7 @@ export function validateRun(s){
   guard(own(s,fields,required));
   guard(s.schema==='zana.project-run.v2'&&typeof s.projectId==='string'&&PROJECT_ID.test(s.projectId)&&
     typeof s.repo==='string'&&REPO.test(s.repo)&&typeof s.base==='string'&&s.base.length>0&&
-    s.base===s.base.trim()&&!/[\r\n]/.test(s.base)&&
+    s.base===s.base.trim()&&!/[\p{White_Space}\p{Cc}\p{Cf}]/u.test(s.base)&&
     typeof s.ownerClient==='string'&&s.ownerClient.length>0&&typeof s.workspaceId==='string'&&s.workspaceId.length>0&&
     typeof s.planDigest==='string'&&DIGEST.test(s.planDigest)&&Number.isSafeInteger(s.revision)&&s.revision>=0&&
     iso(s.createdAt)&&iso(s.updatedAt)&&Date.parse(s.updatedAt)>=Date.parse(s.createdAt)&&
@@ -76,7 +79,8 @@ export function validateRun(s){
     guard((m.status==='RUNNING')===hasRunning&&(m.status==='DONE')===(final&&!hasRunning)&&
       m.parts.slice(0,-1).every(p=>!p.final)&&(!hasRunning||!final));
     if(m.status==='PENDING')guard(!n&&!hasRunning);
-    if(m.status==='PARTIAL')guard(n>0&&!hasRunning&&!final);
+    if(m.status==='PARTIAL')guard(n>0&&n<50&&!hasRunning&&!final);
+    if(m.status==='RUNNING')guard(n<50&&(n<49||m.running.final));
   }
   guard(running<=1&&(s.status!=='CANCELLED'||running===0));
   for(const [id,deps] of dependencyMap)guard(
@@ -103,7 +107,8 @@ export function initializeProjectRun(plan,options){
   if(typeof projectId!=='string'||!PROJECT_ID.test(projectId))fail('INVALID_ID','Project ID inválido');
   if(approvedDigest!==p.digest)fail('APPROVAL_REQUIRED','El digest del plan no está aprobado');
   if(typeof repo!=='string'||!REPO.test(repo))fail('INVALID_REPO','Repositorio inválido');
-  if(typeof base!=='string'||!base.length||base!==base.trim()||/[\r\n]/.test(base)||
+  if(typeof base!=='string'||!base.length||base!==base.trim()||
+    /[\p{White_Space}\p{Cc}\p{Cf}]/u.test(base)||
     [ownerClient,workspaceId].some(x=>typeof x!=='string'||!x.length))
     fail('INVALID_ID','Metadatos del proyecto inválidos');
   time(now);

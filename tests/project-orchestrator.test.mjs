@@ -111,3 +111,11 @@ test('fallo de misión no libera hito si existe actividad, no hay prueba o difie
   await assert.rejects(releaseMilestone(s,{...args,reason:'x'},async()=>true),/INVALID_REASON/);
   assert.equal(s.milestones[0].status,'RUNNING');
 });
+
+// Contrato v2 exigido por el PR A; falla por aserción hasta implementar la API.
+import * as v2 from '../src/project-orchestrator.mjs';
+test('API v2 presente antes de habilitar el flujo',()=>{
+  assert.equal(typeof v2.validateRun,'function');
+  assert.equal(typeof v2.attachPart,'function');
+  assert.equal(typeof v2.completePart,'function');
+});

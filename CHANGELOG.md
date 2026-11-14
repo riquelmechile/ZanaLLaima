@@ -2,7 +2,7 @@
 
 ## [Sin publicar]
 
-- El monitor revisor permanente puede reclamar tickets posteriores **solo si ya reclamó uno** y no tiene marca durable de escritora ni autoría legada. Las tools remotas no-lectura (excepto revisión y GitHub GET) marcan antes de ejecutar, y la marca solo se poda con la sesión. Se conserva `SESSION_PREDATES_TICKET` para sesiones ociosas anteriores al ticket. El servidor no conoce el contenido del chat: el monitor debe dedicarse solo a revisar.
+- El monitor revisor anterior al ticket solo reutiliza una sesión nacida después de la época de marca, con reclamo previo de esa misma encarnación y sin escrituras ni autoría. `zana_ds_github` `index`/`read` no marca; `write` o desconocida sí. Las marcas y la época sobreviven a restore/cuarentena (se conserva la época máxima), se auditan rechazos downstream `REFUSED` y no se marca a una revisora cuyo write se rechaza previamente. Las sesiones previas al despliegue y las de un rollback sin marca requieren recrear el monitor; el servidor no ve conversaciones ni conectores externos.
 
 - `zana_bootstrap_setup` conecta el setup de repositorios nuevos al servidor MCP y al panel: revisora Write, protección `zana/4r`, checks por repositorio y auditoría sin secretos; corrige timestamps, errores y visibilidad de `runSeq`.
 

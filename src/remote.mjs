@@ -34,7 +34,7 @@ import {runBootstrap,reconcileBootstrap} from './bootstrap-execute.mjs';
 import {REVIEW_EVENT,REVIEW_DONE_EVENT,safeWebhookPost,listEvents,subscribeEvent,unsubscribeEvent,queueEvent,flushEvents,eventStatus} from './mcp-events.mjs';
 import {ActorSigner} from './actor-assertion.mjs';
 import {lineBudget,lineLimit,EXTEND_MAX,correctionLimit} from './line-budget.mjs';
-import {nowIso,recordActivity,remoteMission,sessionReviews,sessionWrote,sessionIsMissionAuthor,markSessionWriter,writeAudit,readAudit} from './remote-state.mjs';
+import {nowIso,recordActivity,remoteMission,sessionReviews,sessionWrote,sessionIsMissionAuthor,markSessionWriter,ensureSessionWriterEpoch,writeAudit,readAudit} from './remote-state.mjs';
 import {budgetOf,remainingStarts} from './budget.mjs';
 import {within,DeadlineError} from './deadline.mjs';
 import {clean,redactDeep,envSecrets} from './redact.mjs';
@@ -743,12 +743,15 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
   const REVIEW_TOOLS=new Set(['zana_review_claim','zana_review_diff','zana_review_lens_submit','zana_review_finalize']);
   const guardedWrites=new Set([...REUSED.filter(name=>!readOnlyTool(name)),
     'zana_mission_adopt','zana_checks_start','zana_review_request','zana_merge',
-    'zana_memory_save','zana_memory_resolve','zana_github_request']);
+    'zana_memory_save','zana_memory_resolve','zana_github_request',
+    'zana_mission_close','zana_mission_archive','zana_correction_start','zana_session_rebind','zana_budget_extend']);
   // Toda tool declarada no-lectura (incluidas las reutilizadas y el router downstream)
   // marca ANTES del efecto. Excepciones: las cuatro tools revisoras y GitHub GET.
   // La validación MCP precede a dispatch; las guardas de sesión se comprueban antes.
   const marksWriter=(name,args)=>!readOnlyTool(name)&&!REVIEW_TOOLS.has(name)&&
-    !(name==='zana_github_request'&&args?.method==='GET');
+    !(name==='zana_github_request'&&args?.method==='GET')&&
+    !(name==='zana_ds_github'&&(args?.operation==='index'||CATALOG.tools[args?.operation]?.zana==='read'));
+  let epochReady=false;
   const categoryOf=name=>name==='zana_github_request'?'github_admin':/^zana_review_/.test(name)?'review':name==='zana_merge'?'merge':readOnlyTool(name)?'read':'write';
   // Every tool has a total deadline (ZANA_TOOL_DEADLINE_MS). A late operation
   // may still finish on its own; the caller is told to read state first.
@@ -759,22 +762,23 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     try{
       if((name==='zana_project_approval_panel'||name==='zana_panel_decide')&&extra?.uiAvailable!==true)
         throw new Error('UI_UNAVAILABLE: este cliente no muestra paneles; usa zana_plan_approval_request y la página del operador');
+      // Primera llamada del runtime: inicia una sola época para sesiones legadas.
+      if(!epochReady){await rw(db=>ensureSessionWriterEpoch(db));epochReady=true;}
       if(marksWriter(name,args)){
-        // El endpoint deshabilitado y los rechazos por esquema no ejecutan efectos.
         if(name==='zana_github_request'&&!config.githubFullAccess)
           throw new Error('GITHUB_FULL_ACCESS_DISABLED: habilítalo en el servidor');
-        const schema=NEW_TOOLS[name]?.[2]??schemas[name];
-        if(schema?.safeParse(args??{}).success!==false){
-          const protectedWrite=guardedWrites.has(name)||(name==='zana_ds_github'&&
-            CATALOG.tools[args?.operation]?.zana==='write');
-          const rejected=protectedWrite&&await rr((db,mission)=>{
-            const id=name==='zana_mission_adopt'?args?.missionId:
-              args?.missionId??mission?.id;
-            return Boolean(db&&id&&sessionReviews(db,session.sessionId,id));
-          });
-          if(rejected)throw new Error('REVIEWER_READ_ONLY: esta sesión revisa la misión y no puede escribir en ella');
-          await rw(db=>markSessionWriter(db,session.sessionId));
+        const protectedWrite=guardedWrites.has(name)||(name==='zana_ds_github'&&
+          CATALOG.tools[args?.operation]?.zana==='write');
+        const id=args?.missionId??(await rr((db,mission)=>mission?.id??null));
+        const rejected=protectedWrite&&await rr(db=>Boolean(db&&id&&sessionReviews(db,session.sessionId,id)));
+        if(rejected){
+          const error='REVIEWER_READ_ONLY: esta sesión revisa la misión y no puede escribir en ella';
+          // La negativa previa al gateway conserva su fila de auditoría normal.
+          if(name==='zana_ds_github')await audit({caller:session,tool:'github.'+args.operation,missionId:id,
+            outcome:'REFUSED',args:args?.arguments??{},detail:{class:'write',ms:0,error,policy:null},category:'refused'});
+          throw new Error(error);
         }
+        await rw(db=>markSessionWriter(db,session.sessionId));
       }
       data=await within(Promise.resolve().then(()=>fn(args??{},session,extra)),config.toolDeadlineMs,name);
       if(name==='zana_panel_decide'&&data?.denied===true)outcome='REFUSED';

@@ -5,6 +5,8 @@ import {BOOTSTRAP_TOKEN} from './helpers/fake-github.mjs';
 import {remoteRead,remoteWrite,backupState,restoreBackup} from '../src/store.mjs';
 import {sessionIsWriter,markSessionWriter,pruneRemote,registerSession,RETENTION_DAYS} from '../src/remote-state.mjs';
 import {ticketCode,validateLens,reviewBody} from '../src/remote-review.mjs';
+import {pathToFileURL} from 'node:url';
+import {join} from 'node:path';
 
 const clean=lens=>({lens,findings:[],evidence:['Read the full diff of src/sum.mjs and its test']});
 const finding=(severity,extra={})=>({severity,location:'src/sum.mjs:3',evidence:'returns a-b instead of a+b',origin:'INTRODUCED',...extra});
@@ -485,8 +487,8 @@ test('GitHub GET no marca; la guarda REVIEWER_READ_ONLY tampoco marca',async()=>
     assert.equal((await f.call('zana_github_request',{method:'GET',path:'/repos/o/r'},reader)).status,200);
     assert.equal(await remoteRead(db=>sessionIsWriter(db,reader.sessionId)),false);
     assert.match((await f.call('zana_github_request',{method:'INVALID',path:'/repos/o/r'},reader)).error,/METHOD/);
-    assert.equal(await remoteRead(db=>sessionIsWriter(db,reader.sessionId)),false,
-      'la validación inválida tampoco marca');
+    assert.equal(await remoteRead(db=>sessionIsWriter(db,reader.sessionId)),true,
+      'dispatch directo ya alcanzó una tool de escritura (el SDK valida el esquema antes)');
     const a=await f.authorReady();
     const req=await f.call('zana_review_request',{missionId:a.missionId},a.author);
     const reviewer=await f.session();
@@ -640,5 +642,82 @@ test('4R: dispatch directo no ejecuta un write sin marcar aunque el esquema fall
     const s=await f.session();
     await f.call('zana_workspace_create',{idea:'Proyecto de automatización para pruebas de regresión',extra:1},s);
     assert.equal(await writer(s),true);
+  }finally{await f.cleanup();}
+});
+
+test('4R: sesión legada que escribió mediante runtime main no obtiene excepción al actualizar',async t=>{
+  if(!process.env.ZANA_MAIN){t.skip('requiere ZANA_MAIN para reproducir el runtime anterior');return;}
+  const f=await remoteFixture({envExtra:FULL_ACCESS});
+  let legacy;
+  try{
+    const load=path=>import(pathToFileURL(join(process.env.ZANA_MAIN,path)).href);
+    const {createRemoteRuntime}=await load('src/remote.mjs');
+    const {registerSession:oldRegister}=await load('src/remote-state.mjs');
+    legacy=createRemoteRuntime({env:f.env});
+    const call=async(name,args,s)=>{
+      const r=await legacy.dispatch(name,args,s);
+      return r.isError?{error:r.content[0].text}:r.structuredContent??r;
+    };
+    let id=0;
+    const oldSession=async()=>{
+      const host='zana-chatgpt',clientId='zc_test';
+      await sleep(3);
+      return {...await oldRegister({sessionId:'sess-old-'+(++id)+'-'+Date.now(),host,clientId}),host};
+    };
+    const author=await oldSession();
+    const init=await call('zana_mission_init',{spec:f.spec,github:{repo:'o/r',base:'main'}},author);
+    const batch=await call('zana_start_batch',{},author);
+    f.api.state.push(init.github.branch,sha('a'));
+    f.api.state.green(sha('a'));
+    f.api.state.openPull(init.github.branch);
+    const code=batch.packets[0];
+    await call('zana_complete_unit',{unitId:code.unitId,token:code.token,leaseGeneration:code.leaseGeneration,
+      outcome:{success:true,summary:'código revisado',evidence:['checks verdes']}},author);
+    const first=await call('zana_review_request',{missionId:init.id},author);
+    const reviewer=await oldSession();
+    assert.equal((await call('zana_review_claim',{ticket:first.ticket},reviewer)).state,'CLAIMED');
+    await readDiff(call,first.ticket,reviewer);
+    for(const lens of lenses)await call('zana_review_lens_submit',{ticket:first.ticket,lens,findings:[],evidence:['diff leído']},reviewer);
+    assert.equal((await call('zana_review_finalize',{ticket:first.ticket,execution:'SEQUENTIAL_SAME_CONVERSATION'},reviewer)).state,'FINALIZED');
+    const notes=(await call('zana_start_batch',{},author)).packets[0];
+    await call('zana_complete_unit',{unitId:notes.unitId,token:notes.token,leaseGeneration:notes.leaseGeneration,
+      outcome:{success:true,summary:'notas',evidence:['ok']}},author);
+    assert.equal((await call('zana_merge',{missionId:init.id},author)).state,'MERGED');
+    await call('zana_mission_close',{summary:{done:'Primera revisión finalizada',decisions:[],conventions:[],pending:[],keyFiles:['src/sum.mjs']}},author);
+    await call('zana_mission_archive',{},author);
+    const b=await oldSession();
+    const bi=await call('zana_mission_init',{spec:f.spec,github:{repo:'o/r',base:'main'}},b);
+    const bb=await call('zana_start_batch',{},b);
+    f.api.state.push(bi.github.branch,sha('a'));f.api.state.green(sha('a'));
+    f.api.state.openPull(bi.github.branch);f.api.state.pulls.at(-1).number=8;
+    const bc=bb.packets[0];
+    await call('zana_complete_unit',{unitId:bc.unitId,token:bc.token,leaseGeneration:bc.leaseGeneration,
+      outcome:{success:true,summary:'código B',evidence:['checks verdes']}},b);
+    const w=await call('zana_github_request',{method:'PUT',
+      path:'/repos/o/r/contents/.github/workflows/zana-checks.yml',
+      body:{branch:bi.github.branch,message:'cambio B',content:'YQ=='}},reviewer);
+    assert.equal(w.status,201,w.error);
+    // Primer dispatch con el runtime nuevo sobre la misma base.
+    const next=await f.call('zana_review_request',{missionId:bi.id},b);
+    assert.equal(next.error,undefined,next.error);
+    assert.match(String((await f.call('zana_review_claim',{ticket:next.ticket},reviewer)).error),/SESSION_PREDATES_TICKET/);
+  }finally{await legacy?.close();await f.cleanup();}
+});
+
+
+test('4R: restore conserva la época mayor aunque el respaldo sea anterior',async()=>{
+  const f=await remoteFixture();
+  try{
+    await f.authorReady();
+    const backup=f.dir+'/epoch-antigua.sqlite';
+    await backupState(backup);
+    const newer=new Date(Date.now()+60_000).toISOString();
+    await remoteWrite(db=>db.prepare(
+      "UPDATE metadata SET value=? WHERE key='zana:session-writer-epoch'").run(newer));
+    process.env.ZANA_RESTORE_OFFLINE='1';
+    try{await restoreBackup(backup,undefined,{offline:true});}
+    finally{delete process.env.ZANA_RESTORE_OFFLINE;}
+    assert.equal(await remoteRead(db=>db.prepare(
+      "SELECT value FROM metadata WHERE key='zana:session-writer-epoch'").get()?.value),newer);
   }finally{await f.cleanup();}
 });

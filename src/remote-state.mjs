@@ -21,7 +21,11 @@ export async function registerSession({sessionId,host,clientId},file){
   if(!SESSION.test(String(sessionId)))throw new Error('Invalid session id');
   return remoteWrite(db=>{
     const old=db.prepare('SELECT * FROM remote_sessions WHERE session_id=?').get(sessionId);
-    const at=nowIso();
+    const epoch=ensureSessionWriterEpoch(db);
+    const current=nowIso();
+    // La sesión nueva debe ser estrictamente posterior a la época, incluso
+    // cuando ambos timestamps caen en el mismo milisegundo.
+    const at=current<=epoch?new Date(Date.parse(epoch)+1).toISOString():current;
     if(old){
       if(old.host!==host||old.client_id!==clientId)throw new Error('Session belongs to another identity');
       db.prepare('UPDATE remote_sessions SET last_seen_at=? WHERE session_id=?').run(at,sessionId);
@@ -51,6 +55,11 @@ export const missionClients=(db,missionId)=>db.prepare(
 export const sessionWrote=(db,sessionId,missionId)=>Boolean(db?.prepare(
   'SELECT 1 FROM remote_activity WHERE session_id=? AND mission_id=? LIMIT 1').get(sessionId,missionId));
 // Marca monotónica en la misma base: no depende de la retención de actividad.
+export const WRITER_EPOCH_KEY='zana:session-writer-epoch';
+export function ensureSessionWriterEpoch(db){
+  db.prepare('INSERT OR IGNORE INTO metadata(key,value) VALUES(?,?)').run(WRITER_EPOCH_KEY,nowIso());
+  return db.prepare('SELECT value FROM metadata WHERE key=?').get(WRITER_EPOCH_KEY).value;
+}
 const writerKey=sessionId=>'zana:session-writer:'+sessionId;
 export function markSessionWriter(db,sessionId){
   db.prepare('INSERT OR IGNORE INTO metadata(key,value) VALUES(?,?)').run(writerKey(sessionId),nowIso());
@@ -60,8 +69,12 @@ export const sessionIsWriter=(db,sessionId)=>Boolean(db?.prepare(
 // Un monitor revisor puede vivir durante muchos tickets, pero pierde esta
 // excepción al escribir/adoptar en CUALQUIER misión o al haber sido autor.
 export const sessionIsPureReviewer=(db,sessionId)=>Boolean(db&&
+  sessionRow(db,sessionId)&&
+  db.prepare('SELECT value FROM metadata WHERE key=?').get(WRITER_EPOCH_KEY)?.value<
+    sessionRow(db,sessionId).created_at&&
   !sessionIsWriter(db,sessionId)&&
-  db.prepare('SELECT 1 FROM review_tickets WHERE reviewer_session=? LIMIT 1').get(sessionId)&&
+  db.prepare('SELECT 1 FROM review_tickets WHERE reviewer_session=? AND claimed_at>=? LIMIT 1')
+    .get(sessionId,sessionRow(db,sessionId).created_at)&&
   !db.prepare('SELECT 1 FROM remote_activity WHERE session_id=? LIMIT 1').get(sessionId)&&
   !db.prepare('SELECT 1 FROM remote_missions WHERE created_session=? LIMIT 1').get(sessionId)&&
   !db.prepare('SELECT 1 FROM review_tickets WHERE author_session=? LIMIT 1').get(sessionId));

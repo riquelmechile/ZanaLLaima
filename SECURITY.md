@@ -47,6 +47,7 @@ Lo mismo vale para el cuerpo del PR que la revisora lee y pasa a los lentes (`za
 ## Límites conocidos
 
 - La revisión 4R la hace el mismo modelo en otra conversación y la publica la cuenta revisora; no es una auditoría de seguridad independiente. CI verde tampoco lo es.
+- La excepción para una revisora anterior al ticket exige un reclamo previo de la misma encarnación, creación posterior a la época de marca y ninguna marca ni autoría. Las lecturas por `zana_ds_github` no marcan; las escrituras sí, salvo un rechazo previo de la revisora. La marca se une en restore/cuarentena; el servidor no observa texto pegado ni conectores externos. Tras desplegar o volver de un rollback sin marca, recrea el monitor.
 - La separación entre la conversación autora y la revisora se apoya en el id de conversación que manda ChatGPT (`_meta["openai/session"]`). Un cliente que no lo mande cuenta cada conexión como sesión nueva; ver `docs/solo-rdd.md`.
 - El cerco de merge entre procesos no está hecho: es un riesgo aceptado mientras corra un solo proceso; ver `docs/solo-rdd.md`.
 - El modo stdio local queda congelado: su código sigue probado pero no se endurece más. No lo expongas a la red.

@@ -1,6 +1,6 @@
 # Instalación del modo remoto, paso a paso
 
-Esta guía deja ZanaLLaima funcionando como conector de la app de ChatGPT, desde cero. **La hace el operador**, o sea la persona dueña del servidor y de las cuentas. Ningún agente despliega, crea tokens ni edita el archivo de entorno.
+Esta guía deja ZanaLLaima funcionando como conector de la app de ChatGPT, desde cero. **La hace el operador**, o sea la persona dueña del servidor y de las cuentas. Ningún agente despliega, crea tokens ni edita el archivo de entorno. Si se revierte a una versión sin marca de escritora y después se redespliega esta, recrea el monitor revisor: durante el rollback hubo sesiones que pudieron escribir sin marca, aunque la época persistiera.
 
 > **Ningún valor real va en este repo.** Tu dominio, tus cuentas de GitHub, tus tokens y la clave del operador viven solo en el archivo de entorno del servidor (`zanallaima.env`, fuera del repo, `chmod 600`). En esta guía se usan marcadores como `<tu-dominio>` o `<cuenta-revisora>`.
 

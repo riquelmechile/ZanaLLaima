@@ -359,22 +359,29 @@ test('A4-R2: clean es idempotente en todos los flujos de motivos',()=>{
   const controls=['\u200B','\u200E','\uFEFF','\u0007','\u00AD','\u200D'];
   controls.forEach((control,i)=>{
     const raw='Falló CI '+control+' en el paso tres',expected='Falló CI en el paso tres';
-    const released=assert.doesNotThrow(()=>{
+    let released;
+    assert.doesNotThrow(()=>{
       const live=take(init(),'discovery','clean-release-'+i);
-      return release(live,'clean-release-'+i,{reason:raw});
+      released=release(live,'clean-release-'+i,{reason:raw});
     });
     assert.equal(released.milestones[0].attempts[0].reason,expected);
-    const outside=assert.doesNotThrow(()=>api.recordOutsidePlan(init(),{
-      missionId:'clean-outside-'+i,reason:raw,now
-    }));
+    let outside;
+    assert.doesNotThrow(()=>{
+      outside=api.recordOutsidePlan(init(),{
+        missionId:'clean-outside-'+i,reason:raw,now
+      });
+    });
     assert.equal(outside.outsidePlan[0].reason,expected);
     const second=api.recordOutsidePlan(init(),{
       missionId:'clean-idempotent-'+i,reason:outside.outsidePlan[0].reason,now
     });
     assert.equal(second.outsidePlan[0].reason,outside.outsidePlan[0].reason);
-    const cancelled=assert.doesNotThrow(()=>api.cancelProjectRun(
-      take(init(),'discovery','clean-cancel-'+i),{reason:raw,now}
-    ));
+    let cancelled;
+    assert.doesNotThrow(()=>{
+      cancelled=api.cancelProjectRun(
+        take(init(),'discovery','clean-cancel-'+i),{reason:raw,now}
+      );
+    });
     assert.equal(cancelled.reason,expected);
   });
 });

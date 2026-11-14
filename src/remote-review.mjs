@@ -7,7 +7,7 @@
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {canonicalJson} from './actor-assertion.mjs';
 import {missionPull} from './github-delivery.mjs';
-import {recordActivity,sessionRow,sessionWrote,sessionIsPureReviewer,nowIso,writeAudit,missionClients,remoteMission} from './remote-state.mjs';
+import {recordActivity,sessionRow,sessionWrote,sessionIsWriter,sessionIsPureReviewer,nowIso,writeAudit,missionClients,remoteMission} from './remote-state.mjs';
 import {UNTESTED_REASON} from './checks.mjs';
 import {budgetOf} from './budget.mjs';
 import {redactText,envSecrets} from './redact.mjs';
@@ -383,6 +383,8 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
           return {error:['SAME_CLIENT','ZANA_DISTINCT_REVIEWER_CLIENT requires another registered OAuth client than any client that acted on the mission']};
         if(sessionWrote(db,session.sessionId,t.mission_id))
           return {error:['SESSION_WROTE','this session wrote in mission '+t.mission_id]};
+        if(sessionIsWriter(db,session.sessionId))
+          return {error:['SESSION_WROTE_ELSEWHERE','esta sesión escribió con ZanaLLaima; abre una conversación nueva para revisar']};
         const me=sessionRow(db,session.sessionId);
         if(!me)return {error:['SESSION_UNKNOWN','session not registered']};
         // El monitor permanente reutiliza conversación: si NUNCA escribió ni

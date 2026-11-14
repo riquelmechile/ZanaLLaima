@@ -235,7 +235,7 @@ Cada `remote-*` exige solo la DB que usa, con ruta absoluta y ya existente, así
   - Una revisora a medio camino no puede seguir con la sesión nueva (`NOT_REVIEWER`). El ticket queda para el TTL del claim o para `remote-ticket-abandon`, y el autor pide uno nuevo.
 - **Plazos:** cada tool tiene un tope total de `ZANA_TOOL_DEADLINE_MS` (45 s por defecto). La REST de GitHub tiene un circuit breaker compartido: 5 fallos seguidos lo abren 30 s.
 - **Merge del operador:** `node src/cli.mjs remote-merge <missionId>`, con las mismas condiciones que `zana_merge`.
-- **Respaldo:** la DB de misiones se respalda y restaura igual que en stdio ([sqlite-storage.md](sqlite-storage.md)). El ledger OAuth (`ZANA_OAUTH_DB`) es un archivo aparte: respáldalo junto a la DB, porque un restore de misiones no lo toca.
+- **Respaldo:** la DB de misiones se respalda y restaura igual que en stdio ([sqlite-storage.md](sqlite-storage.md)). El ledger OAuth (`ZANA_OAUTH_DB`) es un archivo aparte: respáldalo junto a la DB, porque un restore de misiones no lo toca. **Después de cualquier restore o adopción de cuarentena, recrea el monitor revisor**: avanza la época de marcas; `zana_session_status` informa la elegibilidad y su motivo. `zana_ds_github` marca `write`, `deny` y operaciones desconocidas, no `read` ni `index`.
 - **Actualizar:** `git fetch && git checkout <SHA nuevo revisado>`, `npm ci --ignore-scripts --no-audit --no-fund`, `systemctl --user restart zanallaima`. Respalda la DB antes de subir de versión.
 - **Rollback:** `git checkout <SHA anterior>`, `npm ci` y reinicio. La DB v7 no se puede abrir con una versión que solo entiende v6.
 

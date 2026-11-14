@@ -25,7 +25,7 @@ export async function registerSession({sessionId,host,clientId},file){
     const current=nowIso();
     // La sesión nueva debe ser estrictamente posterior a la época, incluso
     // cuando ambos timestamps caen en el mismo milisegundo.
-    const at=current<=epoch?new Date(Date.parse(epoch)+1).toISOString():current;
+    const at=current===epoch?new Date(Date.parse(epoch)+1).toISOString():current;
     if(old){
       if(old.host!==host||old.client_id!==clientId)throw new Error('Session belongs to another identity');
       db.prepare('UPDATE remote_sessions SET last_seen_at=? WHERE session_id=?').run(at,sessionId);
@@ -68,16 +68,21 @@ export const sessionIsWriter=(db,sessionId)=>Boolean(db?.prepare(
   'SELECT 1 FROM metadata WHERE key=?').get(writerKey(sessionId)));
 // Un monitor revisor puede vivir durante muchos tickets, pero pierde esta
 // excepción al escribir/adoptar en CUALQUIER misión o al haber sido autor.
-export const sessionIsPureReviewer=(db,sessionId)=>Boolean(db&&
-  sessionRow(db,sessionId)&&
-  db.prepare('SELECT value FROM metadata WHERE key=?').get(WRITER_EPOCH_KEY)?.value<
-    sessionRow(db,sessionId).created_at&&
-  !sessionIsWriter(db,sessionId)&&
-  db.prepare('SELECT 1 FROM review_tickets WHERE reviewer_session=? AND claimed_at>=? LIMIT 1')
-    .get(sessionId,sessionRow(db,sessionId).created_at)&&
-  !db.prepare('SELECT 1 FROM remote_activity WHERE session_id=? LIMIT 1').get(sessionId)&&
-  !db.prepare('SELECT 1 FROM remote_missions WHERE created_session=? LIMIT 1').get(sessionId)&&
-  !db.prepare('SELECT 1 FROM review_tickets WHERE author_session=? LIMIT 1').get(sessionId));
+// La razón permite diagnosticar al monitor sin mutar la sesión.
+export function reviewerMonitorStatus(db,sessionId){
+  const row=sessionRow(db,sessionId),writerMarked=sessionIsWriter(db,sessionId);
+  const reason=writerMarked?'WRITER':
+    !row||!(db.prepare('SELECT value FROM metadata WHERE key=?').get(WRITER_EPOCH_KEY)?.value<row.created_at)
+      ?'BEFORE_EPOCH':
+    !db.prepare('SELECT 1 FROM review_tickets WHERE reviewer_session=? AND claimed_at>=? LIMIT 1')
+      .get(sessionId,row.created_at)?'NO_PRIOR_CLAIM':
+    db.prepare('SELECT 1 FROM remote_activity WHERE session_id=? LIMIT 1').get(sessionId)||
+    db.prepare('SELECT 1 FROM remote_missions WHERE created_session=? LIMIT 1').get(sessionId)||
+    db.prepare('SELECT 1 FROM review_tickets WHERE author_session=? LIMIT 1').get(sessionId)
+      ?'LEGACY_ROWS':null;
+  return {writerMarked,reviewerMonitorEligible:reason===null,...(reason?{reviewerMonitorReason:reason}:{})};
+}
+export const sessionIsPureReviewer=(db,sessionId)=>reviewerMonitorStatus(db,sessionId).reviewerMonitorEligible;
 // Author rule for zana_merge: the session that created the mission, or one
 // that held (started or rebound) one of its units.
 export const sessionIsMissionAuthor=(db,sessionId,missionId)=>Boolean(db&&(

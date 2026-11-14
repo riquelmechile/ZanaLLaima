@@ -2,6 +2,8 @@
 
 ## [Sin publicar]
 
+- Seguimiento 4R #77: restore y adopción invalidan la excepción del monitor (época monótona), `SESSION_WROTE_ELSEWHERE` bloquea toda sesión escritora, diagnóstico de sesión, clasificación correcta de auditoría y regresiones sin skips.
+
 - El monitor revisor anterior al ticket solo reutiliza una sesión nacida después de la época de marca, con reclamo previo de esa misma encarnación y sin escrituras ni autoría. `zana_ds_github` `index`/`read` no marca; `write` o desconocida sí. Las marcas y la época sobreviven a restore/cuarentena (se conserva la época máxima), se auditan rechazos downstream `REFUSED` y no se marca a una revisora cuyo write se rechaza previamente. Las sesiones previas al despliegue y las de un rollback sin marca requieren recrear el monitor; el servidor no ve conversaciones ni conectores externos.
 
 - `zana_bootstrap_setup` conecta el setup de repositorios nuevos al servidor MCP y al panel: revisora Write, protección `zana/4r`, checks por repositorio y auditoría sin secretos; corrige timestamps, errores y visibilidad de `runSeq`.

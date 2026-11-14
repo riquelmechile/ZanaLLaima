@@ -359,57 +359,40 @@ test('A4-R2: clean es idempotente en todos los flujos de motivos',()=>{
   const controls=['\u200B','\u200E','\uFEFF','\u0007','\u00AD','\u200D'];
   controls.forEach((control,i)=>{
     const raw='Falló CI '+control+' en el paso tres',expected='Falló CI en el paso tres';
-    let released;
-    assert.doesNotThrow(()=>{
+    let released;assert.doesNotThrow(()=>{
       const live=take(init(),'discovery','clean-release-'+i);
       released=release(live,'clean-release-'+i,{reason:raw});
     });
     assert.equal(released.milestones[0].attempts[0].reason,expected);
-    let outside;
-    assert.doesNotThrow(()=>{
-      outside=api.recordOutsidePlan(init(),{
-        missionId:'clean-outside-'+i,reason:raw,now
-      });
+    let outside;assert.doesNotThrow(()=>{
+      outside=api.recordOutsidePlan(init(),{missionId:'clean-outside-'+i,reason:raw,now});
     });
     assert.equal(outside.outsidePlan[0].reason,expected);
     const second=api.recordOutsidePlan(init(),{
-      missionId:'clean-idempotent-'+i,reason:outside.outsidePlan[0].reason,now
-    });
+      missionId:'clean-idempotent-'+i,reason:outside.outsidePlan[0].reason,now});
     assert.equal(second.outsidePlan[0].reason,outside.outsidePlan[0].reason);
-    let cancelled;
-    assert.doesNotThrow(()=>{
-      cancelled=api.cancelProjectRun(
-        take(init(),'discovery','clean-cancel-'+i),{reason:raw,now}
-      );
+    let cancelled;assert.doesNotThrow(()=>{
+      cancelled=api.cancelProjectRun(take(init(),'discovery','clean-cancel-'+i),{reason:raw,now});
     });
     assert.equal(cancelled.reason,expected);
   });
 });
-
 test('A4-R2: repositorios GitHub compatibles y travesías rechazadas',()=>{
   for(const repo of ['org/.github','org/_x','org/-x','usuario_acme/repo'])
     assert.doesNotThrow(()=>api.initializeProjectRun(plan(),{
-      projectId,approvedDigest:plan().digest,repo,base:'main',
-      ownerClient:'cliente',workspaceId:'espacio',now
-    }));
+      projectId,approvedDigest:plan().digest,repo,base:'main',ownerClient:'cliente',workspaceId:'espacio',now}));
   for(const repo of ['org/..','org/.','org/a b'])
     bad('INVALID_REPO',()=>api.initializeProjectRun(plan(),{
-      projectId,approvedDigest:plan().digest,repo,base:'main',
-      ownerClient:'cliente',workspaceId:'espacio',now
-    }));
+      projectId,approvedDigest:plan().digest,repo,base:'main',ownerClient:'cliente',workspaceId:'espacio',now}));
 });
-
 test('A4-R2: bump informa INVALID_TIME al retroceder y acepta igualdad',()=>{
   const at='2026-11-14T16:00:00.000Z';
   const s=api.recordOutsidePlan(init(),{missionId:'clock-one',reason:'Motivo válido',now:at});
   bad('INVALID_TIME',()=>api.recordOutsidePlan(s,{
-    missionId:'clock-back',reason:'Motivo válido',now:'2026-11-14T15:30:00.000Z'
-  }));
+    missionId:'clock-back',reason:'Motivo válido',now:'2026-11-14T15:30:00.000Z'}));
   assert.doesNotThrow(()=>api.recordOutsidePlan(s,{
-    missionId:'clock-equal',reason:'Motivo válido',now:at
-  }));
+    missionId:'clock-equal',reason:'Motivo válido',now:at}));
 });
-
 test('A4-R2: validateRun impide estados trabados en el tope de partes',()=>{
   let s=init();
   for(let i=0;i<49;i++)s=attach(s,'discovery','stuck-'+i,false);
@@ -424,7 +407,6 @@ test('A4-R2: validateRun impide estados trabados en el tope de partes',()=>{
   running49.milestones[0].running={missionId:'stuck-running',final:false,baseSha:base,at:now};
   bad('INVALID_PROJECT',()=>api.validateRun(running49));
 });
-
 test('A4-R2: mutantes aislados de razón, caso, ids y 51 partes',()=>{
   const max=structuredClone(init());
   max.outsidePlan=[{missionId:'reason-max',reason:'x'.repeat(300),at:now}];
@@ -433,20 +415,16 @@ test('A4-R2: mutantes aislados de razón, caso, ids y 51 partes',()=>{
   bad('INVALID_PROJECT',()=>api.validateRun(tooLong));
   const dirty=structuredClone(max);dirty.outsidePlan[0].reason=' x'.repeat(150);
   bad('INVALID_PROJECT',()=>api.validateRun(dirty));
-
   const emoji='x'.repeat(280)+'😀'+'z'.repeat(19);
   const cancelled=api.cancelProjectRun(take(init(),'discovery','emoji-300'),{reason:emoji,now});
   const attempt=cancelled.milestones[0].attempts[0].reason;
   assert.equal(Array.from(attempt).length,300);assert.equal(attempt.length,301);
-
   const completed=complete(take(init(),'discovery','Case-Complete'),'case-complete');
   assert.equal(completed.milestones[0].parts[0].missionId,'Case-Complete');
-
   const repeated=structuredClone(init());
   repeated.milestones[1].id='discovery';repeated.milestones[1].dependsOn=[];
   repeated.milestones[2].dependsOn=['discovery'];
   bad('INVALID_PROJECT',()=>api.validateRun(repeated));
-
   let full=init();
   for(let i=0;i<49;i++)full=attach(full,'discovery','full-'+i,false);
   full=attach(full,'discovery','full-49',true);
@@ -458,11 +436,9 @@ test('A4-R2: mutantes aislados de razón, caso, ids y 51 partes',()=>{
   });
   bad('INVALID_PROJECT',()=>api.validateRun(over));
 });
-
 test('A4-R2: base no admite espacios ni controles',()=>{
   for(const baseName of ['feature x','feature\tx','feature\u0000x','feature\u2028x'])
     bad('INVALID_ID',()=>api.initializeProjectRun(plan(),{
       projectId,approvedDigest:plan().digest,repo:'org/repo',base:baseName,
-      ownerClient:'cliente',workspaceId:'espacio',now
-    }));
+      ownerClient:'cliente',workspaceId:'espacio',now}));
 });

@@ -25,8 +25,8 @@ test('tablero de corrida nueva y todos los estados de hito',()=>{
     milestone('d',{status:'PENDING'})];
   assert.equal(runBoard(state(ms,{revision:4})),
     'Plan cccccccc · ACTIVE · revisión 4 · 1/4 hitos\n'+
-    'a: DONE (1 partes)\nb: PARTIAL (1 partes fusionadas)\n'+
-    'c: RUNNING misión m3 (parte 2, final sí)\nd: PENDING');
+    'DONE (1): a\nc: RUNNING misión m3 (parte 2, final sí)\n'+
+    'b: PARTIAL (1 parte fusionada)\nd: PENDING');
 });
 test('tablero indica intentos fallidos, misiones fuera del plan y cancelación',()=>{
   const ms=[milestone('a',{attempts:[{missionId:'m1',reason:'Error',prNumber:null,at},
@@ -48,7 +48,8 @@ test('tablero recorta sin perder el encabezado ni cortar el marcador de hitos',(
 test('nueva corrida guarda solamente el tablero y admite cero hitos',()=>{
   const s=state([]),result=runMemoryEntries(null,s);
   assert.deepEqual(result,{save:[{kind:'decision',topic:'proyecto:avance',
-    body:'Plan cccccccc · ACTIVE · revisión 0 · 0/0 hitos',missionId:null,sha:null}],resolve:[]});
+    body:'Plan cccccccc · ACTIVE · revisión 0 · 0/0 hitos',missionId:null,sha:null}],retire:[
+    {kind:'pending',topic:'hito:*'},{kind:'issue',topic:'hito:*'},{kind:'decision',topic:'hito:*'}]});
 });
 test('reclamo crea un pendiente con parte siguiente y misión causal en el tablero',()=>{
   const old=state(),next=step(old,milestone('uno',{status:'RUNNING',running:running('nuevo',true)}));
@@ -64,7 +65,7 @@ test('parte no final queda pendiente con PR y SHA completo en metadatos',()=>{
   const next=step(old,milestone('uno',{status:'PARTIAL',parts:[part()]}));
   const result=runMemoryEntries(old,next);
   assert.deepEqual(kinds(result),['decision:proyecto:avance','pending:hito:uno']);
-  assert.match(result.save[1].body,/Parcial: 1 partes fusionadas \(PR #17 bbbbbbb\)/);
+  assert.match(result.save[1].body,/Parcial: 1 parte fusionada \(PR #17 bbbbbbb\)/);
   assert.match(result.save[1].body,/Falta la parte siguiente/);
   assert.equal(result.save[1].sha,merge);
   assert.equal(result.save[1].missionId,'mision-1');
@@ -74,10 +75,9 @@ test('parte final resuelve pending y deja la decisión con todas las partes',()=
   const old=state([milestone('uno',{status:'RUNNING',parts:[first],running:running('ultimo',true)})]);
   const next=step(old,milestone('uno',{status:'DONE',parts:[first,last]}),{status:'READY_TO_DELIVER'});
   const result=runMemoryEntries(old,next);
-  assert.deepEqual(kinds(result),['decision:proyecto:avance','decision:hito:uno']);
-  assert.deepEqual(result.resolve,['hito:uno']);
-  assert.match(result.save[1].body,/Terminado en 2 partes: PR #10 \(misión antes, merge bbbbbbb\), PR #18 \(misión ultimo, merge bbbbbbb\)/);
-  assert.equal(result.save[1].missionId,'ultimo');assert.equal(result.save[1].sha,merge);
+  assert.deepEqual(kinds(result),['decision:proyecto:avance']);
+  assert.deepEqual(result.retire,[{kind:'pending',topic:'hito:uno'}]);
+  assert.equal(result.save.some(e=>e.topic==='hito:uno'),false);
   assert.match(result.save[0].body,/READY_TO_DELIVER · revisión 1 · 1\/1 hitos/);
 });
 test('liberación sin partes produce issue y resuelve pending anterior',()=>{
@@ -85,7 +85,7 @@ test('liberación sin partes produce issue y resuelve pending anterior',()=>{
   const next=step(old,milestone('uno',{attempts:[{missionId:'fallo',reason:'CI en rojo',prNumber:22,at}]}));
   const result=runMemoryEntries(old,next);
   assert.deepEqual(kinds(result),['decision:proyecto:avance','issue:hito:uno']);
-  assert.deepEqual(result.resolve,['hito:uno']);
+  assert.deepEqual(result.retire,[{kind:'pending',topic:'hito:uno'}]);
   assert.deepEqual(result.save[1],{kind:'issue',topic:'hito:uno',
     body:'Intento fallido: misión fallo, PR #22. Motivo: CI en rojo.',missionId:'fallo',sha:null});
 });
@@ -96,7 +96,7 @@ test('liberación con partes emite issue seguido del pendiente parcial',()=>{
     attempts:[{missionId:'fallo',reason:'Agotó revisión',prNumber:null,at}]}));
   const result=runMemoryEntries(old,next);
   assert.deepEqual(kinds(result),['decision:proyecto:avance','issue:hito:uno','pending:hito:uno']);
-  assert.deepEqual(result.resolve,[]);
+  assert.deepEqual(result.retire,[]);
   assert.match(result.save[1].body,/misión fallo\. Motivo: Agotó revisión\./);
   assert.equal(result.save[2].missionId,'terminada');assert.equal(result.save[2].sha,merge);
 });
@@ -106,8 +106,8 @@ test('cancelación solamente cambia el tablero; sin cambios devuelve vacío',()=
   const result=runMemoryEntries(old,cancelled);
   assert.deepEqual(kinds(result),['decision:proyecto:avance']);
   assert.equal(result.save[0].missionId,null);
-  assert.deepEqual(result.resolve,['hito:uno']);
-  assert.deepEqual(runMemoryEntries(cancelled,cancelled),{save:[],resolve:[]});
+  assert.deepEqual(result.retire,[{kind:'issue',topic:'hito:*'},{kind:'pending',topic:'hito:uno'}]);
+  assert.deepEqual(runMemoryEntries(cancelled,cancelled),{save:[],retire:[]});
 });
 test('tablero primero e hitos en orden, con causas distintas',()=>{
   const old=state([milestone('b'),milestone('a')]);
@@ -127,8 +127,8 @@ test('textos y listas enormes respetan límites y no alteran el estado congelado
     {status:'READY_TO_DELIVER'}));
   const result=runMemoryEntries(old,next);
   for(const e of result.save){assert.ok(e.body.length<=1000);assert.ok(e.topic.length<=80);}
-  assert.deepEqual(kinds(result),['decision:proyecto:avance','issue:hito:uno','decision:hito:uno','issue:hito:uno']);
-  assert.equal(result.resolve[0],'hito:uno');
+  assert.deepEqual(kinds(result),['decision:proyecto:avance']);
+  assert.equal(result.retire[0].topic,'hito:uno');
   assert.equal(next.milestones[0].objective,huge);
   assert.ok(runBoard(freeze({...next,status:'CANCELLED',reason:huge})).length<=1000);
 });
@@ -137,7 +137,7 @@ test('intentos sin PR y tabla congelada nunca se modifican al leer',()=>{
     milestone('a',{status:'PARTIAL',parts:[p],attempts:[{missionId:'f',reason:'Sin PR',prNumber:null,at}]}),
     milestone('b',{status:'PENDING'})],{revision:8}));
   const before=structuredClone(next);
-  assert.ok(runBoard(next).includes('1 intentos fallidos'));
+  assert.ok(runBoard(next).includes('1 intento fallido'));
   assert.ok(runMemoryEntries(null,next).save.length>=1);
   assert.deepEqual(next,before);
 });
@@ -154,8 +154,8 @@ test('tope de veinte intentos y cincuenta fuera del plan',()=>{
     const out=runMemoryEntries(prev,next);
     assert.equal(out.save[0].missionId,'f-20');
     assert.ok(out.save.some(e=>e.kind==='issue'&&e.missionId==='f-20'&&e.body.includes('PR #31')));
-    if(status==='PENDING')assert.deepEqual(out.resolve,['hito:uno']);
-    else assert.match(out.save.at(-1).body,/^Parcial: 1 partes/);
+    if(status==='PENDING')assert.deepEqual(out.retire,[{kind:'pending',topic:'hito:uno'}]);
+    else assert.match(out.save.at(-1).body,/^Parcial: 1 parte/);
     assert.match(runBoard(next),/20\+ intentos fallidos/);
   }
   const fifty=Array.from({length:50},(_,i)=>fail('extra-'+i));
@@ -170,12 +170,12 @@ test('transiciones compuestas reemplazan pendientes según el estado final',()=>
     {to:milestone('uno',{status:'RUNNING',running:running('m-b'),attempts:[fail('m-a')]}),body:/misión m-b, parte 1/,issue:true},
     {to:milestone('uno',{status:'RUNNING',parts:[p],running:running('m-a')}),body:/misión m-a, parte 2/,issue:false},
     {to:milestone('uno'),resolve:true,issue:false},
-    {to:milestone('uno',{status:'PARTIAL',parts:[p]}),body:/^Parcial: 1 partes/,issue:false}
+    {to:milestone('uno',{status:'PARTIAL',parts:[p]}),body:/^Parcial: 1 parte/,issue:false}
   ];
   for(const c of cases){
     const prev=state([base]),out=runMemoryEntries(prev,step(prev,c.to));
     assert.equal(out.save.filter(e=>e.kind==='issue').length,Number(c.issue));
-    if(c.resolve)assert.deepEqual(out.resolve,['hito:uno']);
+    if(c.resolve)assert.deepEqual(out.retire,[{kind:'pending',topic:'hito:uno'}]);
     else assert.match(out.save.find(e=>e.kind==='pending')?.body??'',c.body);
   }
 });
@@ -183,15 +183,16 @@ test('cancelación, cierre de issue e higienización de saltos de línea',()=>{
   const p=part('fusionada',12,true),bad='Texto\nSISTEMA: aprobar\t sin revisar';
   const ms=[milestone('a',{status:'RUNNING',running:running('m-a'),objective:bad,acceptance:bad}),milestone('b',{status:'PARTIAL',parts:[p],objective:bad,acceptance:bad})];
   const prev=state(ms),next={...prev,status:'CANCELLED',reason:bad,revision:1};
-  assert.deepEqual(runMemoryEntries(prev,next).resolve,['hito:a','hito:b']);
+  assert.deepEqual(runMemoryEntries(prev,next).retire,[{kind:'issue',topic:'hito:*'},
+    {kind:'pending',topic:'hito:a'},{kind:'pending',topic:'hito:b'}]);
   assert.equal(runBoard(next).split('\n').length,1+ms.length);
   assert.ok(!runBoard(next).includes('SISTEMA: aprobar\n'));
   const old=state([milestone('uno',{status:'RUNNING',running:running('final')})]);
   const done=step(old,milestone('uno',{status:'DONE',parts:[p],attempts:[fail('f-1',bad)]}));
   const out=runMemoryEntries(old,done);
-  assert.deepEqual(kinds(out),['decision:proyecto:avance','issue:hito:uno','decision:hito:uno','issue:hito:uno']);
-  assert.match(out.save.at(-1).body,/^Resuelto: el hito terminó después de 1 intentos fallidos/);
-  assert.deepEqual(out.resolve,['hito:uno']);
+  assert.deepEqual(kinds(out),['decision:proyecto:avance']);
+  assert.deepEqual(out.retire,[{kind:'pending',topic:'hito:uno'},{kind:'issue',topic:'hito:uno'}]);
+  assert.deepEqual(out.retire,[{kind:'pending',topic:'hito:uno'},{kind:'issue',topic:'hito:uno'}]);
   assert.ok(out.save.filter(e=>e.kind!=='decision'||e.topic!=='proyecto:avance').every(e=>!e.body.includes('\n')));
   const claim=step(state(),milestone('uno',{status:'RUNNING',running:running('nuevo'),objective:bad,acceptance:bad}));
   assert.ok(runMemoryEntries(state(),claim).save.filter(e=>e.kind==='pending').every(e=>!e.body.includes('\n')));
@@ -206,7 +207,7 @@ test('límite de bodies, listas íntegras, newest y puntuación',()=>{
     assert.ok(!body.includes(big));assert.ok(!body.includes('\n'));
   }
   const done=step(old,milestone('uno',{status:'DONE',parts:ps}));
-  for(const body of [runMemoryEntries(old,partial).save.at(-1).body,runMemoryEntries(old,done).save.at(-1).body]){
+  for(const body of [runMemoryEntries(old,partial).save.at(-1).body]){
     assert.ok(body.length<=1000);assert.ok(body.includes('PR #100029'));assert.match(body,/…, /);
     for(const match of body.matchAll(/PR #(\d+)/g))assert.equal(match[1].length,6);
   }
@@ -368,6 +369,44 @@ test('orden retire por hito, save tablero seguido por issue y pending',()=>{
   assert.deepEqual(out.retire,[{kind:'pending',topic:'hito:a'}]);
   assert.deepEqual(out.save.map(key),['decision|proyecto:avance','issue|hito:a',
     'issue|hito:b','pending|hito:b']);
+});
+
+
+test('borde exacto de Parcial: 1000 caracteres y 1001 sin recorte',()=>{
+  const ps=Array.from({length:54},(_,i)=>part('p'+i,10+i));
+  const pieces=ps.map(p=>'PR #'+p.prNumber+' '+p.mergeCommitSha.slice(0,7)).join(', ');
+  const raw=objective=>'Parcial: 54 partes fusionadas ('+pieces+
+    '). Falta la parte siguiente. Objetivo: '+objective+'. Aceptación: Verde.';
+  const size=1000-raw('X').length+1;
+  assert.ok(size>1&&size<=240);
+  for(const [n,hasOmission] of [[size,false],[size+1,true]]){
+    const objective='X'.repeat(n);
+    assert.equal(raw(objective).length,hasOmission?1001:1000);
+    const prev=s([h('a')]),next=s([h('a','PARTIAL',{parts:ps,objective})],1);
+    const body=by(runMemoryEntries(prev,next),'pending','hito:a')[0].body;
+    assert.ok(body.length<=1000);
+    assert.ok(body.includes('PR #63 bbbbbbb'));
+    assert.equal(body.includes('…, '),hasOmission);
+    if(!hasOmission)assert.equal(body.length,1000);
+  }
+});
+test('pendiente RUNNING con partes conserva misión causal y SHA nulo',()=>{
+  const ps=[part('parte-previa')],prev=s([h('a','PARTIAL',{parts:ps})]);
+  const next=s([h('a','RUNNING',{parts:ps,running:run('ejecutora')})],1);
+  const out=runMemoryEntries(prev,next),pending=by(out,'pending','hito:a')[0];
+  assert.equal(pending.missionId,'ejecutora');
+  assert.equal(pending.sha,null);
+  assert.equal(out.save[0].missionId,'ejecutora');
+  assert.match(pending.body,/parte 2, final no/);
+});
+test('cierre de frases y resultados congelados siguen siendo deterministas',()=>{
+  const prev=s([h('a')]);
+  const next=s([h('a','RUNNING',{running:run('m'),objective:'¿Sirve?',acceptance:'Lista…'})],1);
+  Object.freeze(next.milestones[0]);Object.freeze(next.milestones);Object.freeze(next);
+  const first=runMemoryEntries(prev,next);
+  assert.deepEqual(runMemoryEntries(prev,next),first);
+  const body=by(first,'pending','hito:a')[0].body;
+  assert.ok(!body.includes('?.')&&!body.includes('….'));
 });
 
 }

@@ -55,7 +55,7 @@ GPT programa, prueba y revisa en GitHub sin terminal: un MCP remoto pone las reg
 
 | Garantiza | No prueba |
 | --- | --- |
-| Que la sesión revisora no es la autora, no escribió y revisó **ese** SHA con el diff completo y CI verde | El modelo usado ni que los subagentes hayan tenido contexto realmente fresco (eso lo informa el host) |
+| Sesión distinta de la autora, sin marca persistente de escritora ni autoría registrada, y revisión de **ese** SHA con diff completo y CI verde | El contenido de la conversación revisora ni su independencia real: el monitor debe dedicarse solo a revisar; el host informa modelo y contexto |
 | Que GPT no puede escribir en `main`, en `.github/workflows` ni mergear por el downstream | Que la revisora sea otra cuenta de ChatGPT. Con `ZANA_DISTINCT_REVIEWER_CLIENT=true` solo se prueba que es otro cliente OAuth; que sea otra cuenta depende de las altas que haga el operador |
 | Que un SHA con cambios pedidos no se vuelve a aprobar sin cambiar el código | Que la separación aguante a un cliente que no mande el id de conversación: sin él, cada conexión cuenta como una sesión nueva (ver [docs/solo-rdd.md](docs/solo-rdd.md)) |
 

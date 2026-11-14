@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {remoteFixture,REVIEWER_TOKEN,REVIEWER_LOGIN,AUTHOR_TOKEN,sha,sleep,readDiff} from './helpers/remote-fixture.mjs';
 import {BOOTSTRAP_TOKEN} from './helpers/fake-github.mjs';
+import {remoteRead,remoteWrite} from '../src/store.mjs';
+import {sessionIsWriter,markSessionWriter,pruneRemote,RETENTION_DAYS} from '../src/remote-state.mjs';
 import {ticketCode,validateLens,reviewBody} from '../src/remote-review.mjs';
 
 const clean=lens=>({lens,findings:[],evidence:['Read the full diff of src/sum.mjs and its test']});
@@ -159,6 +161,8 @@ test('reviewer session is read-only on the mission: no downstream writes, no mis
     const status=await f.call('zana_session_status',{},reviewer);
     assert.equal(status.activeMission.reviewer,true);
     assert.equal(status.activeMission.wrote,false);
+    assert.equal(await remoteRead(db=>sessionIsWriter(db,reviewer.sessionId)),false,
+      'los rechazos de downstream y de misión no marcan escritora');
   }finally{await f.cleanup();}
 });
 
@@ -450,5 +454,76 @@ test('R2: sesión que creó un workspace no reclama ticket anterior a ella',asyn
     const result=await f.call('zana_workspace_create',{idea:'Proyecto de automatización de pruebas con controles seguros'},previous);
     assert.equal(result.error,undefined,result.error);
     assert.match(String((await f.call('zana_review_claim',{ticket:ticket.ticket},previous)).error),/SESSION_PREDATES_TICKET/);
+  }finally{await f.cleanup();}
+});
+
+
+test('adopción real y escritura de proyecto dejan marca durable',async()=>{
+  const f=await remoteFixture();
+  try{
+    const a=await f.authorReady();
+    const other=await f.session();
+    const adopted=await f.call('zana_mission_adopt',{missionId:a.missionId},other);
+    assert.equal(adopted.adopted,true,adopted.error);
+    assert.equal(await remoteRead(db=>sessionIsWriter(db,other.sessionId)),true);
+    const req=await f.call('zana_review_request',{missionId:a.missionId},a.author);
+    assert.equal(req.error,undefined,req.error);
+    assert.match(String((await f.call('zana_review_claim',{ticket:req.ticket},other)).error),/SESSION_WROTE|SESSION_PREDATES_TICKET/);
+  }finally{await f.cleanup();}
+});
+
+test('GitHub GET no marca; la guarda REVIEWER_READ_ONLY tampoco marca',async()=>{
+  const f=await remoteFixture({envExtra:{ZANA_GITHUB_FULL_ACCESS:'true',ZANA_BOOTSTRAP_GITHUB_TOKEN:BOOTSTRAP_TOKEN}});
+  try{
+    const reader=await f.session();
+    assert.equal((await f.call('zana_github_request',{method:'GET',path:'/repos/o/r'},reader)).status,200);
+    assert.equal(await remoteRead(db=>sessionIsWriter(db,reader.sessionId)),false);
+    assert.match((await f.call('zana_github_request',{method:'INVALID',path:'/repos/o/r'},reader)).error,/METHOD/);
+    assert.equal(await remoteRead(db=>sessionIsWriter(db,reader.sessionId)),false,
+      'la validación inválida tampoco marca');
+    const a=await f.authorReady();
+    const req=await f.call('zana_review_request',{missionId:a.missionId},a.author);
+    const reviewer=await f.session();
+    assert.equal((await f.call('zana_review_claim',{ticket:req.ticket},reviewer)).state,'CLAIMED');
+    const denied=await f.call('zana_github_request',{method:'PUT',path:'/repos/o/r/branches/main/protection',
+      body:{required_pull_request_reviews:{required_approving_review_count:1}}},reviewer);
+    assert.match(denied.error,/REVIEWER_READ_ONLY/);
+    assert.equal(await remoteRead(db=>sessionIsWriter(db,reviewer.sessionId)),false);
+  }finally{await f.cleanup();}
+});
+
+test('la marca es idempotente, resiste poda de actividad y desaparece al podar la sesión',async()=>{
+  const f=await remoteFixture();
+  try{
+    const writer=await f.session();
+    assert.equal((await f.call('zana_workspace_create',{idea:'Proyecto de auditoría persistente para revisiones seguras'},writer)).error,undefined);
+    await remoteWrite(db=>{
+      const key='zana:session-writer:'+writer.sessionId;
+      const first=db.prepare('SELECT value FROM metadata WHERE key=?').get(key)?.value;
+      assert.ok(first);
+      markSessionWriter(db,writer.sessionId);
+      assert.equal(db.prepare('SELECT value FROM metadata WHERE key=?').get(key)?.value,first);
+      const older=new Date(Date.now()-(RETENTION_DAYS.activity+2)*86_400_000).toISOString();
+      db.prepare('INSERT INTO remote_activity(session_id,mission_id,kind,tool,created_at) VALUES(?,?,?,?,?)')
+        .run(writer.sessionId,'old-mission','UNIT_START','zana_start_batch',older);
+      pruneRemote(db);
+      assert.equal(db.prepare('SELECT COUNT(*) n FROM remote_activity WHERE session_id=?').get(writer.sessionId).n,0);
+      assert.equal(sessionIsWriter(db,writer.sessionId),true);
+      db.prepare('UPDATE remote_sessions SET last_seen_at=? WHERE session_id=?').run(older,writer.sessionId);
+      pruneRemote(db);
+      assert.equal(db.prepare('SELECT 1 FROM remote_sessions WHERE session_id=?').get(writer.sessionId),undefined);
+      assert.equal(sessionIsWriter(db,writer.sessionId),false);
+    });
+  }finally{await f.cleanup();}
+});
+
+
+test('GitHub full access apagado rechaza sin marcar la sesión',async()=>{
+  const f=await remoteFixture();
+  try{
+    const session=await f.session();
+    const result=await f.call('zana_github_request',{method:'PUT',path:'/repos/o/r/branches/main/protection'},session);
+    assert.match(result.error,/GITHUB_FULL_ACCESS_DISABLED/);
+    assert.equal(await remoteRead(db=>sessionIsWriter(db,session.sessionId)),false);
   }finally{await f.cleanup();}
 });

@@ -2,7 +2,7 @@
 
 ## [Sin publicar]
 
-- El monitor revisor permanente puede reclamar tickets posteriores con la misma sesión **solo si nunca escribió/adoptó en ninguna misión, creó una misión ni pidió un ticket**. Se conserva `SESSION_PREDATES_TICKET` para las sesiones con historial autoral y todas las barreras del reclamo.
+- El monitor revisor permanente puede reclamar tickets posteriores **solo si ya reclamó uno** y no tiene marca durable de escritora ni autoría legada. Las tools remotas no-lectura (excepto revisión y GitHub GET) marcan antes de ejecutar, y la marca solo se poda con la sesión. Se conserva `SESSION_PREDATES_TICKET` para sesiones ociosas anteriores al ticket. El servidor no conoce el contenido del chat: el monitor debe dedicarse solo a revisar.
 
 - `zana_bootstrap_setup` conecta el setup de repositorios nuevos al servidor MCP y al panel: revisora Write, protección `zana/4r`, checks por repositorio y auditoría sin secretos; corrige timestamps, errores y visibilidad de `runSeq`.
 

@@ -55,7 +55,7 @@ GPT codes, tests and reviews on GitHub with no terminal: a remote MCP sets the r
 
 | Guarantees | Does not prove |
 | --- | --- |
-| A different reviewer session reviewed **that** SHA with the full diff and green CI; only a session predating the ticket needs the prior-claim, mark-epoch, no-writer-mark and no-authorship exception | What was discussed in the chat or actual independence: a persistent reviewer must only review; the host reports model and context |
+| A different reviewer session reviewed **that** SHA with the full diff and green CI; a writer-marked session can claim NO ticket (even a newer one); only a session predating the ticket needs the prior-claim, mark-epoch, no-writer-mark and no-authorship exception | What was discussed in the chat or actual independence: a persistent reviewer must only review; the host reports model and context |
 | GPT cannot write to `main` or `.github/workflows`, or merge through the downstream | That the reviewer is a different ChatGPT account. With `ZANA_DISTINCT_REVIEWER_CLIENT=true` it only proves a different OAuth client; a different account depends on which clients the operator registers |
 | A SHA with requested changes cannot be approved again without changing the code | That the separation holds for a client that does not send the conversation id: without it, every connection counts as a new session (see [docs/solo-rdd.md](docs/solo-rdd.md)) |
 

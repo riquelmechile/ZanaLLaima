@@ -14,7 +14,7 @@ import {createMission,startBatch,completeUnit,publicStatus} from './core.mjs';
 import {transact,readState,remoteRead,remoteWrite} from './store.mjs';
 import {GitHubApi,validRefName} from './github-api.mjs';
 import {remoteConfig,repoAllowed} from './remote-config.mjs';
-import {DownstreamGateway} from './downstream.mjs';
+import {DownstreamGateway,classify} from './downstream.mjs';
 import {createGitHubPolicy,CATALOG,liveProblems,missionBranch} from './github-policy.mjs';
 import {createChecks,UNTESTED_REASON} from './checks.mjs';
 import {createReview,correctionPrev,LENSES,SEVERITIES,EXECUTIONS,ORIGINS} from './remote-review.mjs';
@@ -34,7 +34,7 @@ import {runBootstrap,reconcileBootstrap} from './bootstrap-execute.mjs';
 import {REVIEW_EVENT,REVIEW_DONE_EVENT,safeWebhookPost,listEvents,subscribeEvent,unsubscribeEvent,queueEvent,flushEvents,eventStatus} from './mcp-events.mjs';
 import {ActorSigner} from './actor-assertion.mjs';
 import {lineBudget,lineLimit,EXTEND_MAX,correctionLimit} from './line-budget.mjs';
-import {nowIso,recordActivity,remoteMission,sessionReviews,sessionWrote,sessionIsMissionAuthor,markSessionWriter,ensureSessionWriterEpoch,writeAudit,readAudit} from './remote-state.mjs';
+import {nowIso,recordActivity,remoteMission,sessionReviews,sessionWrote,sessionIsMissionAuthor,markSessionWriter,ensureSessionWriterEpoch,sessionIsWriter,reviewerMonitorStatus,writeAudit,readAudit} from './remote-state.mjs';
 import {budgetOf,remainingStarts} from './budget.mjs';
 import {within,DeadlineError} from './deadline.mjs';
 import {clean,redactDeep,envSecrets} from './redact.mjs';
@@ -584,6 +584,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       return {...packet,rebound:true,attempts:'unchanged'};
     },
     zana_session_status:(args,session,extra)=>rr((db,mission)=>({
+      ...reviewerMonitorStatus(db,session.sessionId),
       session:{id:session.sessionId,host:session.host,createdAt:session.createdAt,source:session.source??'transport'},
       client:extra?.client??null,
       activeMission:mission&&db?{id:mission.id,remote:remoteMission(db,mission.id),
@@ -770,12 +771,17 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         const protectedWrite=guardedWrites.has(name)||(name==='zana_ds_github'&&
           CATALOG.tools[args?.operation]?.zana==='write');
         const id=args?.missionId??(await rr((db,mission)=>mission?.id??null));
-        const rejected=protectedWrite&&await rr(db=>Boolean(db&&id&&sessionReviews(db,session.sessionId,id)));
+        const rejected=protectedWrite&&await rr((db,mission)=>Boolean(db&&(
+          (id&&sessionReviews(db,session.sessionId,id))||
+          (mission?.id&&sessionReviews(db,session.sessionId,mission.id)))));
         if(rejected){
           const error='REVIEWER_READ_ONLY: esta sesión revisa la misión y no puede escribir en ella';
           // La negativa previa al gateway conserva su fila de auditoría normal.
           if(name==='zana_ds_github')await audit({caller:session,tool:'github.'+args.operation,missionId:id,
-            outcome:'REFUSED',args:args?.arguments??{},detail:{class:'write',ms:0,error,policy:null},category:'refused'});
+            outcome:'REFUSED',args:args?.arguments??{},
+            detail:{class:gateway.tools().find(t=>t.name===args.operation)?.cls??
+              classify(CATALOG.tools[args.operation]),ms:0,error,policy:null},
+            category:'refused'});
           throw new Error(error);
         }
         await rw(db=>markSessionWriter(db,session.sessionId));

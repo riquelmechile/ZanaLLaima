@@ -895,6 +895,11 @@ function mergeSecurityFacts(db,security){
     .map(x=>parseEpoch(x,currentTime));
   const epoch=parsed.length?new Date(Math.max(...parsed)).toISOString():null;
   if(epoch)db.prepare('INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(RESTORE_EPOCH_KEY,epoch);
+  // Ninguna sesión anterior a un restore/adopción puede presumir que no escribió:
+  // una marca pudo perderse con la base viva. La época nunca retrocede.
+  const writerEpoch=db.prepare("SELECT value FROM metadata WHERE key='zana:session-writer-epoch'").get()?.value;
+  const latest=[now(),writerEpoch,security.remote?.writerEpoch].filter(Boolean).sort().at(-1);
+  db.prepare("INSERT INTO metadata(key,value) VALUES('zana:session-writer-epoch',?) ON CONFLICT(key) DO UPDATE SET value=MAX(value,excluded.value)").run(latest);
 }
 async function checkpointExclusive(path,{allowMissing=false,allowUnreadable=false}={}){
   if(!await exists(path)){

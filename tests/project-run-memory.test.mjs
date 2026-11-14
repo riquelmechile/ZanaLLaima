@@ -226,3 +226,148 @@ test('borde exacto de mil caracteres en tablero y marcador',()=>{
   const board=runBoard(over);assert.ok(board.length<=1000);
   assert.match(board,/… \+1 hitos$/);
 });
+
+{
+
+const at='2026-11-14T12:00:00.000Z', sha='b'.repeat(40);
+const part=(id,n=10)=>({missionId:id,prNumber:n,headSha:sha,mergeCommitSha:sha,final:false,at});
+const fail=(id,reason='Fallo')=>({missionId:id,reason,prNumber:null,at});
+const h=(id,status='PENDING',extra={})=>({id,dependsOn:[],objective:'Objetivo',acceptance:'Verde',
+  status,parts:[],running:null,attempts:[],...extra});
+const run=(id)=>({missionId:id,baseSha:sha,final:false,at});
+const s=(ms,revision=0,status='ACTIVE')=>({schema:'zana.project-run.v2',projectId:'zp_test',
+  repo:'riquelmechile/ZanaLLaima',base:'main',ownerClient:'chatgpt',workspaceId:'w',
+  planDigest:'a'.repeat(64),revision,status,milestones:ms,outsidePlan:[],createdAt:at,updatedAt:at});
+const key=e=>e.kind+'|'+e.topic;
+const apply=(live,result)=>{
+  for(const r of result.retire){
+    for(const k of [...live.keys()])
+      if(k===key(r)||(r.topic.endsWith('*')&&k.startsWith(r.kind+'|'+r.topic.slice(0,-1))))live.delete(k);
+  }
+  for(const e of result.save)live.set(key(e),e);
+};
+const by=(out,kind,topic)=>out.save.filter(e=>e.kind===kind&&e.topic===topic);
+const retired=(out,kind,topic)=>out.retire.some(e=>e.kind===kind&&e.topic===topic);
+
+test('contrato retire y limpieza de corrida nueva, incluido undefined',()=>{
+  for(const prev of [null,undefined]){
+    const out=runMemoryEntries(prev,s([h('a','RUNNING',{running:run('m')})]));
+    assert.deepEqual(out.retire.slice(0,3),[
+      {kind:'pending',topic:'hito:*'},{kind:'issue',topic:'hito:*'},
+      {kind:'decision',topic:'hito:*'}]);
+    assert.equal(Object.hasOwn(out,'resolve'),false);
+    assert.deepEqual(out.save.map(key),['decision|proyecto:avance','pending|hito:a']);
+  }
+});
+test('15 hitos y 11 DONE: la memoria viva solo retiene el pendiente activo',()=>{
+  const ids=Array.from({length:15},(_,i)=>'h'+i);
+  let prev=s(ids.map(id=>h(id)));
+  const live=new Map([['decision|hito:h0',{kind:'decision',topic:'hito:h0',body:'viejo'}],
+    ['issue|hito:h3',{kind:'issue',topic:'hito:h3',body:'viejo'}]]);
+  apply(live,runMemoryEntries(null,prev));
+  for(let i=0;i<11;i++){
+    let ms=prev.milestones.map((m,j)=>j===i?h(m.id,'RUNNING',{running:run('m'+i)}):m);
+    let next=s(ms,prev.revision+1);apply(live,runMemoryEntries(prev,next));prev=next;
+    ms=prev.milestones.map((m,j)=>j===i?h(m.id,'DONE',{parts:[part('m'+i)]}):m);
+    next=s(ms,prev.revision+1);apply(live,runMemoryEntries(prev,next));prev=next;
+  }
+  const next=s(prev.milestones.map((m,j)=>j===11?h(m.id,'RUNNING',{running:run('activo')}):m),prev.revision+1);
+  apply(live,runMemoryEntries(prev,next));
+  const active=[...live.values()].filter(e=>e.topic.startsWith('hito:'));
+  assert.deepEqual(active.map(key),['pending|hito:h11']);
+  assert.equal(active.reduce((n,e)=>n+Buffer.byteLength(e.body),0),Buffer.byteLength(active[0].body));
+  assert.equal(active.some(e=>e.kind==='decision'),false);
+});
+test('DONE en un paso posterior al intento retira issue y pending, sin decisión de hito',()=>{
+  const before=s([h('a','RUNNING',{running:run('m')})]);
+  const failed=s([h('a','PARTIAL',{parts:[part('p')],attempts:[fail('m')]})],1);
+  const out1=runMemoryEntries(before,failed);
+  assert.equal(by(out1,'issue','hito:a').length,1);
+  const done=s([h('a','DONE',{parts:[part('p'),part('final')],attempts:[fail('m')]})],2);
+  const out2=runMemoryEntries(failed,done);
+  assert.ok(retired(out2,'pending','hito:a'));
+  assert.ok(retired(out2,'issue','hito:a'));
+  assert.equal(out2.save.some(e=>e.topic==='hito:a'),false);
+  assert.equal(runMemoryEntries(done,done).save.some(e=>e.topic==='hito:a'),false);
+});
+test('DONE inicial y cancelación retiran entradas sin reemitir al repetir',()=>{
+  const done=h('a','DONE',{parts:[part('p')],attempts:[fail('f')]});
+  const init=runMemoryEntries(null,s([done]));
+  assert.ok(retired(init,'pending','hito:a')&&retired(init,'issue','hito:a'));
+  const old=s([h('a','RUNNING',{running:run('m')}),h('b','PARTIAL',{parts:[part('p')]})]);
+  const cancel=s(old.milestones,1,'CANCELLED');
+  const out=runMemoryEntries(old,cancel);
+  assert.ok(retired(out,'pending','hito:a')&&retired(out,'pending','hito:b'));
+  assert.ok(retired(out,'issue','hito:*'));
+  assert.deepEqual(runMemoryEntries(cancel,cancel),{save:[],retire:[]});
+});
+for(const [name,older,newer,issue,retireIssue] of [
+  ['segundo intento bajo tope',[fail('uno')],[fail('uno'),fail('dos')],true,false],
+  ['intento viejo tras retirar el último',[fail('uno'),fail('dos')],[fail('uno')],false,false],
+  ['intententos vacíos',[fail('uno')],[],false,true]
+]){
+  test(name,()=>{
+    const old=s([h('a','PENDING',{attempts:older})]);
+    const out=runMemoryEntries(old,s([h('a','PENDING',{attempts:newer})],1));
+    assert.equal(by(out,'issue','hito:a').length,Number(issue));
+    assert.equal(retired(out,'issue','hito:a'),retireIssue);
+  });
+}
+test('pending idéntico no vuelve a guardar, causas y metadatos de parte',()=>{
+  const old=s([h('a','RUNNING',{running:run('m'),parts:[part('previa')]})]);
+  const same=s(old.milestones,1);
+  assert.equal(by(runMemoryEntries(old,same),'pending','hito:a').length,0);
+  const next=s([h('a','PARTIAL',{parts:[part('previa'),part('nueva',20)]})],2);
+  const out=runMemoryEntries(old,next),pending=by(out,'pending','hito:a')[0];
+  assert.equal(out.save[0].missionId,'nueva');
+  assert.equal(pending.missionId,'nueva');assert.equal(pending.sha,sha);
+});
+test('orden del tablero DONE resumido, RUNNING antes de PARTIAL antes de PENDING',()=>{
+  const ms=[h('p'),h('d','DONE',{parts:[part('x')]}),h('q','PARTIAL',{parts:[part('z')]}),
+    h('r','RUNNING',{running:run('activo')})];
+  const b=runBoard(s(ms));
+  assert.match(b,/\nDONE \(1\): d\n/);
+  assert.ok(b.indexOf('r: RUNNING')<b.indexOf('q: PARTIAL'));
+  assert.ok(b.indexOf('q: PARTIAL')<b.indexOf('p: PENDING'));
+  assert.ok(!b.includes('d: DONE'));
+});
+test('tablero con 40 hitos protege el RUNNING y recorta la línea DONE',()=>{
+  const ms=Array.from({length:40},(_,i)=>h('nombre-hito-'+String(i).padStart(13,'0'),
+    i<34?'DONE':i===34?'RUNNING':'PENDING',
+    i<34?{parts:[part('m'+i)]}:i===34?{running:run('activa')}:{}));
+  const b=runBoard(s(ms));
+  assert.ok(b.length<=1000);
+  assert.ok(b.includes('DONE (34):')&&b.includes('… +'));
+  assert.ok(b.includes(ms[34].id+': RUNNING'));
+  assert.ok(!b.includes(ms[0].id+': DONE'));
+});
+test('contadores y gramática no dependen de intentos o partes de otros hitos',()=>{
+  for(const [n,want] of [[19,'19'],[20,'20+']]){
+    assert.match(runBoard(s([h('a','PENDING',{attempts:Array.from({length:n},(_,i)=>fail('m'+i))})])),
+      new RegExp(' · '+want.replace('+','\\+')+' intentos fallidos'));
+  }
+  for(const [n,want] of [[49,'49'],[50,'50+']]){
+    const st=s([]);st.outsidePlan=Array.from({length:n},(_,i)=>fail('x'+i));
+    assert.ok(runBoard(st).includes('fuera del plan: '+want));
+  }
+  assert.ok(runBoard(s([h('a','DONE',{parts:[part('p')]})])).includes('DONE (1):'));
+});
+test('clean elimina Cc Cf y normaliza separadores sin dejar marcador extraño',()=>{
+  const bad='Texto\r\n\t\u2028\u0085\u200B\u202E\x1b limpio';
+  const old=s([h('a')]),next=s([h('a','RUNNING',{running:run('m'),objective:bad,acceptance:'\x1b\u200b'})],1);
+  const body=by(runMemoryEntries(old,next),'pending','hito:a')[0].body;
+  assert.ok(!/[\p{Cc}\p{Cf}\u2028]/u.test(body));
+  assert.match(body,/Objetivo: Texto limpio\./);
+  assert.match(body,/Aceptación: —\./);
+});
+test('orden retire por hito, save tablero seguido por issue y pending',()=>{
+  const old=s([h('a','RUNNING',{running:run('a')}),h('b','RUNNING',{running:run('b')})]);
+  const next=s([h('a','PENDING',{attempts:[fail('a')]}),
+    h('b','PARTIAL',{parts:[part('p')],attempts:[fail('b')]})],1);
+  const out=runMemoryEntries(old,next);
+  assert.deepEqual(out.retire,[{kind:'pending',topic:'hito:a'}]);
+  assert.deepEqual(out.save.map(key),['decision|proyecto:avance','issue|hito:a',
+    'issue|hito:b','pending|hito:b']);
+});
+
+}

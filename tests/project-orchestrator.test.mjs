@@ -125,6 +125,7 @@ test('acepta UUID de misión y no cambia el estado anterior',()=>{
   assert.ok(Object.isFrozen(v.milestones[0].running));assert.equal(complete(v,uuid).milestones[0].status,'DONE');
 });
 
-test('regresión A3 rojo: no acepta repo como arreglo',()=>{
-  broken(init(),x=>{x.repo=['riquelmechile/ZanaLLaima'];});
+
+test('rojo H1: arreglos no son SHA aceptables',()=>{
+  bad('INVALID_SHA',()=>take(init(),'discovery','red-array',true,{baseSha:[base]}));
 });

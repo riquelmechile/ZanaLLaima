@@ -1,9 +1,11 @@
 // Proyección pura de estados YA validados por la máquina zana.project-run.v2.
-// prev debe ser null/undefined o un estado de la MISMA corrida; no comparar planes distintos.
+// prev puede ser null/undefined o del mismo plan; otro proyecto/plan se reconcilia como corrida nueva.
 // Aplicar retire ANTES de save en la misma transacción que la transición: un retire perdido no se repara solo.
-// Sin red, DB ni reloj. El servidor interpreta hito:* como prefijo de topics vivos del proyecto.
+// Sin red, DB ni reloj. retire.prefix identifica topics vivos del proyecto por prefijo.
 const MAX=1000;
-const clean=value=>String(value??'').replace(/[\p{Cc}\p{Cf}]/gu,' ').replace(/\s+/g,' ').trim()||'—';
+const clean=value=>String(value??'').replace(/\s+/g,' ').replace(/[\p{Cc}\p{Cf}]/gu,'')
+  .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,'')
+  .replace(/\s+/g,' ').trim()||'—';
 const short=(value,size)=>{
   const s=clean(value);
   if(s.length<=size)return s;
@@ -37,26 +39,34 @@ export function runBoard(state){
     (state.outsidePlan.length>=50?'50+':state.outsidePlan.length);
   let doneLine='';
   if(completed.length){
-    doneLine='DONE ('+completed.length+'):';
+    const ids=completed.map(m=>short(m.id,75)),prefix='DONE ('+completed.length+'):';
     let included=0;
-    for(const m of completed){
-      const candidate=doneLine+(included?', ':' ')+short(m.id,75);
-      const remainder=completed.length-included-1;
-      if(candidate.length+(remainder?' … +'+remainder:'').length>300)break;
-      doneLine=candidate;included++;
+    for(let i=0;i<ids.length;i++){
+      const candidate=prefix+' '+ids.slice(0,i+1).join(', ');
+      const missing=ids.length-i-1;
+      if(candidate.length+(missing?' … +'+missing:'').length>300)break;
+      included=i+1;
     }
-    if(included<completed.length)doneLine+=' … +'+(completed.length-included);
+    doneLine=prefix+(included?' '+ids.slice(0,included).join(', '):'')+
+      (included<ids.length?' … +'+(ids.length-included):'');
   }
   const pending=ms.filter(m=>m.status!=='DONE');
   const lines=['RUNNING','PARTIAL','PENDING'].flatMap(status=>
     pending.filter(m=>m.status===status).map(milestoneLine));
   const kept=[],base=[header,...(doneLine?[doneLine]:[])];
+  const marker=n=>'… +'+n+(n===1?' hito':' hitos');
   for(let i=0;i<lines.length;i++){
-    const remaining=lines.length-i-1,marker=remaining?'\n… +'+remaining+' hitos':'';
-    if([...base,...kept,lines[i]].join('\n').length+marker.length>MAX)break;
+    const remaining=lines.length-i-1,suffix=remaining?'\n'+marker(remaining):'';
+    if([...base,...kept,lines[i]].join('\n').length+suffix.length>MAX)break;
     kept.push(lines[i]);
   }
-  if(kept.length<lines.length)kept.push('… +'+(lines.length-kept.length)+' hitos');
+  if(kept.length<lines.length){
+    let missing=lines.length-kept.length;
+    while(kept.length&&[...base,...kept,marker(missing)].join('\n').length>MAX){
+      kept.pop();missing++;
+    }
+    kept.push(marker(missing));
+  }
   return [...base,...kept].join('\n');
 }
 const descriptions=m=>'Objetivo: '+sentence(short(m.objective,240))+
@@ -79,11 +89,13 @@ const partialBody=m=>{
 };
 const runningBody=m=>'En curso: misión '+short(m.running.missionId,75)+', parte '+(count(m)+1)+
   ', final '+(m.running.final?'sí':'no')+'. '+descriptions(m);
-const issueBody=a=>{
+const attemptText=a=>{
   const prefix='Intento fallido: misión '+short(a.missionId,75)+
     (a.prNumber==null?'':', PR #'+a.prNumber)+'. Motivo: ';
   return prefix+sentence(short(a.reason,MAX-prefix.length-1));
 };
+const issueBody=(m,run)=>run.status==='CANCELLED'||m.status==='DONE'||!m.attempts.length?
+  null:attemptText(m.attempts.at(-1));
 const pendingBody=(m,run)=>run.status==='CANCELLED'?null:
   m.status==='RUNNING'?runningBody(m):m.status==='PARTIAL'?partialBody(m):null;
 const isNewAttempt=(m,old)=>{
@@ -96,11 +108,12 @@ const isNewPart=(m,old)=>{
 };
 
 export function runMemoryEntries(prev,next){
+  if(prev&&(prev.planDigest!==next.planDigest||prev.projectId!==next.projectId))prev=null;
   const save=[],retire=[],before=new Map((prev?.milestones??[]).map(m=>[m.id,m]));
   const fresh=prev==null;
-  if(fresh)for(const kind of ['pending','issue','decision'])retire.push({kind,topic:'hito:*'});
+  if(fresh)for(const kind of ['pending','issue','decision'])retire.push({kind,prefix:'hito:'});
   if(next.status==='CANCELLED'&&prev?.status!=='CANCELLED'&&!fresh)
-    retire.push({kind:'issue',topic:'hito:*'});
+    for(const kind of ['pending','issue'])retire.push({kind,prefix:'hito:'});
   const changes=next.milestones.map(m=>{
     const old=before.get(m.id),lastPart=m.parts.at(-1),lastAttempt=m.attempts.at(-1);
     return {m,old,lastPart,lastAttempt,part:isNewPart(m,old),attempt:isNewAttempt(m,old),
@@ -117,17 +130,16 @@ export function runMemoryEntries(prev,next){
       (outside?last.missionId:null);
     save.push(entry('decision','proyecto:avance',board,cause));
   }
-  for(const {m,old,lastPart,lastAttempt,attempt} of changes){
+  if(next.status==='CANCELLED')return {save,retire};
+  for(const {m,old,lastPart,lastAttempt} of changes){
     const key=topic(m),was=old?pendingBody(old,prev):null,now=pendingBody(m,next);
-    const done=m.status==='DONE'&&old?.status!=='DONE';
-    if(done){
-      retire.push({kind:'pending',topic:key});
-      if(m.attempts.length)retire.push({kind:'issue',topic:key});
-    }else if(now===null&&was!==null)retire.push({kind:'pending',topic:key});
-    if(!done&&m.status!=='DONE'&&!m.attempts.length&&old?.attempts.length)
-      retire.push({kind:'issue',topic:key});
-    if(!done&&attempt&&next.status!=='CANCELLED')
-      save.push(entry('issue',key,issueBody(lastAttempt),lastAttempt.missionId));
+    const beforeIssue=old?issueBody(old,prev):null,afterIssue=issueBody(m,next);
+    if(!fresh){
+      if(beforeIssue!==null&&afterIssue===null)retire.push({kind:'issue',topic:key});
+      if(was!==null&&now===null)retire.push({kind:'pending',topic:key});
+    }
+    if(afterIssue!==null&&afterIssue!==beforeIssue)
+      save.push(entry('issue',key,afterIssue,lastAttempt.missionId));
     if(now!==null&&now!==was)
       save.push(entry('pending',key,now,m.status==='RUNNING'?m.running.missionId:lastPart.missionId,
         m.status==='RUNNING'?null:lastPart.mergeCommitSha));

@@ -227,3 +227,121 @@ test('A3: tope de partes e hitos',()=>{
   broken(s,x=>{x.milestones[0].parts.push({...x.milestones[0].parts[0],missionId:'part-overflow',prNumber:9000001,mergeCommitSha:base});});
   broken(init(),x=>{x.milestones=Array.from({length:201},(_,i)=>({...x.milestones[0],id:'hito-'+i}));});
 });
+
+
+test('A4: cancelación corta por puntos de código y sanea después del corte',()=>{
+  for(const reason of [
+    'x'.repeat(280)+' '+'z'.repeat(19),
+    'x'.repeat(280)+'😀'+'z'.repeat(19)
+  ]){
+    const s=api.cancelProjectRun(take(init(),'discovery','cancel-a4'),{reason,now});
+    const text=s.milestones[0].attempts[0].reason;
+    assert.ok(Array.from(text).length<=300);
+    assert.doesNotMatch(text,/^\s|\s$/u);
+    assert.doesNotMatch(text,/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u);
+  }
+});
+
+test('A4: la parte 50 solo puede ser final y ready informa capacidad',()=>{
+  let s=init();
+  for(let i=0;i<49;i++){
+    const id='limit-'+i;
+    s=complete(take(s,'discovery',id,false),id);
+  }
+  const ready=api.readyMilestones(s);
+  assert.ok(Object.isFrozen(ready));
+  assert.equal(ready[0].parts,49);
+  assert.equal(ready[0].maxParts,50);
+  bad('TOO_MANY_PARTS',()=>take(s,'discovery','limit-no-final',false));
+  const final=take(s,'discovery','limit-final',true);
+  const done=complete(final,'limit-final');
+  assert.equal(done.milestones[0].parts.length,50);
+  assert.equal(done.milestones[0].status,'DONE');
+  assert.ok(done.milestones.every(m=>m.parts.length<50||m.status==='DONE'));
+});
+
+test('A4: misión en curso y reciclada no distingue mayúsculas ni cambia su caso',()=>{
+  let s=take(init(),'discovery','Case-Mission',false);
+  s=complete(s,'case-mission');
+  s=take(s,'discovery','Release-Mission');
+  s=release(s,'release-mission');
+  assert.equal(s.milestones[0].status,'PARTIAL');
+  s=attach(s,'discovery','RELEASE-MISSION',true);
+  assert.equal(s.milestones[0].parts.at(-1).missionId,'Release-Mission');
+
+  let withPr=take(init(),'discovery','Attempt-With-Pr');
+  withPr=release(withPr,'attempt-with-pr',{prNumber:17});
+  bad('DUPLICATE_MISSION',()=>attach(withPr,'discovery','ATTEMPT-WITH-PR',true,{prNumber:18}));
+});
+
+test('A4: motivos conservan espacios reales antes de retirar controles',()=>{
+  let s=take(init(),'discovery','reason-whitespace');
+  s=release(s,'reason-whitespace',{reason:'Falló CI\n\ten paso seguro'});
+  assert.equal(s.milestones[0].attempts[0].reason,'Falló CI en paso seguro');
+});
+
+test('A4: validateRun rechaza dependencias dispersas, tipos, tiempos, repo y base',()=>{
+  const sparse=structuredClone(init());
+  sparse.milestones[0].dependsOn=Array(1);
+  bad('INVALID_PROJECT',()=>api.validateRun(sparse));
+  broken(init(),x=>{x.milestones[0].dependsOn=[null];});
+  broken(init(),x=>{x.updatedAt='2026-11-14T14:59:59.999Z';});
+  broken(init(),x=>{x.repo='../escape';});
+  broken(init(),x=>{x.base=' main\n';});
+  bad('INVALID_REPO',()=>api.initializeProjectRun(plan(),{
+    projectId,approvedDigest:plan().digest,repo:'../escape',base:'main',
+    ownerClient:'cliente',workspaceId:'espacio',now
+  }));
+  bad('INVALID_ID',()=>api.initializeProjectRun(plan(),{
+    projectId,approvedDigest:plan().digest,repo:'riquelmechile/ZanaLLaima',base:' main ',
+    ownerClient:'cliente',workspaceId:'espacio',now
+  }));
+});
+
+test('A4: validateRun cubre unicidad, dependencias activas, razones e ids de hito',()=>{
+  let s=take(init(),'discovery','mission-case',false);
+  const duplicate=structuredClone(s);
+  duplicate.outsidePlan.push({missionId:'MISSION-CASE',reason:'Motivo válido',at:now});
+  bad('INVALID_PROJECT',()=>api.validateRun(duplicate));
+
+  const depPlan=plan([{...milestones[0]},{...milestones[1],dependsOn:['discovery']}]);
+  const pending=init(depPlan);
+  for(const status of ['RUNNING','PARTIAL']){
+    const corrupt=structuredClone(pending);
+    const m=corrupt.milestones[1];
+    if(status==='RUNNING'){
+      m.status='RUNNING';
+      m.running={missionId:'dep-active',final:true,baseSha:base,at:now};
+    }else{
+      m.status='PARTIAL';
+      m.parts=[{missionId:'dep-part',prNumber:1,headSha:head,mergeCommitSha:merge,final:false,at:now}];
+    }
+    bad('INVALID_PROJECT',()=>api.validateRun(corrupt));
+  }
+
+  for(const reason of ['corto',' x'.repeat(151)]){
+    const corrupt=structuredClone(init());
+    corrupt.outsidePlan=[{missionId:'reason-bad',reason,at:now}];
+    bad('INVALID_PROJECT',()=>api.validateRun(corrupt));
+  }
+
+  const repeated=structuredClone(init());
+  repeated.milestones[1].id=repeated.milestones[0].id;
+  repeated.milestones[1].dependsOn=[];
+  repeated.milestones[2].dependsOn=['code'];
+  bad('INVALID_PROJECT',()=>api.validateRun(repeated));
+});
+
+test('A4: completePart detecta PR duplicado y cancelar conserva PARTIAL',()=>{
+  let s=complete(take(init(),'discovery','first-part',false),'first-part');
+  s=take(s,'discovery','second-part',true);
+  bad('DUPLICATE_PR',()=>complete(s,'second-part',{prNumber:prOf('first-part')}));
+  const cancelled=api.cancelProjectRun(s,{reason:'Cancelación solicitada por operador',now});
+  assert.equal(cancelled.milestones[0].status,'PARTIAL');
+  assert.equal(cancelled.milestones[0].parts.length,1);
+  assert.equal(cancelled.milestones[0].attempts.at(-1).missionId,'second-part');
+});
+
+test('A4: attachPart valida el id de hito antes de disponibilidad',()=>{
+  bad('INVALID_ID',()=>attach(init(),null,'attach-invalid'));
+});

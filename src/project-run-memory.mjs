@@ -1,35 +1,39 @@
-// Proyección pura del progreso de los hitos a la memoria por proyecto.
-// El servidor persiste las entradas; este módulo nunca accede a red, DB ni reloj.
+// Proyección pura de estados YA validados por la máquina zana.project-run.v2.
+// Con estados malformados, el comportamiento no está definido. Sin red, DB ni reloj.
 const MAX=1000;
+const clean=value=>String(value??'').replace(/\s+/g,' ').trim();
 const short=(value,size)=>{
-  const text=String(value??'');
-  return text.length>size?text.slice(0,Math.max(0,size-1))+'…':text;
+  const s=clean(value);
+  if(s.length<=size)return s;
+  let cut=s.slice(0,Math.max(0,size-1));
+  if(/[\uD800-\uDBFF]$/.test(cut))cut=cut.slice(0,-1);
+  return cut+'…';
 };
+const sentence=s=>s.endsWith('.')?s:s+'.';
 const count=m=>m.parts.length;
 const topic=m=>'hito:'+short(m.id,75);
-const entry=(kind,topic,body,missionId=null,sha=null)=>({kind,topic,body,missionId,sha});
+const entry=(kind,key,body,missionId=null,sha=null)=>({kind,topic:key,body,missionId,sha});
+const tail=p=>p?.mergeCommitSha;
 
 function milestoneLine(m){
   const n=count(m);
-  let line=m.id+': ';
+  let line=short(m.id,75)+': ';
   if(m.status==='DONE')line+='DONE ('+n+' partes)';
   else if(m.status==='PARTIAL')line+='PARTIAL ('+n+' partes fusionadas)';
-  else if(m.status==='RUNNING')line+='RUNNING misión '+m.running.missionId+
+  else if(m.status==='RUNNING')line+='RUNNING misión '+short(m.running.missionId,75)+
     ' (parte '+(n+1)+', final '+(m.running.final?'sí':'no')+')';
   else line+='PENDING';
-  if(m.attempts.length)line+=' · '+m.attempts.length+' intentos fallidos';
+  if(m.attempts.length)line+=' · '+(m.attempts.length===20?'20+':m.attempts.length)+' intentos fallidos';
   return line;
 }
-
 export function runBoard(state){
-  const milestones=state.milestones;
-  const done=milestones.filter(m=>m.status==='DONE').length;
-  let header='Plan '+state.planDigest.slice(0,8)+' · '+state.status+
-    ' · revisión '+state.revision+' · '+done+'/'+milestones.length+' hitos';
+  const ms=state.milestones,done=ms.filter(m=>m.status==='DONE').length;
+  let header='Plan '+clean(state.planDigest).slice(0,8)+' · '+clean(state.status)+
+    ' · revisión '+state.revision+' · '+done+'/'+ms.length+' hitos';
   if(state.status==='CANCELLED')header+=' · motivo: '+short(state.reason,180);
-  const lines=milestones.map(milestoneLine);
-  const extra=state.outsidePlan.length?'Fuera del plan: '+state.outsidePlan.length+' misiones':null;
-  const all=[header,...lines,...(extra?[extra]:[])].join('\n');
+  if(state.outsidePlan.length)header+=' · fuera del plan: '+
+    (state.outsidePlan.length===50?'50+':state.outsidePlan.length);
+  const lines=ms.map(milestoneLine),all=[header,...lines].join('\n');
   if(all.length<=MAX)return all;
   const kept=[];
   for(let i=0;i<lines.length;i++){
@@ -38,90 +42,83 @@ export function runBoard(state){
     if([header,...kept,lines[i]].join('\n').length+marker.length>MAX)break;
     kept.push(lines[i]);
   }
-  if(kept.length<lines.length)
-    return [header,...kept,'… +'+(lines.length-kept.length)+' hitos'].join('\n');
-  // Todos los hitos caben; si solo sobra la línea de fuera de plan, se omite.
-  return [header,...kept].join('\n');
+  return [header,...kept,'… +'+(lines.length-kept.length)+' hitos'].join('\n');
 }
-
-const descriptions=m=>'Objetivo: '+short(m.objective,240)+'. Aceptación: '+
-  short(m.acceptance,240)+'.';
-// Las listas se truncan en el límite entre partes, nunca dentro de un PR o SHA.
+const descriptions=m=>'Objetivo: '+sentence(short(m.objective,240))+
+  ' Aceptación: '+sentence(short(m.acceptance,240));
+// Conserva siempre las partes más recientes; nunca corta un PR, misión o SHA.
 function partsList(parts,format,max){
-  let body='';
-  for(let i=0;i<parts.length;i++){
-    const item=(body?', ':'')+format(parts[i]);
-    const reserve=i<parts.length-1?3:0;
-    if(body.length+item.length+reserve>max)return body?body+', …':'…';
-    body+=item;
+  const shown=[];
+  for(let i=parts.length-1;i>=0;i--){
+    const item=format(parts[i]),rest=[item,...shown].join(', ');
+    if((i?'…, ':'').length+rest.length>max)break;
+    shown.unshift(item);
   }
-  return body;
+  return (shown.length<parts.length?'…, ':'')+shown.join(', ');
 }
 const partialBody=m=>{
   const prefix='Parcial: '+count(m)+' partes fusionadas (';
   const suffix='). Falta la parte siguiente. '+descriptions(m);
-  const list=partsList(m.parts,p=>'PR #'+p.prNumber+' '+p.mergeCommitSha.slice(0,7),
-    MAX-prefix.length-suffix.length);
-  return prefix+list+suffix;
+  return prefix+partsList(m.parts,p=>'PR #'+p.prNumber+' '+clean(p.mergeCommitSha).slice(0,7),
+    MAX-prefix.length-suffix.length)+suffix;
 };
 const finalBody=m=>{
   const prefix='Terminado en '+count(m)+' partes: ';
   return prefix+partsList(m.parts,p=>'PR #'+p.prNumber+
-    ' (misión '+p.missionId+', merge '+p.mergeCommitSha.slice(0,7)+')',MAX-prefix.length);
+    ' (misión '+short(p.missionId,75)+', merge '+clean(p.mergeCommitSha).slice(0,7)+')',MAX-prefix.length);
 };
-const runningBody=m=>{
-  const prefix='En curso: misión '+m.running.missionId+', parte '+(count(m)+1)+
-    ', final '+(m.running.final?'sí':'no')+'. ';
-  return prefix+descriptions(m);
+const runningBody=m=>'En curso: misión '+short(m.running.missionId,75)+', parte '+(count(m)+1)+
+  ', final '+(m.running.final?'sí':'no')+'. '+descriptions(m);
+const issueBody=a=>{
+  const prefix='Intento fallido: misión '+short(a.missionId,75)+
+    (a.prNumber==null?'':', PR #'+a.prNumber)+'. Motivo: ';
+  return prefix+sentence(short(a.reason,MAX-prefix.length-1));
 };
-const issueBody=attempt=>{
-  const prefix='Intento fallido: misión '+attempt.missionId+
-    (attempt.prNumber===null?'':', PR #'+attempt.prNumber)+'. Motivo: ';
-  return prefix+short(attempt.reason,Math.max(1,MAX-prefix.length-1))+'.';
+const pendingBody=(m,run)=>run.status==='CANCELLED'?null:
+  m.status==='RUNNING'?runningBody(m):m.status==='PARTIAL'?partialBody(m):null;
+const isNewAttempt=(m,old)=>{
+  const a=m.attempts.at(-1),b=old?.attempts.at(-1);
+  return Boolean(a)&&(!b||a.missionId!==b.missionId||a.at!==b.at);
+};
+const isNewPart=(m,old)=>{
+  const a=m.parts.at(-1),b=old?.parts.at(-1);
+  return Boolean(a)&&(!b||a.missionId!==b.missionId||tail(a)!==tail(b));
 };
 
 export function runMemoryEntries(prev,next){
-  const save=[],resolve=[];
-  const before=new Map((prev?.milestones??[]).map(m=>[m.id,m]));
+  const save=[],resolve=[],before=new Map((prev?.milestones??[]).map(m=>[m.id,m]));
   const changes=next.milestones.map(m=>{
-    const old=before.get(m.id);
-    const oldParts=old?.parts.length??0,oldAttempts=old?.attempts.length??0;
-    const started=Boolean(m.running)&&!old?.running;
-    const gainedPart=m.parts.length>oldParts;
-    const gainedAttempt=m.attempts.length>oldAttempts;
-    const lastPart=m.parts.at(-1),lastAttempt=m.attempts.at(-1);
-    const missionId=started?m.running.missionId:
-      gainedPart?lastPart.missionId:gainedAttempt?lastAttempt.missionId:null;
-    return {m,started,gainedPart,gainedAttempt,lastPart,lastAttempt,missionId};
+    const old=before.get(m.id),lastPart=m.parts.at(-1),lastAttempt=m.attempts.at(-1);
+    return {m,old,lastPart,lastAttempt,part:isNewPart(m,old),attempt:isNewAttempt(m,old),
+      claim:Boolean(m.running)&&m.running.missionId!==old?.running?.missionId};
   });
   const board=runBoard(next);
   if(prev===null||runBoard(prev)!==board){
-    const cause=prev===null?null:
-      changes.find(c=>c.missionId)?.missionId??
-      (next.outsidePlan.length>prev.outsidePlan.length?
-        next.outsidePlan.at(-1).missionId:null);
+    const last=next.outsidePlan.at(-1),previous=prev?.outsidePlan.at(-1);
+    const outside=last&&(!previous||last.missionId!==previous.missionId||
+      last.at!==previous.at||last.reason!==previous.reason);
+    const cause=changes.find(c=>c.claim)?.m.running.missionId??
+      changes.find(c=>c.part)?.lastPart.missionId??
+      changes.find(c=>c.attempt)?.lastAttempt.missionId??
+      (outside?last.missionId:null);
     save.push(entry('decision','proyecto:avance',board,cause));
   }
-  for(const {m,started,gainedPart,gainedAttempt,lastPart,lastAttempt} of changes){
-    const key=topic(m);
-    if(started)
-      save.push(entry('pending',key,short(runningBody(m),MAX),m.running.missionId));
-    if(gainedPart&&m.status==='PARTIAL')
-      save.push(entry('pending',key,short(partialBody(m),MAX),
-        lastPart.missionId,lastPart.mergeCommitSha));
-    if(gainedPart&&m.status==='DONE'){
-      resolve.push(key);
-      save.push(entry('decision',key,short(finalBody(m),MAX),
-        lastPart.missionId,lastPart.mergeCommitSha));
-    }
-    if(gainedAttempt){
-      save.push(entry('issue',key,short(issueBody(lastAttempt),MAX),lastAttempt.missionId));
-      if(m.status==='PARTIAL'&&!(gainedPart&&m.status==='PARTIAL')){
-        save.push(entry('pending',key,short(partialBody(m),MAX),
+  for(const {m,old,lastPart,lastAttempt,attempt} of changes){
+    const key=topic(m),was=old&&prev?pendingBody(old,prev):null,now=pendingBody(m,next);
+    if(attempt)save.push(entry('issue',key,issueBody(lastAttempt),lastAttempt.missionId));
+    if(m.status==='DONE'&&old?.status!=='DONE'){
+      save.push(entry('decision',key,finalBody(m),lastPart.missionId,lastPart.mergeCommitSha));
+      if(m.attempts.length){
+        const prefix='Resuelto: el hito terminó después de '+m.attempts.length+
+          ' intentos fallidos. Último motivo: ';
+        save.push(entry('issue',key,prefix+sentence(short(lastAttempt.reason,MAX-prefix.length-1)),
           lastPart.missionId,lastPart.mergeCommitSha));
       }
-      if(m.status==='PENDING')resolve.push(key);
     }
+    if(now!==null&&now!==was)
+      save.push(entry('pending',key,now,m.status==='RUNNING'?m.running.missionId:lastPart.missionId,
+        m.status==='RUNNING'?null:lastPart.mergeCommitSha));
+    if(now===null&&was!==null)resolve.push(key);
   }
   return {save,resolve};
 }

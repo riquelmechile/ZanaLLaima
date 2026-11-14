@@ -32,7 +32,7 @@ test('tablero indica intentos fallidos, misiones fuera del plan y cancelación',
   const ms=[milestone('a',{attempts:[{missionId:'m1',reason:'Error',prNumber:null,at},
     {missionId:'m2',reason:'Error',prNumber:9,at}]})];
   const s=state(ms,{outsidePlan:[{missionId:'extra',reason:'No aprobada',at}]});
-  assert.match(runBoard(s),/a: PENDING · 2 intentos fallidos\nFuera del plan: 1 misiones$/);
+  assert.match(runBoard(s),/fuera del plan: 1\na: PENDING · 2 intentos fallidos$/);
   const cancelled=runBoard(state(ms,{status:'CANCELLED',reason:'Falta permiso',revision:9}));
   assert.match(cancelled,/Plan cccccccc · CANCELLED · revisión 9 · 0\/1 hitos · motivo: Falta permiso/);
 });
@@ -106,6 +106,7 @@ test('cancelación solamente cambia el tablero; sin cambios devuelve vacío',()=
   const result=runMemoryEntries(old,cancelled);
   assert.deepEqual(kinds(result),['decision:proyecto:avance']);
   assert.equal(result.save[0].missionId,null);
+  assert.deepEqual(result.resolve,['hito:uno']);
   assert.deepEqual(runMemoryEntries(cancelled,cancelled),{save:[],resolve:[]});
 });
 test('tablero primero e hitos en orden, con causas distintas',()=>{
@@ -126,7 +127,7 @@ test('textos y listas enormes respetan límites y no alteran el estado congelado
     {status:'READY_TO_DELIVER'}));
   const result=runMemoryEntries(old,next);
   for(const e of result.save){assert.ok(e.body.length<=1000);assert.ok(e.topic.length<=80);}
-  assert.deepEqual(kinds(result),['decision:proyecto:avance','decision:hito:uno','issue:hito:uno']);
+  assert.deepEqual(kinds(result),['decision:proyecto:avance','issue:hito:uno','decision:hito:uno','issue:hito:uno']);
   assert.equal(result.resolve[0],'hito:uno');
   assert.equal(next.milestones[0].objective,huge);
   assert.ok(runBoard(freeze({...next,status:'CANCELLED',reason:huge})).length<=1000);
@@ -191,9 +192,9 @@ test('cancelación, cierre de issue e higienización de saltos de línea',()=>{
   assert.deepEqual(kinds(out),['decision:proyecto:avance','issue:hito:uno','decision:hito:uno','issue:hito:uno']);
   assert.match(out.save.at(-1).body,/^Resuelto: el hito terminó después de 1 intentos fallidos/);
   assert.deepEqual(out.resolve,['hito:uno']);
-  assert.ok(out.save.every(e=>!e.body.includes('\n')));
+  assert.ok(out.save.filter(e=>e.kind!=='decision'||e.topic!=='proyecto:avance').every(e=>!e.body.includes('\n')));
   const claim=step(state(),milestone('uno',{status:'RUNNING',running:running('nuevo'),objective:bad,acceptance:bad}));
-  assert.ok(runMemoryEntries(state(),claim).save.every(e=>!e.body.includes('\n')));
+  assert.ok(runMemoryEntries(state(),claim).save.filter(e=>e.kind==='pending').every(e=>!e.body.includes('\n')));
 });
 test('límite de bodies, listas íntegras, newest y puntuación',()=>{
   const big='L'.repeat(5000),ps=Array.from({length:30},(_,i)=>varied('identificador-mision-'+String(i).padStart(30,'x'),i,i===29));

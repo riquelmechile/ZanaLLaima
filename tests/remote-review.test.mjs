@@ -1,10 +1,8 @@
 import test from 'node:test';
-import {randomUUID} from 'node:crypto';
 import assert from 'node:assert/strict';
 import {remoteFixture,REVIEWER_TOKEN,REVIEWER_LOGIN,AUTHOR_TOKEN,sha,sleep,readDiff} from './helpers/remote-fixture.mjs';
+import {BOOTSTRAP_TOKEN} from './helpers/fake-github.mjs';
 import {ticketCode,validateLens,reviewBody} from '../src/remote-review.mjs';
-import {remoteWrite} from '../src/store.mjs';
-import {recordActivity} from '../src/remote-state.mjs';
 
 const clean=lens=>({lens,findings:[],evidence:['Read the full diff of src/sum.mjs and its test']});
 const finding=(severity,extra={})=>({severity,location:'src/sum.mjs:3',evidence:'returns a-b instead of a+b',origin:'INTRODUCED',...extra});
@@ -108,8 +106,7 @@ test('review request needs an open mission PR with green checks; claim rules',as
     assert.equal((await f.call('zana_complete_unit',{unitId:'code',token:noPr.packet.token,leaseGeneration:noPr.packet.leaseGeneration,
       outcome:{success:true,summary:'code done',evidence:['green checks']}},noPr.author)).error,undefined);
     const before=await f.session();
-    // Era anterior al ticket y ya hab������a escrito en una misión previa.
-    await remoteWrite(db=>recordActivity(db,{sessionId:before.sessionId,missionId:'previous-mission',kind:'MISSION_WRITE',tool:'historical-write'}));
+    // Era anterior al ticket y nunca había reclamado una revisión.
     const writer=await f.session();
     const req=await f.call('zana_review_request',{missionId:noPr.missionId},noPr.author);
     assert.match(req.message,/^Revisa el ticket ZR-[A-Z2-7-]+ con ZanaLLaima$/);
@@ -386,83 +383,72 @@ test('el monitor revisor puro puede reclamar otro ticket posterior de la misma m
   }finally{await f.cleanup();}
 });
 
+async function reviewerWithNextMission(f){
+  const a=await f.authorReady();
+  const first=await f.call('zana_review_request',{missionId:a.missionId},a.author);
+  assert.equal(first.error,undefined,first.error);
+  const reviewer=await f.session();
+  assert.equal((await f.call('zana_review_claim',{ticket:first.ticket},reviewer)).state,'CLAIMED');
+  await finalize(f,first.ticket,reviewer);
+  const notesBatch=await f.call('zana_start_batch',{},a.author);
+  assert.equal(notesBatch.error,undefined,notesBatch.error);
+  const notes=notesBatch.packets.find(p=>p.unitId==='notes');
+  assert.ok(notes);
+  const notesDone=await f.call('zana_complete_unit',{unitId:'notes',token:notes.token,leaseGeneration:notes.leaseGeneration,
+    outcome:{success:true,summary:'notas verificadas',evidence:['revisión completada']}},a.author);
+  assert.equal(notesDone.error,undefined,notesDone.error);
+  assert.equal((await f.call('zana_merge',{missionId:a.missionId},a.author)).state,'MERGED');
+  assert.equal((await f.call('zana_mission_close',{summary:{
+    done:'Primera revisión finalizada',decisions:[],conventions:[],pending:[],keyFiles:['src/sum.mjs']
+  }},a.author)).status,'CLOSED');
+  assert.equal((await f.call('zana_mission_archive',{},a.author)).archived,true);
+  const b=await f.authorReady();
+  f.api.state.pulls.at(-1).number=8;
+  assert.notEqual(b.missionId,a.missionId);
+  const second=await f.call('zana_review_request',{missionId:b.missionId},b.author);
+  assert.equal(second.error,undefined,second.error);
+  return {a,b,reviewer,second};
+}
+
 test('el monitor que finalizó A puede reclamar un ticket posterior de B',async()=>{
   const f=await remoteFixture();
   try{
-    const a=await f.authorReady();
-    const first=await f.call('zana_review_request',{missionId:a.missionId},a.author);
-    assert.equal(first.error,undefined,first.error);
-    const reviewer=await f.session();
-    assert.equal((await f.call('zana_review_claim',{ticket:first.ticket},reviewer)).state,'CLAIMED');
-    await finalize(f,first.ticket,reviewer);
-    // La misión necesita completar también la unidad no-code antes del cierre.
-    const notesBatch=await f.call('zana_start_batch',{},a.author);
-    assert.equal(notesBatch.error,undefined,notesBatch.error);
-    const notes=notesBatch.packets.find(p=>p.unitId==='notes');
-    assert.ok(notes,'debe iniciarse la unidad notes');
-    const notesDone=await f.call('zana_complete_unit',{unitId:'notes',token:notes.token,leaseGeneration:notes.leaseGeneration,
-      outcome:{success:true,summary:'notas verificadas',evidence:['revisión completada']}},a.author);
-    assert.equal(notesDone.error,undefined,notesDone.error);
-    const merge=await f.call('zana_merge',{missionId:a.missionId},a.author);
-    assert.equal(merge.state,'MERGED',merge.error);
-    const closed=await f.call('zana_mission_close',{summary:{
-      done:'Primera revisión finalizada',decisions:[],conventions:[],pending:[],keyFiles:['src/sum.mjs']
-    }},a.author);
-    assert.equal(closed.status,'CLOSED',closed.error);
-    assert.equal((await f.call('zana_mission_archive',{},a.author)).archived,true);
-    const b=await f.authorReady();
-    // Fake GitHub usa #7 por defecto; la segunda misión requiere otro PR.
-    f.api.state.pulls.at(-1).number=8;
-    assert.notEqual(b.missionId,a.missionId);
-    const second=await f.call('zana_review_request',{missionId:b.missionId},b.author);
-    assert.equal(second.error,undefined,second.error);
+    const {reviewer,second}=await reviewerWithNextMission(f);
     const claim=await f.call('zana_review_claim',{ticket:second.ticket},reviewer);
     assert.equal(claim.state,'CLAIMED',claim.error);
   }finally{await f.cleanup();}
 });
 
-test('escritura en cualquier otra misión sigue bloqueando por antigüedad',async()=>{
-  const f=await remoteFixture();
+test('R1: revisora de A que escribe por GitHub en B no reclama B',async()=>{
+  const f=await remoteFixture({envExtra:{ZANA_GITHUB_FULL_ACCESS:'true',ZANA_BOOTSTRAP_GITHUB_TOKEN:BOOTSTRAP_TOKEN}});
   try{
-    const {previous,ticket}=await olderSessionAndTicket(f);
-    await remoteWrite(db=>recordActivity(db,{sessionId:previous.sessionId,missionId:'historical-mission',kind:'UNIT_START',tool:'zana_start_batch'}));
-    const claim=await f.call('zana_review_claim',{ticket:ticket.ticket},previous);
-    assert.match(claim.error,/^SESSION_PREDATES_TICKET:/);
+    const {b,reviewer,second}=await reviewerWithNextMission(f);
+    const write=await f.call('zana_github_request',{method:'PUT',
+      path:'/repos/o/r/contents/.github/workflows/zana-checks.yml',
+      body:{branch:b.branch,content:'YQ=='}},reviewer);
+    assert.equal(write.status,201,write.error);
+    assert.match(String((await f.call('zana_review_claim',{ticket:second.ticket},reviewer)).error),/SESSION_PREDATES_TICKET/);
   }finally{await f.cleanup();}
 });
 
-test('haber creado otra misión impide la excepción de revisora pura',async()=>{
-  const f=await remoteFixture();
+test('R1: sesión que escribe por zana_github_request no reclama ticket anterior a ella',async()=>{
+  const f=await remoteFixture({envExtra:{ZANA_GITHUB_FULL_ACCESS:'true',ZANA_BOOTSTRAP_GITHUB_TOKEN:BOOTSTRAP_TOKEN}});
   try{
-    const {previous,ticket}=await olderSessionAndTicket(f);
-    await remoteWrite(db=>db.prepare(
-      'INSERT INTO remote_missions(mission_id,repo,base,branch,code_units,created_session,created_at) VALUES(?,?,?,?,?,?,?)'
-    ).run('historical-creator','o/r','main','old-branch','[]',previous.sessionId,new Date().toISOString()));
-    const claim=await f.call('zana_review_claim',{ticket:ticket.ticket},previous);
-    assert.match(claim.error,/^SESSION_PREDATES_TICKET:/);
+    const {previous,ticket,missionId}=await olderSessionAndTicket(f);
+    const write=await f.call('zana_github_request',{method:'PUT',
+      path:'/repos/o/r/contents/.github/workflows/zana-checks.yml',
+      body:{branch:'zana/'+missionId,content:'YQ=='}},previous);
+    assert.equal(write.status,201,write.error);
+    assert.match(String((await f.call('zana_review_claim',{ticket:ticket.ticket},previous)).error),/SESSION_PREDATES_TICKET/);
   }finally{await f.cleanup();}
 });
 
-test('haber pedido un ticket en otra misión impide la excepción',async()=>{
+test('R2: sesión que creó un workspace no reclama ticket anterior a ella',async()=>{
   const f=await remoteFixture();
   try{
     const {previous,ticket}=await olderSessionAndTicket(f);
-    const now=new Date().toISOString();
-    await remoteWrite(db=>db.prepare(
-      'INSERT INTO review_tickets(ticket_id,code_hash,mission_id,repo,pr_number,sha,author_session,created_at,expires_at,state,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)'
-    ).run(randomUUID(),randomUUID(),'historical-ticket','o/r',8,'b'.repeat(40),previous.sessionId,now,now,'FINALIZED',now));
-    const claim=await f.call('zana_review_claim',{ticket:ticket.ticket},previous);
-    assert.match(claim.error,/^SESSION_PREDATES_TICKET:/);
-  }finally{await f.cleanup();}
-});
-
-test('una sesión que adopta una misión deja de ser revisora pura',async()=>{
-  const f=await remoteFixture();
-  try{
-    const {previous,ticket}=await olderSessionAndTicket(f);
-    // La adopción es escritura, aunque se haya realizado en otra misión.
-    await remoteWrite(db=>recordActivity(db,{sessionId:previous.sessionId,missionId:'historical-adopted',kind:'MISSION_ADOPT',tool:'zana_mission_adopt'}));
-    const claim=await f.call('zana_review_claim',{ticket:ticket.ticket},previous);
-    assert.match(claim.error,/^SESSION_PREDATES_TICKET:/);
+    const result=await f.call('zana_workspace_create',{idea:'Proyecto de automatización de pruebas con controles seguros'},previous);
+    assert.equal(result.error,undefined,result.error);
+    assert.match(String((await f.call('zana_review_claim',{ticket:ticket.ticket},previous)).error),/SESSION_PREDATES_TICKET/);
   }finally{await f.cleanup();}
 });

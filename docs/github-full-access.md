@@ -5,3 +5,5 @@
 La herramienta puede modificar workflows, colaboradores, settings y protección de ramas. También puede quitar protección y fusionar sin revisión; una inyección de instrucciones podría abusar de ese poder. Por eso viene apagada, es una decisión explícita del operador y no cambia los permisos de los writers.
 
 Cada llamada audita método, ruta sin query, status e identidad; nunca body, token ni respuesta.
+
+Los métodos distintos de GET marcan durablemente la sesión como escritora **antes** de llamar a GitHub, incluso si falla la petición. GET no marca. Una llamada bloqueada previamente por `REVIEWER_READ_ONLY` no marca. La marca solo determina la excepción para sesiones anteriores al ticket, junto con la época de marca y un reclamo previo; para sesiones posteriores se aplican las reglas normales. `zana_ds_github` `index` y las operaciones `read` no marcan, las escrituras sí. El historial registrado no prueba qué conversó el GPT fuera del servidor: reserva la sesión revisora permanente exclusivamente para revisión.

@@ -777,6 +777,8 @@ function remoteFacts(db){
     audit:db.prepare('SELECT at,host,session_id,tool,mission_id,outcome,args_hmac,detail,category FROM remote_audit').all(),
     diffPages:db.prepare('SELECT * FROM review_diff_pages').all(),
     auditKey:db.prepare("SELECT value FROM metadata WHERE key='remote_audit_key'").get()?.value??null,
+    writerMarks:db.prepare("SELECT key,value FROM metadata WHERE key LIKE 'zana:session-writer:%'").all(),
+    writerEpoch:db.prepare("SELECT value FROM metadata WHERE key='zana:session-writer-epoch'").get()?.value??null,
   };
 }
 const insertRow=(db,table,row,mode='OR IGNORE')=>{
@@ -811,6 +813,9 @@ function mergeRemoteFacts(db,facts){
     if(!sameAudit.get(row.at,row.tool,row.outcome,row.session_id,row.args_hmac))
       insertRow(db,'remote_audit',row,'');
   if(facts.auditKey)db.prepare("INSERT INTO metadata(key,value) VALUES('remote_audit_key',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(facts.auditKey);
+  // La restauración y la cuarentena nunca borran marcas del estado vivo.
+  for(const row of facts.writerMarks??[])insertRow(db,'metadata',row);
+  if(facts.writerEpoch)db.prepare("INSERT INTO metadata(key,value) VALUES('zana:session-writer-epoch',?) ON CONFLICT(key) DO UPDATE SET value=MAX(value,excluded.value)").run(facts.writerEpoch);
 }
 // Without readable live history, no restored ticket may still be claimable.
 function fenceRemoteTickets(db){

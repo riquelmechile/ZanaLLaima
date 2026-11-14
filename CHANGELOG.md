@@ -2,6 +2,8 @@
 
 ## [Sin publicar]
 
+- El monitor revisor anterior al ticket solo reutiliza una sesión nacida después de la época de marca, con reclamo previo de esa misma encarnación y sin escrituras ni autoría. `zana_ds_github` `index`/`read` no marca; `write` o desconocida sí. Las marcas y la época sobreviven a restore/cuarentena (se conserva la época máxima), se auditan rechazos downstream `REFUSED` y no se marca a una revisora cuyo write se rechaza previamente. Las sesiones previas al despliegue y las de un rollback sin marca requieren recrear el monitor; el servidor no ve conversaciones ni conectores externos.
+
 - `zana_bootstrap_setup` conecta el setup de repositorios nuevos al servidor MCP y al panel: revisora Write, protección `zana/4r`, checks por repositorio y auditoría sin secretos; corrige timestamps, errores y visibilidad de `runSeq`.
 
 - Núcleo idempotente para preparar repositorios recién creados: revisora con Write, protección de la rama default y detección del workflow configurado.

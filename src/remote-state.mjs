@@ -21,7 +21,11 @@ export async function registerSession({sessionId,host,clientId},file){
   if(!SESSION.test(String(sessionId)))throw new Error('Invalid session id');
   return remoteWrite(db=>{
     const old=db.prepare('SELECT * FROM remote_sessions WHERE session_id=?').get(sessionId);
-    const at=nowIso();
+    const epoch=ensureSessionWriterEpoch(db);
+    const current=nowIso();
+    // La sesión nueva debe ser estrictamente posterior a la época, incluso
+    // cuando ambos timestamps caen en el mismo milisegundo.
+    const at=current<=epoch?new Date(Date.parse(epoch)+1).toISOString():current;
     if(old){
       if(old.host!==host||old.client_id!==clientId)throw new Error('Session belongs to another identity');
       db.prepare('UPDATE remote_sessions SET last_seen_at=? WHERE session_id=?').run(at,sessionId);
@@ -50,6 +54,30 @@ export const missionClients=(db,missionId)=>db.prepare(
   'SELECT DISTINCT client_id FROM remote_activity WHERE mission_id=? AND client_id IS NOT NULL').all(missionId).map(r=>r.client_id);
 export const sessionWrote=(db,sessionId,missionId)=>Boolean(db?.prepare(
   'SELECT 1 FROM remote_activity WHERE session_id=? AND mission_id=? LIMIT 1').get(sessionId,missionId));
+// Marca monotónica en la misma base: no depende de la retención de actividad.
+export const WRITER_EPOCH_KEY='zana:session-writer-epoch';
+export function ensureSessionWriterEpoch(db){
+  db.prepare('INSERT OR IGNORE INTO metadata(key,value) VALUES(?,?)').run(WRITER_EPOCH_KEY,nowIso());
+  return db.prepare('SELECT value FROM metadata WHERE key=?').get(WRITER_EPOCH_KEY).value;
+}
+const writerKey=sessionId=>'zana:session-writer:'+sessionId;
+export function markSessionWriter(db,sessionId){
+  db.prepare('INSERT OR IGNORE INTO metadata(key,value) VALUES(?,?)').run(writerKey(sessionId),nowIso());
+}
+export const sessionIsWriter=(db,sessionId)=>Boolean(db?.prepare(
+  'SELECT 1 FROM metadata WHERE key=?').get(writerKey(sessionId)));
+// Un monitor revisor puede vivir durante muchos tickets, pero pierde esta
+// excepción al escribir/adoptar en CUALQUIER misión o al haber sido autor.
+export const sessionIsPureReviewer=(db,sessionId)=>Boolean(db&&
+  sessionRow(db,sessionId)&&
+  db.prepare('SELECT value FROM metadata WHERE key=?').get(WRITER_EPOCH_KEY)?.value<
+    sessionRow(db,sessionId).created_at&&
+  !sessionIsWriter(db,sessionId)&&
+  db.prepare('SELECT 1 FROM review_tickets WHERE reviewer_session=? AND claimed_at>=? LIMIT 1')
+    .get(sessionId,sessionRow(db,sessionId).created_at)&&
+  !db.prepare('SELECT 1 FROM remote_activity WHERE session_id=? LIMIT 1').get(sessionId)&&
+  !db.prepare('SELECT 1 FROM remote_missions WHERE created_session=? LIMIT 1').get(sessionId)&&
+  !db.prepare('SELECT 1 FROM review_tickets WHERE author_session=? LIMIT 1').get(sessionId));
 // Author rule for zana_merge: the session that created the mission, or one
 // that held (started or rebound) one of its units.
 export const sessionIsMissionAuthor=(db,sessionId,missionId)=>Boolean(db&&(
@@ -98,8 +126,13 @@ export function pruneRemote(db,now=Date.now()){
     db.prepare('DELETE FROM review_receipts WHERE review_id=? AND review_id NOT IN (SELECT review_id FROM review_archive)').run(ticket_id);
     db.prepare('DELETE FROM review_tickets WHERE ticket_id=?').run(ticket_id);
   }
-  db.prepare("DELETE FROM remote_sessions WHERE last_seen_at<? AND session_id NOT IN (SELECT author_session FROM review_tickets WHERE state NOT IN ('FINALIZED','STALE_SHA','EXPIRED','ABANDONED')) AND session_id NOT IN (SELECT reviewer_session FROM review_tickets WHERE reviewer_session IS NOT NULL AND state NOT IN ('FINALIZED','STALE_SHA','EXPIRED','ABANDONED'))")
-    .run(before(RETENTION_DAYS.sessions));
+  const expired=db.prepare("SELECT session_id FROM remote_sessions WHERE last_seen_at<? AND session_id NOT IN (SELECT author_session FROM review_tickets WHERE state NOT IN ('FINALIZED','STALE_SHA','EXPIRED','ABANDONED')) AND session_id NOT IN (SELECT reviewer_session FROM review_tickets WHERE reviewer_session IS NOT NULL AND state NOT IN ('FINALIZED','STALE_SHA','EXPIRED','ABANDONED'))")
+    .all(before(RETENTION_DAYS.sessions));
+  for(const {session_id} of expired){
+    db.prepare('DELETE FROM remote_sessions WHERE session_id=?').run(session_id);
+    // Se elimina con la sesión, en esta misma transacción, nunca por edad de la marca.
+    db.prepare('DELETE FROM metadata WHERE key=?').run(writerKey(session_id));
+  }
 }
 export const audit=(entry,file)=>remoteWrite(db=>writeAudit(db,entry),file);
 export function readAudit({limit=50,missionId=null}={},file){

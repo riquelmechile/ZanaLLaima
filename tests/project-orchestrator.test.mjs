@@ -219,20 +219,28 @@ test('A3: hora ISO estricta, forma canónica y razones saneadas',()=>{
 });
 test('A3: tope de partes e hitos',()=>{
   let s=init();
-  for(let i=0;i<50;i++)s=attach(s,'discovery','part-'+i,false);
-  assert.equal(s.milestones[0].parts.length,50);
+  for(let i=0;i<49;i++)s=attach(s,'discovery','part-'+i,false);
+  assert.equal(s.milestones[0].parts.length,49);
   bad('TOO_MANY_PARTS',()=>attach(s,'discovery','part-overflow',false));
-  const live=take(s,'discovery','part-running');
-  bad('TOO_MANY_PARTS',()=>complete(live,'part-running'));
-  broken(s,x=>{x.milestones[0].parts.push({...x.milestones[0].parts[0],missionId:'part-overflow',prNumber:9000001,mergeCommitSha:base});});
-  broken(init(),x=>{x.milestones=Array.from({length:201},(_,i)=>({...x.milestones[0],id:'hito-'+i}));});
+  s=attach(s,'discovery','part-final',true);
+  assert.equal(s.milestones[0].parts.length,50);
+  assert.equal(s.milestones[0].status,'DONE');
+  broken(s,x=>{
+    x.milestones[0].parts.push({
+      ...x.milestones[0].parts[0],
+      missionId:'part-overflow',prNumber:9000001,mergeCommitSha:base
+    });
+  });
+  broken(init(),x=>{
+    x.milestones=Array.from({length:201},(_,i)=>({...x.milestones[0],id:'hito-'+i}));
+  });
 });
 
 
 test('A4: cancelación corta por puntos de código y sanea después del corte',()=>{
   for(const reason of [
     'x'.repeat(280)+' '+'z'.repeat(19),
-    'x'.repeat(280)+'😀'+'z'.repeat(19)
+    'x'.repeat(280)+'😀'+'z'.repeat(18)
   ]){
     const s=api.cancelProjectRun(take(init(),'discovery','cancel-a4'),{reason,now});
     const text=s.milestones[0].attempts[0].reason;

@@ -3,9 +3,11 @@
 // Aplicar retire ANTES de save en la misma transacción que la transición: un retire perdido no se repara solo.
 // Sin red, DB ni reloj. retire.prefix identifica topics vivos del proyecto por prefijo.
 const MAX=1000;
-const clean=value=>String(value??'').replace(/\s+/g,' ').replace(/[\p{Cc}\p{Cf}]/gu,'')
+const clean=value=>String(value??'')
+  .replace(/[\p{White_Space}\u001C-\u001F]+/gu,' ')
+  .replace(/[\p{Cc}\p{Cf}]/gu,'')
   .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,'')
-  .replace(/\s+/g,' ').trim()||'—';
+  .replace(/ +/g,' ').trim()||'—';
 const short=(value,size)=>{
   const s=clean(value);
   if(s.length<=size)return s;
@@ -108,7 +110,8 @@ const isNewPart=(m,old)=>{
 };
 
 export function runMemoryEntries(prev,next){
-  if(prev&&(prev.planDigest!==next.planDigest||prev.projectId!==next.projectId))prev=null;
+  if(prev&&(prev.planDigest!==next.planDigest||prev.projectId!==next.projectId||
+    prev.createdAt!==next.createdAt))prev=null;
   const save=[],retire=[],before=new Map((prev?.milestones??[]).map(m=>[m.id,m]));
   const fresh=prev==null;
   if(fresh)for(const kind of ['pending','issue','decision'])retire.push({kind,prefix:'hito:'});

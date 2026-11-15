@@ -24,7 +24,7 @@ import {listSkills,loadSkill} from './skills.mjs';
 import {startDiscovery,answerDiscovery,nextDiscoveryQuestions,draftProjectPlan} from './project-discovery.mjs';
 import {prepareBootstrap} from './project-bootstrap.mjs';
 import {createProjectWorkspace,getProjectWorkspace,updateProjectWorkspace,listProjectWorkspaces,setProjectWorkspaceArchived} from './project-workspace.mjs';
-import {requestPlanApproval,planApprovalStatus,describePlanApproval,decidePlanApproval} from './plan-approval.mjs';
+import {requestPlanApproval,planApprovalStatus,describePlanApproval,decidePlanApproval,approvedPlan} from './plan-approval.mjs';
 import {requestApprovalPanel,decideApprovalPanel,approvalPanelStatus} from './approval-panel.mjs';
 import {PANEL_URI,PANEL_MIME,panelHtml} from './approval-panel-view.mjs';
 import {requestBootstrap,bootstrapStatus,readOperation} from './bootstrap-request.mjs';
@@ -40,7 +40,10 @@ import {within,DeadlineError} from './deadline.mjs';
 import {clean,redactDeep,envSecrets} from './redact.mjs';
 import {githubAdminRequest,githubAdminAudit} from './github-admin.mjs';
 import {closeMission} from './lifecycle.mjs';
-import {readPointer,resolveProject,memoryContext,missionProject,setMissionProject,saveSummary,saveEntry,searchMemory} from './project-memory.mjs';
+import {readPointer,resolveProject,memoryContext,missionProject,setMissionProject,saveSummary,saveEntry,searchMemory,reservedTopic} from './project-memory.mjs';
+import {initializeProjectRun,readyMilestones} from './project-orchestrator.mjs';
+import {runBoard} from './project-run-memory.mjs';
+import {loadRun,saveRun} from './project-run-store.mjs';
 
 const packageVersion=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8')).version;
 export const REMOTE_INSTRUCTIONS=[
@@ -115,6 +118,10 @@ const NEW_TOOLS={
   zana_bootstrap_prepare:['Prepare an unpersisted GitHub repository creation proposal; NEVER creates a repository or grants permission',true,
     z.object({plan:z.record(z.string(),z.unknown()),owner:z.string().min(1).max(100),
       name:z.string().min(1).max(100),visibility:z.enum(['private','public']).optional()}).strict()],
+  zana_project_run_start:['Start the project milestone run once after its plan is approved and its repository exists',false,
+    z.object({workspaceId:z.string().uuid(),repo:z.string().min(3).max(201),base:z.string().min(1).max(200)}).strict()],
+  zana_project_next:['Read the project run after each merge to learn which milestone is ready next',true,
+    z.object({repo:z.string().min(3).max(201)}).strict()],
   zana_mission_init:['Create one remote mission bound to a GitHub repository and base; code units declare code:true. Returns memory: the project context to read before planning and the .zanallaima.json pointer to write first when its status is not OK',false,
     z.object({spec:z.record(z.string(),z.unknown()),github:z.object({repo:z.string().min(3).max(201),base:z.string().min(1).max(200)}).strict()}).strict()],
   zana_session_status:['Show this session (id, host, creation time, source: conversation = the ChatGPT conversation, transport = the MCP session), what the MCP client declared when connecting (name, version, capabilities such as sampling) and its role in the active mission',true,z.object({}).strict()],
@@ -365,6 +372,42 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     zana_discovery_answer:({brief,answers})=>answerDiscovery(brief,answers),
     zana_project_plan_draft:args=>draftProjectPlan(args),
     zana_bootstrap_prepare:({plan,owner,name,visibility})=>prepareBootstrap(plan,{owner,name,visibility}),
+    async zana_project_run_start({workspaceId,repo,base},session){
+      if(!repoAllowed(config,repo))throw new Error('REPO_NOT_ALLOWED: repositorio no permitido');
+      if(!validRefName(base)||base.startsWith('-'))throw new Error('INVALID_BASE: referencia base inválida');
+      const approval=await rr(db=>approvedPlan(db,{clientId:session.clientId,workspaceId}));
+      if(!approval)throw new Error('PLAN_NOT_APPROVED: el plan vigente no está aprobado');
+      const workspace=await rr(db=>getProjectWorkspace(db,{clientId:session.clientId,workspaceId}));
+      let found;try{found=await readPointer(github,repo,base);}
+      catch{throw new Error('MEMORY_UNAVAILABLE: no se pudo resolver el proyecto');}
+      return rw((db,mission)=>{
+        if(mission&&sessionReviews(db,session.sessionId,mission.id))
+          throw new Error('REVIEWER_READ_ONLY: esta sesión revisa la misión activa');
+        const {projectId,pointer}=resolveProject(db,{...found});
+        const prev=loadRun(db,projectId);
+        if(prev&&prev.ownerClient!==session.clientId)
+          throw new Error('RUN_OTHER_CLIENT: la corrida pertenece a otro cliente');
+        if(prev&&prev.planDigest===approval.planDigest&&prev.status!=='CANCELLED')
+          return {created:false,projectId,...(pointer.status!=='OK'?{pointer}:{}),run:prev};
+        if(prev?.status==='ACTIVE')throw new Error('RUN_PLAN_CHANGED: hay una corrida activa para otro plan');
+        if(prev)db.prepare('INSERT OR REPLACE INTO metadata(key,value) VALUES(?,?)')
+          .run('zana:run-prev:'+projectId,JSON.stringify(prev));
+        const next=initializeProjectRun(workspace.plan,{projectId,approvedDigest:approval.planDigest,repo:found.repo,base,
+          ownerClient:session.clientId,workspaceId,now:new Date().toISOString()});
+        const memory=saveRun(db,null,next,{secrets:secrets()});
+        return {created:true,projectId,...(pointer.status!=='OK'?{pointer}:{}),run:next,...memory};
+      });
+    },
+    zana_project_next:({repo},session)=>rr(db=>{
+      const project=db.prepare('SELECT project_id,repo FROM projects WHERE repo=? ORDER BY created_at DESC LIMIT 1').get(repo);
+      const run=project&&loadRun(db,project.project_id);
+      if(!run)throw new Error('RUN_NOT_FOUND: no existe una corrida para el repositorio');
+      if(run.ownerClient!==session.clientId)throw new Error('RUN_OTHER_CLIENT: la corrida pertenece a otro cliente');
+      return {projectId:run.projectId,repo:run.repo,base:run.base,status:run.status,revision:run.revision,
+        planDigest:run.planDigest,board:runBoard(run),milestones:run.milestones.map(m=>({id:m.id,status:m.status,
+          parts:m.parts.length,running:m.running&&{missionId:m.running.missionId,final:m.running.final},attempts:m.attempts.length})),
+        ready:readyMilestones(run),memory:memoryContext(db,run.projectId,{maxBytes:4096})};
+    }),
     zana_profile:()=>operations.profile(),
     zana_capability_status:args=>capabilityContract(args.hostReport??{}),
     async zana_mission_adopt({missionId:id},session){
@@ -500,6 +543,8 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       if(!parsed.success)throw new Error('SUMMARY_REQUIRED: zana_mission_close needs summary {done, decisions, conventions, pending, keyFiles}: '+
         parsed.error.issues.map(i=>i.path.join('.')+' '+i.message).join('; ').slice(0,200));
       const {summary}=parsed.data;
+      if(['decisions','conventions','pending'].some(k=>summary[k].some(x=>reservedTopic(x.topic))))
+        throw new Error('RESERVED_TOPIC: los temas que empiezan con hito: o proyecto: los escribe el servidor');
       const pre=await projectFor(session);
       let status,memory;
       await transact((existing,txc)=>{
@@ -688,6 +733,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       return {query,scope:scope??'all',...searchMemory(db,{query,projectId:scope,limit:Number.isInteger(limit)&&limit>=1&&limit<=50?limit:10})};
     }),
     async zana_memory_save({missionId:id,kind,topic,body},session){
+      if(reservedTopic(topic))throw new Error('RESERVED_TOPIC: los temas que empiezan con hito: o proyecto: los escribe el servidor');
       if(!NOTE_KINDS.includes(kind))throw new Error('INVALID_MEMORY_KIND: use '+NOTE_KINDS.join(', ')+' (the summary goes in zana_mission_close)');
       const pre=await projectFor(session);
       return rw((db,mission)=>{
@@ -753,7 +799,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     !(name==='zana_github_request'&&args?.method==='GET')&&
     !(name==='zana_ds_github'&&(args?.operation==='index'||CATALOG.tools[args?.operation]?.zana==='read'));
   let epochReady=false;
-  const categoryOf=name=>name==='zana_github_request'?'github_admin':/^zana_review_/.test(name)?'review':name==='zana_merge'?'merge':readOnlyTool(name)?'read':'write';
+  const categoryOf=name=>name==='zana_project_run_start'?'project_run':name==='zana_github_request'?'github_admin':/^zana_review_/.test(name)?'review':name==='zana_merge'?'merge':readOnlyTool(name)?'read':'write';
   // Every tool has a total deadline (ZANA_TOOL_DEADLINE_MS). A late operation
   // may still finish on its own; the caller is told to read state first.
   async function dispatch(name,args,session,extra){
@@ -805,10 +851,11 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         // The mission the call belongs to: named, returned, or the active one.
         const missionId=args?.missionId??data?.missionId??(await readState().catch(()=>null))?.id??null;
         const githubDetail=name==='zana_github_request'?githubAdminAudit(args,data?.status??failureStatus):null;
+        const runDetail=name==='zana_project_run_start'&&data?.memoryError?{memoryError:data.memoryError}:null;
         const auditArgs=name==='zana_panel_decide'?{panelId:args?.panelId,decision:args?.decision}:
           name==='zana_github_request'?undefined:args;
         await audit({caller:session,tool:name,missionId,outcome,args:auditArgs,category:categoryOf(name),
-          ...(githubDetail?{detail:githubDetail}:failure?{detail:{error:failure}}:{})});
+          ...(githubDetail?{detail:githubDetail}:runDetail?{detail:runDetail}:failure?{detail:{error:failure}}:{})});
       }catch(error){
         auditFailed=true;
         console.error('ZanaLLaima audit write failed:',clean(error,secrets()));

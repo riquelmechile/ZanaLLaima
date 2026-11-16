@@ -65,6 +65,11 @@ test('init: corrida activa exige hito, valida cliente, base, exclusión y no dej
     v=await f.call('zana_mission_init',{spec:f.spec,github:{repo:'o/r',base:'dev'},
       milestone:{id:'core',final:true}},f.owner);
     assert.match(v.error,/RUN_REPO_MISMATCH/);assert.equal(await count(),0);
+    const branchHead=f.runtime.github.branchHead.bind(f.runtime.github);
+    f.runtime.github.branchHead=async()=>{throw new Error('down');};
+    v=await init(f,{milestone:{id:'core',final:false}});
+    assert.match(v.error,/GITHUB_UNAVAILABLE/);assert.equal(await count(),0);
+    f.runtime.github.branchHead=branchHead;
     const m=await init(f,{milestone:{id:'core',final:false}});
     assert.equal(m.error,undefined,m.error);
     assert.deepEqual([m.run.milestoneId,m.run.final,m.run.outsidePlan],[ 'core',false,false ]);
@@ -72,6 +77,8 @@ test('init: corrida activa exige hito, valida cliente, base, exclusión y no dej
     const stored=await remoteRead(db=>loadRun(db,m.memory.projectId).milestones[0].running);
     assert.equal(stored.baseSha,sha('0'));
     assert.match(JSON.stringify(m.memory.context),/En curso/);
+    assert.equal((await f.call('zana_merge',{missionId:m.id},f.owner)).state,'NOT_READY');
+    assert.equal((await run(f)).milestones[0].status,'RUNNING');
   }finally{await f.cleanup();}
 });
 
@@ -79,6 +86,7 @@ test('init: plan externo, proyecto sin corrida y fallback cuando falla el punter
   const f=await remoteFixture();
   try{
     const s=await f.session();
+    assert.match((await init(f,{milestone:{id:'core',final:true}},s)).error,/RUN_NOT_FOUND/);
     const blocked=await init(f,{outsidePlan:'Corrección urgente fuera del plan'},s);
     assert.match(blocked.error,/RUN_NOT_FOUND/);
     const ordinary=await init(f,{},s);
@@ -94,6 +102,9 @@ test('init: plan externo, proyecto sin corrida y fallback cuando falla el punter
     const next=await run(f);
     assert.equal(next.milestones[0].status,'PENDING');
     assert.equal(await remoteRead(db=>loadRun(db,ext.memory.projectId).outsidePlan.length),1);
+    const cancelled=await f.call('zana_mission_cancel',{},f.owner);
+    assert.equal(cancelled.run,undefined);
+    assert.equal((await run(f)).milestones[0].status,'PENDING');
   }finally{await f.cleanup();}
 });
 
@@ -258,7 +269,7 @@ test('fallo al guardar liberación no revierte cancelación y queda auditado',as
     const m=await init(f,{milestone:{id:'core',final:false}});
     await remoteWrite(db=>db.exec("CREATE TRIGGER fail_run_save BEFORE INSERT ON metadata WHEN NEW.key LIKE 'zana:run:%' BEGIN SELECT RAISE(ABORT,'boom'); END"));
     const cancelled=await f.call('zana_mission_cancel',{},f.owner);
-    assert.equal(cancelled.state,'CANCELLED');
+    assert.equal(cancelled.status,'CANCELLED');
     assert.equal(cancelled.run.released,false);
     assert.ok(cancelled.run.reason);
     assert.ok((await f.runtime.readAudit({missionId:m.id,limit:100}))

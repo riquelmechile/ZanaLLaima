@@ -150,21 +150,23 @@ test('el contexto se corta a maxBytes con truncated:true, en el orden del diseñ
       saveEntry(db,{projectId,kind:'issue',topic:'bug',body:'falla'});
       const p=saveEntry(db,{projectId,kind:'pending',topic:'resuelto',body:'ya no'});
       db.prepare('UPDATE project_memory SET resolved_at=? WHERE seq=?').run('2026-01-01T00:00:00.000Z',p.seq);
-      for(let i=0;i<20;i++)saveEntry(db,{projectId,kind:'decision',topic:'d'+i,body:'x'.repeat(400)});
+      for(let i=0;i<20;i++)saveEntry(db,{projectId,kind:'decision',topic:'d'+i,body:i===19?'\u0001'.repeat(1000):'x'.repeat(12)});
     });
     const small=await remoteRead(db=>memoryContext(db,projectId));
     assert.equal(small.truncated,true);
     assert.ok(Buffer.byteLength(JSON.stringify(small))<=4096);
-    assert.equal(small.entries[0].topic,'d19');
+    assert.equal(small.entries[0].topic,'d18');
     const big=await remoteRead(db=>memoryContext(db,projectId,{maxBytes:16384}));
     assert.deepEqual([big.truncated,big.entries.length],[false,22]);
     assert.deepEqual(big.entries.slice(-2).map(e=>e.kind),['issue','summary']);
-    // El campo origin también entra en el presupuesto estricto de 4 KB.
-    assert.deepEqual(small.entries.slice(-2).map(e=>e.kind),['decision','decision']);
+    // Se omite d19 por tamaño, pero las entradas chicas posteriores sí caben tras el corte.
+    assert.deepEqual(small.entries.slice(-2).map(e=>e.kind),['issue','summary']);
     // One entry that cannot fit does not empty the context.
     await remoteWrite(db=>saveEntry(db,{projectId,kind:'convention',topic:'enorme',body:'\u0001'.repeat(1000)}));
     const odd=await remoteRead(db=>memoryContext(db,projectId));
     assert.ok(odd.entries.length>0&&!odd.entries.some(e=>e.topic==='enorme'));
+    assert.deepEqual(odd.entries.slice(-2).map(e=>e.kind),['issue','summary']);
+    assert.ok(Buffer.byteLength(JSON.stringify(odd))<=4096);
     // A long done keeps its key files.
     const long=await remoteWrite(db=>{
       saveSummary(db,{projectId,missionId:'m-long',summary:summary({done:'z'.repeat(1000),keyFiles:['src/clave.mjs']})});

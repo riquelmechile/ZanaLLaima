@@ -135,19 +135,49 @@ test('temas reservados se rechazan antes de escribir',async()=>{
   try{
     const s=await f.session(),init=await f.call('zana_mission_init',{spec:{objective:'Reserva',units:[{id:'a',effect:'READ',instruction:'Leer'}]},github:{repo:'o/r',base:'main'}},s);
     const disguised=['\u200bhito:x','\u2060hito:x','\u202ehito:x','\ufeffhito:x','hi\u200dto:x','ｈｉｔｏ:x','hito：x','\u00a0hito:x','\nhito:x','HITO:X'];
-    for(const topic of disguised)
+    const more=['proyecto:x','Proyecto:avance','hi\u0001to:x','hi\u0600to:x','\u034Fhito:x','hi\uFE0Fto:x','hi\u180Bto:x','\u3164hito:x','hi\u0301to:x','hi\u0300to:x','h\u0308ito:x','proy\u0301ecto:x','proy\u0300ecto:x','proy\u0308ecto:x'];
+    for(const topic of [...disguised,...more])
       assert.match((await f.call('zana_memory_save',{missionId:init.id,kind:'decision',topic,body:'No escribir'},s)).error,/RESERVED_TOPIC/);
+    for(const topic of ['hito 3: diseño','historia:x','hitos-del-plan'])
+      assert.equal((await f.call('zana_memory_save',{missionId:init.id,kind:'decision',topic,body:'Permitido'},s)).error,undefined,topic);
     assert.equal(await count("SELECT COUNT(*) n FROM project_memory WHERE topic LIKE 'hito:%' OR lower(topic) LIKE 'proyecto:%'"),0);
     const packet=(await f.call('zana_start_batch',{},s)).packets[0];
     await f.call('zana_complete_unit',{unitId:packet.unitId,token:packet.token,leaseGeneration:packet.leaseGeneration,
       outcome:{success:true,summary:'listo',evidence:['test']}},s);
     for(const field of ['decisions','conventions','pending']){
-      const summary={done:'Trabajo de reserva terminado',decisions:[],conventions:[],pending:[],keyFiles:[]};
-      summary[field]=[{topic:disguised[field==='decisions'?0:field==='conventions'?4:5],body:'nunca'}];
-      assert.match((await f.call('zana_mission_close',{summary},s)).error,/RESERVED_TOPIC/);
+      for(const topic of [...disguised,...more]){
+        const summary={done:'Trabajo de reserva terminado',decisions:[],conventions:[],pending:[],keyFiles:[]};
+        summary[field]=[{topic,body:'nunca'}];
+        assert.match((await f.call('zana_mission_close',{summary},s)).error,/RESERVED_TOPIC/,field+': '+JSON.stringify(topic));
+      }
     }
     const seq=await remoteWrite(db=>saveEntry(db,{projectId:init.memory.projectId,kind:'pending',topic:'hito:core',body:'servidor'}).seq);
     assert.match((await f.call('zana_memory_resolve',{missionId:init.id,seq},s)).error,/RESERVED_TOPIC/);
+  }finally{await f.cleanup();}
+});
+
+test('el cierre atribuye summary, decisions, conventions y pending a la sesión en contexto y búsqueda',async()=>{
+  const f=await remoteFixture();
+  try{
+    const s=await f.session();
+    const init=await f.call('zana_mission_init',{spec:{objective:'Origen de cierre',units:[{id:'a',effect:'READ',instruction:'Leer'}]},github:{repo:'o/r',base:'main'}},s);
+    const packet=(await f.call('zana_start_batch',{},s)).packets[0];
+    await f.call('zana_complete_unit',{unitId:packet.unitId,token:packet.token,leaseGeneration:packet.leaseGeneration,
+      outcome:{success:true,summary:'unidad completada',evidence:['test']}},s);
+    const summary={done:'Cierre con sello de auditoría del origen de las entradas',
+      decisions:[{topic:'eleccion-sello',body:'sello decisión'}],
+      conventions:[{topic:'convencion-sello',body:'sello convención'}],
+      pending:[{topic:'pendiente-sello',body:'sello pendiente'}],keyFiles:[]};
+    const closed=await f.call('zana_mission_close',{summary},s);
+    assert.equal(closed.memory.saved,4);
+    const projectId=init.memory.projectId;
+    const sources=[['memoryContext',(await f.call('zana_memory_context',{projectId},s)).entries],
+      ['zana_memory_search',(await f.call('zana_memory_search',{query:'sello',projectId},s)).entries]];
+    for(const [label,entries] of sources){
+      const saved=entries.filter(e=>e.missionId===init.id);
+      assert.deepEqual(saved.map(e=>e.kind).sort(),['convention','decision','pending','summary'],label);
+      assert.ok(saved.every(e=>e.origin==='session'),label+' debe marcar las cuatro entradas origin:session');
+    }
   }finally{await f.cleanup();}
 });
 

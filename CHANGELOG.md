@@ -2,6 +2,8 @@
 
 ## [Sin publicar]
 
+- La memoria de proyectos endurece `reservedTopic` frente a marcas Unicode e invisibles y conserva los registros posteriores al recorte estricto de 4 KB, con origen de sesión en contexto y búsqueda.
+
 - La memoria distingue `origin: server|session` y `zana_project_next` informa `memoryStale` mientras una proyección esté pendiente.
 
 - La corrida aprobada de hitos ya se persiste, proyecta a memoria y expone el siguiente hito; `RESERVED_TOPIC` protege `hito:`/`proyecto:` y el primer inicio retira entradas previas de esos espacios.

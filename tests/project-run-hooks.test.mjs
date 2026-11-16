@@ -8,7 +8,7 @@ import {claimMilestone,completePart} from '../src/project-orchestrator.mjs';
 
 const gh={repo:'o/r',base:'main'};
 const lenses=['risk','readability','reliability','resilience'];
-const summary={done:'Hito integrado',decisions:[],conventions:[],pending:[],keyFiles:['src/x.mjs']};
+const summary={done:'Hito integrado y revisado correctamente',decisions:[],conventions:[],pending:[],keyFiles:['src/x.mjs']};
 const count=()=>remoteRead(db=>db.prepare('SELECT COUNT(*) n FROM remote_missions').get().n);
 const run=f=>f.call('zana_project_next',{repo:'o/r'},f.owner);
 async function setup(f){
@@ -25,7 +25,9 @@ async function setup(f){
 }
 const init=(f,extra={},s=f.owner)=>f.call('zana_mission_init',{spec:f.spec,github:gh,...extra},s);
 async function approvedMerge(f,mission,pr=7,commit='a',options={}){
-  const s=f.owner,packet=(await f.call('zana_start_batch',{},s)).packets[0];
+  const s=f.owner,batch=await f.call('zana_start_batch',{},s);
+  assert.equal(batch.error,undefined,batch.error);
+  const packet=batch.packets[0];
   f.api.state.push(mission.github.branch,sha(commit));
   f.api.state.green(sha(commit));f.api.state.openPull(mission.github.branch,pr);
   const done=await f.call('zana_complete_unit',{unitId:packet.unitId,token:packet.token,
@@ -105,9 +107,14 @@ test('merge: parcial, cierre final, memoria retirada, reintento y recuperación'
     assert.match(JSON.stringify(next.memory),/Parcial/);
     const again=await f.call('zana_merge',{missionId:m.id},f.owner);
     assert.equal(again.run.already,true,again.error);
-    await f.call('zana_mission_close',{summary},f.owner);
-    await f.call('zana_mission_archive',{},f.owner);
+    const closed=await f.call('zana_mission_close',{summary},f.owner);
+    assert.equal(closed.error,undefined,closed.error);
+    const archived=await f.call('zana_mission_archive',{},f.owner);
+    assert.equal(archived.error,undefined,archived.error);
     m=await init(f,{milestone:{id:'core',final:true}});
+    assert.equal(m.error,undefined,m.error);
+    const secondMerge=f.runtime.github.merge.bind(f.runtime.github);
+    f.runtime.github.merge=async(...args)=>({...await secondMerge(...args),sha:sha('8')});
     merged=await approvedMerge(f,m,8,'b');
     assert.equal(merged.state,'MERGED',merged.error);
     assert.deepEqual([merged.run.status,merged.run.runStatus],['DONE','READY_TO_DELIVER']);
@@ -163,10 +170,17 @@ test('cancel: libera hito, registra intento/rondas; revisora no puede cancelar n
   const f=await remoteFixture();
   try{
     const start=await setup(f),m=await init(f,{milestone:{id:'core',final:false}});
-    const reviewer=await f.session();
+    const packet=(await f.call('zana_start_batch',{},f.owner)).packets[0];
+    f.api.state.push(m.github.branch,sha('a'));
+    f.api.state.green(sha('a'));f.api.state.openPull(m.github.branch);
+    assert.equal((await f.call('zana_complete_unit',{unitId:packet.unitId,token:packet.token,
+      leaseGeneration:packet.leaseGeneration,outcome:{success:true,summary:'código',evidence:['CI verde']}},f.owner)).error,undefined);
     const req=await f.call('zana_review_request',{missionId:m.id},f.owner);
-    // La revisora debe reclamar un ticket de una misión con código completado.
-    assert.ok(req.error);
+    assert.equal(req.error,undefined,req.error);
+    const reviewer=await f.session();
+    assert.equal((await f.call('zana_review_claim',{ticket:req.ticket},reviewer)).error,undefined);
+    assert.match((await f.call('zana_mission_cancel',{},reviewer)).error,/REVIEWER_READ_ONLY/);
+    assert.equal((await f.call('zana_session_status',{},reviewer)).writerMarked,false);
     const cancel=await f.call('zana_mission_cancel',{},f.owner);
     assert.ok(cancel.run,'Falta campo run en cancelación');
     assert.equal(cancel.run.released,true,cancel.error);

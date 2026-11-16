@@ -4,7 +4,7 @@ import {remoteFixture} from './helpers/remote-fixture.mjs';
 import {makePlan} from './helpers/plan-fixture.mjs';
 import {remoteRead,remoteWrite} from '../src/store.mjs';
 import {loadRun,saveRun,applyRunMemory} from '../src/project-run-store.mjs';
-import {saveEntry} from '../src/project-memory.mjs';
+import {saveEntry,reservedTopic} from '../src/project-memory.mjs';
 
 const answers={goal:'Gestionar hitos',users:'Equipos',platform:'Web',features:'Planes',data:'Sin secretos'};
 async function workspace(f,s,objective='Modelo'){
@@ -117,4 +117,9 @@ test('una sesión revisora no puede iniciar la corrida',async()=>{
     const reviewer=await f.session();await f.call('zana_review_claim',{ticket:requested.ticket},reviewer);
     assert.match((await f.call('zana_project_run_start',{workspaceId:w.workspaceId,repo:'o/r',base:'main'},reviewer)).error,/REVIEWER_READ_ONLY/);
   }finally{await f.cleanup();}
+});
+
+test('los temas reservados normalizan Unicode antes de comparar',()=>{
+  for(const topic of ['\u200bhito:x','hi\u200dto:x','ｈｉｔｏ：x'])
+    assert.equal(reservedTopic(topic),true,topic);
 });

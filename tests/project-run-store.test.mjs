@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import {remoteFixture} from './helpers/remote-fixture.mjs';
 import {makePlan} from './helpers/plan-fixture.mjs';
 import {remoteRead,remoteWrite} from '../src/store.mjs';
-import {loadRun,saveRun,applyRunMemory} from '../src/project-run-store.mjs';
+import {loadRun,saveRun,applyRunMemory,retireRunMemory} from '../src/project-run-store.mjs';
 import {saveEntry,reservedTopic} from '../src/project-memory.mjs';
+import {claimMilestone,cancelProjectRun} from '../src/project-orchestrator.mjs';
 
 const answers={goal:'Gestionar hitos',users:'Equipos',platform:'Web',features:'Planes',data:'Sin secretos'};
 async function workspace(f,s,objective='Modelo'){
@@ -41,12 +42,14 @@ test('run_start exige aprobación, crea memoria, es idempotente y next no marca 
     await approve(f,s,w);
     const first=await f.call('zana_project_run_start',{workspaceId:w.workspaceId,repo:'o/r',base:'main'},s);
     assert.deepEqual([first.created,first.run.revision,first.run.milestones.every(m=>m.status==='PENDING')],[true,0,true]);
-    assert.ok(first.pointer.content);
-    assert.equal(first.saved>0,true);
+    assert.ok(first.pointer.content);assert.equal(first.saved>0,true);
+    const audit=await remoteRead(db=>db.prepare("SELECT category,detail FROM remote_audit WHERE tool='zana_project_run_start' AND outcome='OK' ORDER BY seq DESC LIMIT 1").get());
+    assert.equal(audit.category,'project_run');assert.deepEqual(JSON.parse(audit.detail),{created:true,projectId:first.projectId,memoryError:null,memoryRepaired:false});
     const before=await count('SELECT COUNT(*) n FROM project_memory');
     const again=await f.call('zana_project_run_start',{workspaceId:w.workspaceId,repo:'o/r',base:'main'},s);
-    assert.deepEqual([again.created,again.run.revision,await count('SELECT COUNT(*) n FROM project_memory')],[false,0,before]);
-    const reader=await f.session(),next=await f.call('zana_project_next',{repo:'o/r'},reader);
+    assert.deepEqual([again.created,again.run.revision,await count('SELECT COUNT(*) n FROM project_memory')],[false,0,before]);assert.ok(again.pointer);
+    assert.match((await f.call('zana_project_run_start',{workspaceId:w.workspaceId,repo:'o/r',base:'develop'},s)).error,/RUN_BASE_CHANGED.*main/);
+    const reader=await f.session(),next=await f.call('zana_project_next',{repo:'O/R'},reader);
     assert.deepEqual([next.ready[0].id,next.memory.entries[0].topic],['core','proyecto:avance']);
     assert.equal(await count("SELECT COUNT(*) n FROM metadata WHERE key=?", 'zana:session-writer:'+reader.sessionId),0);
     const changed=await f.call('zana_workspace_update',{workspaceId:w.workspaceId,expectedVersion:w.version,plan:makePlan(w.brief,'Otro modelo')},s);
@@ -54,6 +57,7 @@ test('run_start exige aprobación, crea memoria, es idempotente y next no marca 
     assert.match((await f.call('zana_project_run_start',{workspaceId:w.workspaceId,repo:'o/r',base:'main'},s)).error,/RUN_PLAN_CHANGED/);
     const other=await f.session('zana-chatgpt','otro-cliente');
     assert.match((await f.call('zana_project_next',{repo:'o/r'},other)).error,/RUN_OTHER_CLIENT/);
+    const otherW=await workspace(f,other);await approve(f,other,otherW);assert.match((await f.call('zana_project_run_start',{workspaceId:otherW.workspaceId,repo:'o/r',base:'main'},other)).error,/RUN_OTHER_CLIENT/);
   }finally{await f.cleanup();}
 });
 
@@ -80,14 +84,33 @@ test('store controla revisión, conserva corrida si falla memoria y retira por p
       const run=loadRun(db,started.projectId),bad=structuredClone(run);bad.revision=2;
       assert.throws(()=>saveRun(db,run,bad),/STALE_REVISION/);
       const invalid=structuredClone(run);invalid.status='ROTO';assert.throws(()=>saveRun(db,run,invalid),/INVALID_PROJECT/);
+      const moved=structuredClone(run);moved.projectId='zp_'+'b'.repeat(16);moved.revision=1;assert.throws(()=>saveRun(db,run,moved),/STALE_REVISION/);
+      db.prepare("INSERT INTO metadata(key,value) VALUES(?,?)").run('zana:run:zp_'+'c'.repeat(16),JSON.stringify(invalid));
+      assert.throws(()=>loadRun(db,'zp_'+'c'.repeat(16)),/RUN_CORRUPT/);
       for(const topic of ['hito:x','hito_x','hito%'])saveEntry(db,{projectId:run.projectId,kind:'issue',topic,body:'basura'});
+      db.prepare('INSERT INTO projects(project_id,github_repo_id,repo,created_at) VALUES(?,?,?,?)').run('zp_'+'d'.repeat(16),999,'x/y',new Date().toISOString());
+      saveEntry(db,{projectId:'zp_'+'d'.repeat(16),kind:'issue',topic:'hito:x',body:'otro'});
+      saveEntry(db,{projectId:run.projectId,kind:'issue',topic:'pre_fijo',body:'literal'});
+      assert.equal(retireRunMemory(db,run.projectId,{kind:'issue',prefix:'pre_'}),1);
+      saveEntry(db,{projectId:run.projectId,kind:'issue',topic:'prefijo',body:'no like'});
+      assert.equal(retireRunMemory(db,run.projectId,{kind:'issue',prefix:'pre_'}),0);
+      const superseded=saveEntry(db,{projectId:run.projectId,kind:'issue',topic:'hito:historial',body:'vieja'}).seq;
+      saveEntry(db,{projectId:run.projectId,kind:'issue',topic:'hito:historial',body:'vigente'});
+      const resolved=saveEntry(db,{projectId:run.projectId,kind:'issue',topic:'hito:resuelto',body:'cerrada'}).seq;
+      const at=new Date().toISOString();db.prepare('UPDATE project_memory SET resolved_at=? WHERE seq=?').run(at,resolved);
       applyRunMemory(db,run.projectId,null,run);
       const rows=db.prepare("SELECT topic,resolved_at FROM project_memory WHERE kind='issue'").all();
       assert.equal(rows.find(x=>x.topic==='hito:x').resolved_at!==null,true);
-      assert.equal(rows.filter(x=>x.topic!=='hito:x').every(x=>x.resolved_at===null),true);
-      db.exec("CREATE TRIGGER bloquea_memoria BEFORE INSERT ON project_memory BEGIN SELECT RAISE(ABORT,'x'); END");
-      const next=structuredClone(run);next.revision=1;next.updatedAt=new Date(Date.parse(run.updatedAt)+1).toISOString();
-      const saved=saveRun(db,run,next);assert.match(saved.memoryError,/MEMORY_UNAVAILABLE/);
+      assert.equal(rows.filter(x=>['hito_x','hito%'].includes(x.topic)).every(x=>x.resolved_at===null),true);
+      assert.equal(db.prepare("SELECT resolved_at FROM project_memory WHERE project_id=? AND topic='hito:x'").get('zp_'+'d'.repeat(16)).resolved_at,null);
+      assert.equal(db.prepare('SELECT resolved_at FROM project_memory WHERE seq=?').get(superseded).resolved_at,null);
+      assert.equal(db.prepare('SELECT resolved_at FROM project_memory WHERE seq=?').get(resolved).resolved_at,at);
+      const tagged=applyRunMemory(db,run.projectId,null,run,{missionId:'mission-fallback'});
+      assert.ok(tagged.saved);assert.ok(db.prepare("SELECT 1 FROM project_memory WHERE project_id=? AND mission_id='mission-fallback'").get(run.projectId));
+      db.exec("CREATE TRIGGER bloquea_memoria BEFORE INSERT ON project_memory WHEN NEW.kind='pending' BEGIN SELECT RAISE(ABORT,'x'); END");
+      const next=claimMilestone(run,{expectedRevision:0,milestoneId:'core',missionId:'mission-claim',final:true,baseSha:'a'.repeat(40),now:new Date(Date.parse(run.updatedAt)+1).toISOString()});
+      const beforeRows=db.prepare('SELECT COUNT(*) n FROM project_memory').get().n,saved=saveRun(db,run,next);
+      assert.match(saved.memoryError,/MEMORY_UNAVAILABLE/);assert.equal(db.prepare('SELECT COUNT(*) n FROM project_memory').get().n,beforeRows);
       assert.equal(loadRun(db,run.projectId).revision,1);
     });
   }finally{await f.cleanup();}
@@ -97,14 +120,20 @@ test('temas reservados se rechazan antes de escribir',async()=>{
   const f=await remoteFixture();
   try{
     const s=await f.session(),init=await f.call('zana_mission_init',{spec:{objective:'Reserva',units:[{id:'a',effect:'READ',instruction:'Leer'}]},github:{repo:'o/r',base:'main'}},s);
-    for(const topic of ['hito:x','Proyecto:avance',' hito:y'])
+    const disguised=['\u200bhito:x','\u2060hito:x','\u202ehito:x','\ufeffhito:x','hi\u200dto:x','ｈｉｔｏ:x','hito：x','\u00a0hito:x','\nhito:x','HITO:X'];
+    for(const topic of disguised)
       assert.match((await f.call('zana_memory_save',{missionId:init.id,kind:'decision',topic,body:'No escribir'},s)).error,/RESERVED_TOPIC/);
     assert.equal(await count("SELECT COUNT(*) n FROM project_memory WHERE topic LIKE 'hito:%' OR lower(topic) LIKE 'proyecto:%'"),0);
     const packet=(await f.call('zana_start_batch',{},s)).packets[0];
     await f.call('zana_complete_unit',{unitId:packet.unitId,token:packet.token,leaseGeneration:packet.leaseGeneration,
       outcome:{success:true,summary:'listo',evidence:['test']}},s);
-    const summary={done:'Trabajo de reserva terminado',decisions:[{topic:'proyecto:x',body:'nunca'}],conventions:[],pending:[],keyFiles:[]};
-    assert.match((await f.call('zana_mission_close',{summary},s)).error,/RESERVED_TOPIC/);
+    for(const field of ['decisions','conventions','pending']){
+      const summary={done:'Trabajo de reserva terminado',decisions:[],conventions:[],pending:[],keyFiles:[]};
+      summary[field]=[{topic:disguised[field==='decisions'?0:field==='conventions'?4:5],body:'nunca'}];
+      assert.match((await f.call('zana_mission_close',{summary},s)).error,/RESERVED_TOPIC/);
+    }
+    const seq=await remoteWrite(db=>saveEntry(db,{projectId:init.memory.projectId,kind:'pending',topic:'hito:core',body:'servidor'}).seq);
+    assert.match((await f.call('zana_memory_resolve',{missionId:init.id,seq},s)).error,/RESERVED_TOPIC/);
   }finally{await f.cleanup();}
 });
 
@@ -116,10 +145,56 @@ test('una sesión revisora no puede iniciar la corrida',async()=>{
     const requested=await f.call('zana_review_request',{missionId:ready.missionId},ready.author);
     const reviewer=await f.session();await f.call('zana_review_claim',{ticket:requested.ticket},reviewer);
     assert.match((await f.call('zana_project_run_start',{workspaceId:w.workspaceId,repo:'o/r',base:'main'},reviewer)).error,/REVIEWER_READ_ONLY/);
+    assert.equal((await f.call('zana_session_status',{},reviewer)).writerMarked,false);
   }finally{await f.cleanup();}
 });
 
 test('los temas reservados normalizan Unicode antes de comparar',()=>{
   for(const topic of ['\u200bhito:x','hi\u200dto:x','ｈｉｔｏ：x'])
     assert.equal(reservedTopic(topic),true,topic);
+});
+
+test('run_start repara memoria pendiente sin cambiar revisión',async()=>{
+  const f=await remoteFixture();
+  try{
+    const s=await f.session(),w=await workspace(f,s);await approve(f,s,w);
+    await remoteWrite(db=>db.exec("CREATE TRIGGER falla_proyeccion BEFORE INSERT ON project_memory BEGIN SELECT RAISE(ABORT,'x'); END"));
+    const first=await f.call('zana_project_run_start',{workspaceId:w.workspaceId,repo:'o/r',base:'release'},s);
+    assert.match(first.memoryError,/MEMORY_UNAVAILABLE/);assert.equal(first.run.revision,0);
+    const detail=await remoteRead(db=>db.prepare("SELECT detail FROM remote_audit WHERE tool='zana_project_run_start' ORDER BY seq DESC LIMIT 1").get().detail);
+    assert.match(JSON.parse(detail).memoryError,/MEMORY_UNAVAILABLE/);
+    await remoteWrite(db=>db.exec('DROP TRIGGER falla_proyeccion'));
+    const retry=await f.call('zana_project_run_start',{workspaceId:w.workspaceId,repo:'o/r',base:'release'},s);
+    assert.deepEqual([retry.created,retry.memoryRepaired,retry.run.revision],[false,true,0]);
+    assert.equal((await f.call('zana_project_next',{repo:'o/r'},s)).memory.entries[0].topic,'proyecto:avance');
+    assert.ok(f.api.state.requests.some(x=>x.path.includes('/contents/.zanallaima.json')&&x.search.includes('ref=release')));
+  }finally{await f.cleanup();}
+});
+
+test('corrida cancelada se reemplaza y conserva el estado previo',async()=>{
+  const f=await remoteFixture();
+  try{
+    const s=await f.session(),w=await workspace(f,s);await approve(f,s,w);
+    const first=await f.call('zana_project_run_start',{workspaceId:w.workspaceId,repo:'o/r',base:'main'},s);
+    await remoteWrite(db=>{const run=loadRun(db,first.projectId),cancel=cancelProjectRun(run,{expectedRevision:0,reason:'Cambio solicitado',now:new Date(Date.parse(run.updatedAt)+1).toISOString()});db.prepare('UPDATE metadata SET value=? WHERE key=?').run(JSON.stringify(cancel),'zana:run:'+run.projectId);});
+    const next=await f.call('zana_project_run_start',{workspaceId:w.workspaceId,repo:'o/r',base:'main'},s);
+    assert.equal(next.created,true);assert.equal(next.run.revision,0);
+    assert.equal(await count("SELECT COUNT(*) n FROM metadata WHERE key=?", 'zana:run-prev:'+first.projectId),1);
+  }finally{await f.cleanup();}
+});
+
+test('next elige el proyecto más reciente y limita la memoria a 4096 bytes',async()=>{
+  const f=await remoteFixture();
+  try{
+    const s=await f.session(),w=await workspace(f,s);await approve(f,s,w);
+    const first=await f.call('zana_project_run_start',{workspaceId:w.workspaceId,repo:'o/r',base:'main'},s),second='zp_'+'e'.repeat(16);
+    await remoteWrite(db=>{
+      db.prepare('INSERT INTO projects(project_id,github_repo_id,repo,created_at) VALUES(?,?,?,?)').run(second,999,'o/r','2099-01-01T00:00:00.000Z');
+      const run=structuredClone(loadRun(db,first.projectId));run.projectId=second;saveRun(db,null,run);
+      for(let i=0;i<20;i++)saveEntry(db,{projectId:second,kind:'decision',topic:'larga-'+i,body:'x'.repeat(1000)});
+    });
+    const next=await f.call('zana_project_next',{repo:'O/R'},s);
+    assert.equal(next.projectId,second);assert.equal(next.memory.truncated,true);
+    assert.ok(Buffer.byteLength(JSON.stringify(next.memory))<=4096);
+  }finally{await f.cleanup();}
 });

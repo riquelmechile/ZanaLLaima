@@ -2,7 +2,7 @@
 
 ## [Sin publicar]
 
-- La corrida aprobada de hitos ya se persiste, proyecta a memoria y expone el siguiente hito desde el servidor remoto.
+- La corrida aprobada de hitos ya se persiste, proyecta a memoria y expone el siguiente hito; `RESERVED_TOPIC` protege `hito:`/`proyecto:` y el primer inicio retira entradas previas de esos espacios.
 
 - Seguimiento 4R #77: restore y adopción invalidan la excepción del monitor (época monótona), `SESSION_WROTE_ELSEWHERE` bloquea toda sesión escritora, diagnóstico de sesión, clasificación correcta de auditoría y regresiones sin skips.
 

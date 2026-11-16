@@ -43,7 +43,7 @@ import {closeMission} from './lifecycle.mjs';
 import {readPointer,resolveProject,memoryContext,missionProject,setMissionProject,saveSummary,saveEntry,searchMemory,reservedTopic} from './project-memory.mjs';
 import {initializeProjectRun,readyMilestones} from './project-orchestrator.mjs';
 import {runBoard} from './project-run-memory.mjs';
-import {loadRun,saveRun} from './project-run-store.mjs';
+import {loadRun,saveRun,repairRunMemory} from './project-run-store.mjs';
 
 const packageVersion=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8')).version;
 export const REMOTE_INSTRUCTIONS=[
@@ -387,8 +387,11 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         const prev=loadRun(db,projectId);
         if(prev&&prev.ownerClient!==session.clientId)
           throw new Error('RUN_OTHER_CLIENT: la corrida pertenece a otro cliente');
-        if(prev&&prev.planDigest===approval.planDigest&&prev.status!=='CANCELLED')
-          return {created:false,projectId,...(pointer.status!=='OK'?{pointer}:{}),run:prev};
+        if(prev&&prev.planDigest===approval.planDigest&&prev.status!=='CANCELLED'){
+          if(prev.base!==base)throw new Error('RUN_BASE_CHANGED: la corrida vigente usa la rama '+prev.base);
+          const repair=repairRunMemory(db,prev,{secrets:secrets()});
+          return {created:false,projectId,...(pointer.status!=='OK'?{pointer}:{}),run:prev,...repair};
+        }
         if(prev?.status==='ACTIVE')throw new Error('RUN_PLAN_CHANGED: hay una corrida activa para otro plan');
         if(prev)db.prepare('INSERT OR REPLACE INTO metadata(key,value) VALUES(?,?)')
           .run('zana:run-prev:'+projectId,JSON.stringify(prev));
@@ -399,7 +402,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       });
     },
     zana_project_next:({repo},session)=>rr(db=>{
-      const project=db.prepare('SELECT project_id,repo FROM projects WHERE repo=? ORDER BY created_at DESC LIMIT 1').get(repo);
+      const project=db.prepare('SELECT project_id,repo FROM projects WHERE repo=? COLLATE NOCASE ORDER BY created_at DESC LIMIT 1').get(repo);
       const run=project&&loadRun(db,project.project_id);
       if(!run)throw new Error('RUN_NOT_FOUND: no existe una corrida para el repositorio');
       if(run.ownerClient!==session.clientId)throw new Error('RUN_OTHER_CLIENT: la corrida pertenece a otro cliente');
@@ -750,6 +753,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       const project=missionProject(db,id);
       const row=db.prepare('SELECT * FROM project_memory WHERE seq=? AND project_id=?').get(seq,project);
       if(row?.kind!=='pending'||row.superseded_by)throw new Error('NOT_PENDING: '+seq+' is not a live pending entry of the project of mission '+id);
+      if(reservedTopic(row.topic))throw new Error('RESERVED_TOPIC: los temas que empiezan con hito: o proyecto: los escribe el servidor');
       const resolvedAt=row.resolved_at??nowIso();
       db.prepare('UPDATE project_memory SET resolved_at=? WHERE seq=?').run(resolvedAt,seq);
       return {missionId:id,projectId:project,seq,resolvedAt};
@@ -790,7 +794,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
   const REVIEW_TOOLS=new Set(['zana_review_claim','zana_review_diff','zana_review_lens_submit','zana_review_finalize']);
   const guardedWrites=new Set([...REUSED.filter(name=>!readOnlyTool(name)),
     'zana_mission_adopt','zana_checks_start','zana_review_request','zana_merge',
-    'zana_memory_save','zana_memory_resolve','zana_github_request',
+    'zana_memory_save','zana_memory_resolve','zana_project_run_start','zana_github_request',
     'zana_mission_close','zana_mission_archive','zana_correction_start','zana_session_rebind','zana_budget_extend']);
   // Toda tool declarada no-lectura (incluidas las reutilizadas y el router downstream)
   // marca ANTES del efecto. Excepciones: las cuatro tools revisoras y GitHub GET.
@@ -851,7 +855,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         // The mission the call belongs to: named, returned, or the active one.
         const missionId=args?.missionId??data?.missionId??(await readState().catch(()=>null))?.id??null;
         const githubDetail=name==='zana_github_request'?githubAdminAudit(args,data?.status??failureStatus):null;
-        const runDetail=name==='zana_project_run_start'&&data?.memoryError?{memoryError:data.memoryError}:null;
+        const runDetail=name==='zana_project_run_start'&&data?{created:data.created,projectId:data.projectId,memoryError:data.memoryError??null,memoryRepaired:data.memoryRepaired??false}:null;
         const auditArgs=name==='zana_panel_decide'?{panelId:args?.panelId,decision:args?.decision}:
           name==='zana_github_request'?undefined:args;
         await audit({caller:session,tool:name,missionId,outcome,args:auditArgs,category:categoryOf(name),

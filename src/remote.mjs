@@ -511,7 +511,8 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
           'SELECT project_id FROM projects WHERE repo=? COLLATE NOCASE ORDER BY created_at DESC LIMIT 1').get(target.repo)?.project_id;
         const run=projectId?loadRun(ctx.db,projectId):null;
         if(projectId&&!resolved&&run?.status==='ACTIVE')setMissionProject(ctx.db,m.id,projectId);
-        if((milestone||outsidePlan!==undefined)&&run?.status!=='ACTIVE')throw new Error((run?'RUN_NOT_ACTIVE':'RUN_NOT_FOUND')+': no hay corrida activa');
+        if(milestone&&run?.status!=='ACTIVE')throw new Error((run?'RUN_NOT_ACTIVE':'RUN_NOT_FOUND')+': no hay corrida activa');
+        if(outsidePlan!==undefined&&run?.status!=='ACTIVE')throw new Error('RUN_NOT_FOUND: no hay corrida activa para outsidePlan');
         if(run?.status==='ACTIVE'){
           if(run.ownerClient!==session.clientId)throw new Error('RUN_OTHER_CLIENT: la corrida pertenece a otro cliente');
           if(run.repo.toLowerCase()!==target.repo.toLowerCase()||run.base!==target.base)
@@ -522,22 +523,23 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
           const next=milestone?claimMilestone(run,{milestoneId:milestone.id,missionId:m.id,final:milestone.final,
             baseSha,now:new Date().toISOString()}):recordOutsidePlan(run,{missionId:m.id,reason:outsidePlan,now:new Date().toISOString()});
           const saved=saveRun(ctx.db,run,next,{missionId:m.id,secrets:secrets()});
-          runInfo={projectId,milestoneId:milestone?.id??null,final:milestone?.final??null,
+          const transition=milestone?'CLAIM':'OUTSIDE_PLAN',milestoneId=milestone?.id??null;
+          runInfo={projectId,milestoneId,final:milestone?.final??null,
             outsidePlan:!milestone,revision:next.revision,...(saved.memoryError?{memoryError:saved.memoryError}:{})};
-          writeAudit(ctx.db,{caller:session,tool:'zana_mission_init.run',missionId:m.id,category:'project_run',
-            outcome:'OK',detail:{projectId,milestoneId:milestone?.id??null,transition:milestone?'claim':'outsidePlan'}});
+          writeAudit(ctx.db,{caller:session,tool:'zana_mission_init.run',missionId:m.id,
+            category:'project_run',outcome:'SUCCESS',detail:{projectId,milestoneId,transition}});
           if(saved.memoryError)writeAudit(ctx.db,{caller:session,tool:'zana_mission_init.run',missionId:m.id,
-            category:'project_run',outcome:'ERROR',detail:{code:saved.memoryError.split(':')[0]}});
+            category:'project_run',outcome:'ERROR',detail:{projectId,milestoneId,code:'MEMORY_UNAVAILABLE'}});
         }
-        if(projectId&&(resolved||runInfo))try{
+        if(projectId&&(resolved||runInfo)){
+          // La memoria nunca bloquea la creación de la misión.
           ctx.db.exec('SAVEPOINT memory_context');
-          memory={projectId,...(resolved?{pointer:resolved.pointer}:{}),
+          try{memory={projectId,...(resolved?{pointer:resolved.pointer}:{}),
             context:memoryContext(ctx.db,projectId,{maxBytes:4096}),...(memory?.error?{error:memory.error}:{})};
-          ctx.db.exec('RELEASE memory_context');
-        }catch(error){
-          if(!ctx.db.isTransaction)throw error;
-          ctx.db.exec('ROLLBACK TO memory_context');ctx.db.exec('RELEASE memory_context');
-          memory={projectId,error:'MEMORY_UNAVAILABLE: '+clean(error,secrets())};
+            ctx.db.exec('RELEASE memory_context');
+          }catch(error){if(!ctx.db.isTransaction)throw error;
+            ctx.db.exec('ROLLBACK TO memory_context');ctx.db.exec('RELEASE memory_context');
+            memory={projectId,error:'MEMORY_UNAVAILABLE: '+clean(error,secrets())};}
         }
         recordActivity(ctx.db,{sessionId:session.sessionId,clientId:session.clientId,missionId:m.id,kind:'MISSION_WRITE',tool:'zana_mission_init'});
         return m;
@@ -589,11 +591,12 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       await transact((mission,ctx)=>{
         guard(ctx.db,mission,session,'zana_mission_cancel');
         status=cancelMission(mission);
-        const pid=missionProject(ctx.db,mission.id),run=pid&&loadRun(ctx.db,pid);
-        const hito=run?.status==='ACTIVE'&&run.milestones.find(x=>x.running?.missionId.toLowerCase()===mission.id.toLowerCase());
-        if(hito){
-          ctx.db.exec('SAVEPOINT release_run');
-          try{
+        const pid=missionProject(ctx.db,mission.id);
+        ctx.db.exec('SAVEPOINT release_run');
+        try{
+          const run=pid&&loadRun(ctx.db,pid);
+          const hito=run?.status==='ACTIVE'&&run.milestones.find(x=>x.running?.missionId.toLowerCase()===mission.id.toLowerCase());
+          if(hito){
             const ticket=ctx.db.prepare('SELECT pr_number FROM review_tickets WHERE mission_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1').get(mission.id);
             const motivo=(mission.reviewCount||0)>=budgetOf(mission).maxReviewRounds
               ?'REVIEW_ROUNDS_EXHAUSTED: Misión cancelada por rondas de revisión agotadas':'Misión cancelada';
@@ -602,18 +605,18 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
             runInfo={released:true,milestoneId:hito.id,status:next.milestones.find(x=>x.id===hito.id).status,
               ...(saved.memoryError?{memoryError:saved.memoryError}:{})};
             writeAudit(ctx.db,{caller:session,tool:'zana_mission_cancel.run',missionId:mission.id,
-              category:'project_run',outcome:'OK',detail:{projectId:pid,milestoneId:hito.id,transition:'release'}});
+              category:'project_run',outcome:'SUCCESS',detail:{projectId:pid,milestoneId:hito.id,transition:'RELEASE'}});
             if(saved.memoryError)writeAudit(ctx.db,{caller:session,tool:'zana_mission_cancel.run',missionId:mission.id,
-              category:'project_run',outcome:'ERROR',detail:{code:saved.memoryError.split(':')[0]}});
-            ctx.db.exec('RELEASE release_run');
-          }catch(error){
+              category:'project_run',outcome:'ERROR',detail:{projectId:pid,milestoneId:hito.id,code:'MEMORY_UNAVAILABLE'}});
+          }
+          ctx.db.exec('RELEASE release_run');
+        }catch(error){
             if(!ctx.db.isTransaction)throw error;
             ctx.db.exec('ROLLBACK TO release_run');ctx.db.exec('RELEASE release_run');
             const code=String(error.message).split(':')[0];
             runInfo={released:false,reason:code};
             writeAudit(ctx.db,{caller:session,tool:'zana_mission_cancel.run',missionId:mission.id,
-              category:'project_run',outcome:'ERROR',detail:{code}});
-          }
+              category:'project_run',outcome:'ERROR',detail:{projectId:pid,code}});
         }
         return mission;
       });
@@ -795,42 +798,44 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
           detail:{error:clean(error,secrets())},category:'merge'});
         throw error;
       }
-      await audit({caller:session,tool:'zana_merge.result',missionId:id,outcome:result.state,args:{missionId:id},
+      try{await audit({caller:session,tool:'zana_merge.result',missionId:id,outcome:result.state,args:{missionId:id},
         detail:{headSha:result.headSha??null,mergeCommitSha:result.mergeCommitSha??null,method:result.method??null,
-          recovered:result.recovered??false},category:'merge'});
-      let runInfo;
+          recovered:result.recovered??false},category:'merge'});}catch(error){if(result.state!=='MERGED')throw error;}
+      let pid=null,runInfo;
       try{
-        const pid=await rr(db=>missionProject(db,id));
-        const stored=pid&&await rr(db=>loadRun(db,pid));
-        const already=stored?.milestones.find(x=>x.parts.some(p=>p.missionId.toLowerCase()===id.toLowerCase()));
-        if(already)return {...result,run:{recorded:true,already:true}};
-        if(result.state!=='MERGED'||!stored?.milestones.some(x=>x.running?.missionId.toLowerCase()===id.toLowerCase()))
-          return result;
-        let mergeCommitSha=result.mergeCommitSha;
-        if(!mergeCommitSha)try{mergeCommitSha=(await github.pull(ctx.repo,result.pullNumber)).merge_commit_sha;}catch{}
-        if(!mergeCommitSha)throw new Error('MERGE_SHA_UNKNOWN');
-        runInfo=await rw(db=>{
-          const run=loadRun(db,pid);
-          const done=run.milestones.find(x=>x.parts.some(p=>p.missionId.toLowerCase()===id.toLowerCase()));
-          if(done)return {recorded:true,already:true};
-          const hito=run.milestones.find(x=>x.running?.missionId.toLowerCase()===id.toLowerCase());
-          if(!hito)return {recorded:false,reason:'MILESTONE_NOT_RUNNING'};
-          // mergeMission ya exigió CI verde en headSha exacto, 4R y aprobación independiente.
-          const next=completePart(run,{missionId:id,prNumber:result.pullNumber,headSha:result.headSha,
-            mergeCommitSha,evidence:{sha:result.headSha,ci:'SUCCESS',review:'APPROVED',merged:true,mergeCommitSha},
-            now:new Date().toISOString()});
-          const saved=saveRun(db,run,next,{missionId:id,secrets:secrets()});
-          return {recorded:true,milestoneId:hito.id,status:next.milestones.find(x=>x.id===hito.id).status,
-            runStatus:next.status,...(saved.memoryError?{memoryError:saved.memoryError}:{})};
-        });
-        await audit({caller:session,tool:'zana_merge.run',missionId:id,category:'project_run',
-          outcome:'OK',detail:{projectId:pid,milestoneId:runInfo.milestoneId,transition:'part'}});
-        if(runInfo.memoryError)await audit({caller:session,tool:'zana_merge.run',missionId:id,
-          category:'project_run',outcome:'ERROR',detail:{code:runInfo.memoryError.split(':')[0]}});
+      pid=await rr(db=>missionProject(db,id));
+      const stored=pid&&await rr(db=>loadRun(db,pid));
+      const already=stored?.milestones.find(x=>x.parts.some(p=>p.missionId.toLowerCase()===id.toLowerCase()));
+      if(already)return {...result,run:{recorded:true,already:true}};
+      if(result.state!=='MERGED'||!stored?.milestones.some(x=>x.running?.missionId.toLowerCase()===id.toLowerCase()))
+        return result;
+      let mergeCommitSha=result.mergeCommitSha;
+      if(!mergeCommitSha)try{mergeCommitSha=(await github.pull(ctx.repo,result.pullNumber)).merge_commit_sha;}catch{}
+      if(!mergeCommitSha)throw new Error('MERGE_SHA_UNKNOWN');
+      runInfo=await rw(db=>{
+        const run=loadRun(db,pid);
+        const done=run.milestones.find(x=>x.parts.some(p=>p.missionId.toLowerCase()===id.toLowerCase()));
+        if(done)return {recorded:true,already:true};
+        const hito=run.milestones.find(x=>x.running?.missionId.toLowerCase()===id.toLowerCase());
+        if(!hito)return {recorded:false,reason:'MILESTONE_NOT_RUNNING'};
+        // mergeMission ya exigió CI verde en headSha exacto, 4R y aprobación independiente.
+        const next=completePart(run,{missionId:id,prNumber:result.pullNumber,headSha:result.headSha,
+          mergeCommitSha,evidence:{sha:result.headSha,ci:'SUCCESS',review:'APPROVED',merged:true,mergeCommitSha},
+          now:new Date().toISOString()});
+        const saved=saveRun(db,run,next,{missionId:id,secrets:secrets()});
+        const status=next.milestones.find(x=>x.id===hito.id).status;
+        writeAudit(db,{caller:session,tool:'zana_merge.run',missionId:id,
+          category:'project_run',outcome:'SUCCESS',detail:{projectId:pid,milestoneId:hito.id,transition:status}});
+        if(saved.memoryError)writeAudit(db,{caller:session,tool:'zana_merge.run',missionId:id,
+          category:'project_run',outcome:'ERROR',detail:{projectId:pid,milestoneId:hito.id,code:'MEMORY_UNAVAILABLE'}});
+        return {recorded:true,milestoneId:hito.id,status,runStatus:next.status,
+          ...(saved.memoryError?{memoryError:saved.memoryError}:{})};
+      });
+      if(runInfo.recorded===false)throw new Error(runInfo.reason);
       }catch(error){
         const code=String(error.message).split(':')[0];
         await audit({caller:session,tool:'zana_merge.run',missionId:id,category:'project_run',
-          outcome:'ERROR',detail:{code}});
+          outcome:'ERROR',detail:{projectId:pid,code}}).catch(()=>{});
         runInfo={recorded:false,reason:code};
       }
       return {...result,run:runInfo};
@@ -908,8 +913,8 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
   const readOnlyTool=name=>Boolean(NEW_TOOLS[name]?.[1]??TOOL_DESCRIPTIONS[name]?.[2]);
   const REVIEW_TOOLS=new Set(['zana_review_claim','zana_review_diff','zana_review_lens_submit','zana_review_finalize']);
   const guardedWrites=new Set([...REUSED.filter(name=>!readOnlyTool(name)),
-    'zana_mission_init','zana_mission_adopt','zana_checks_start','zana_review_request','zana_merge',
-    'zana_memory_save','zana_memory_resolve','zana_project_run_start','zana_github_request',
+    'zana_mission_adopt','zana_checks_start','zana_review_request','zana_merge',
+    'zana_memory_save','zana_memory_resolve','zana_project_run_start','zana_github_request','zana_mission_init',
     'zana_mission_close','zana_mission_archive','zana_correction_start','zana_session_rebind','zana_budget_extend']);
   // Toda tool declarada no-lectura (incluidas las reutilizadas y el router downstream)
   // marca ANTES del efecto. Excepciones: las cuatro tools revisoras y GitHub GET.
@@ -935,6 +940,13 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
           throw new Error('GITHUB_FULL_ACCESS_DISABLED: habilítalo en el servidor');
         const protectedWrite=guardedWrites.has(name)||(name==='zana_ds_github'&&
           CATALOG.tools[args?.operation]?.zana==='write');
+        if(name==='zana_mission_init'&&(args?.milestone||args?.outsidePlan!==undefined)){
+          const run=await rr(db=>{const row=db.prepare('SELECT project_id FROM projects WHERE repo=? COLLATE NOCASE ORDER BY created_at DESC LIMIT 1').get(args?.github?.repo);
+            return row&&loadRun(db,row.project_id);});
+          if(run?.status==='ACTIVE'&&run.ownerClient!==session.clientId)
+            throw new Error('RUN_OTHER_CLIENT: la corrida pertenece a otro cliente');
+          if(run?.status!=='ACTIVE')throw new Error((run?'RUN_NOT_ACTIVE':'RUN_NOT_FOUND')+': no hay corrida activa');
+        }
         const id=args?.missionId??(await rr((db,mission)=>mission?.id??null));
         const rejected=protectedWrite&&await rr((db,mission)=>Boolean(db&&(
           (id&&sessionReviews(db,session.sessionId,id))||
@@ -948,11 +960,6 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
               classify(CATALOG.tools[args.operation]),ms:0,error,policy:null},
             category:'refused'});
           throw new Error(error);
-        }
-        if(name==='zana_mission_init'){
-          const foreign=await rr(db=>{const p=db.prepare('SELECT project_id FROM projects WHERE repo=? COLLATE NOCASE ORDER BY created_at DESC LIMIT 1').get(args?.github?.repo);
-            const run=p&&loadRun(db,p.project_id);return run?.status==='ACTIVE'&&run.ownerClient!==session.clientId;});
-          if(foreign)throw new Error('RUN_OTHER_CLIENT: la corrida pertenece a otro cliente');
         }
         await rw(db=>markSessionWriter(db,session.sessionId));
       }

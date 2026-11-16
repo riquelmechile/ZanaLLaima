@@ -4,6 +4,7 @@ import {remoteFixture,readDiff,sha} from './helpers/remote-fixture.mjs';
 import {makePlan} from './helpers/plan-fixture.mjs';
 import {remoteRead,remoteWrite,transact} from '../src/store.mjs';
 import {loadRun,saveRun} from '../src/project-run-store.mjs';
+import {claimMilestone,recordOutsidePlan,cancelProjectRun} from '../src/project-orchestrator.mjs';
 
 const gh={repo:'o/r',base:'main'};
 const lenses=['risk','readability','reliability','resilience'];
@@ -58,27 +59,18 @@ test('init: corrida activa exige hito, valida cliente, base, exclusión y no dej
     assert.match(v.error,/MILESTONE_NOT_READY/);assert.equal(await count(),0);
     v=await init(f,{milestone:{id:'core',final:true},outsidePlan:'Trabajo adicional documentado'});
     assert.match(v.error,/INVALID_ARGUMENTS/);assert.equal(await count(),0);
-    const otro=await f.session('zana-chatgpt','otro');
-    v=await init(f,{outsidePlan:'Trabajo adicional documentado'},otro);
+    v=await init(f,{outsidePlan:'Trabajo adicional documentado'},await f.session('zana-chatgpt','otro'));
     assert.match(v.error,/RUN_OTHER_CLIENT/);assert.equal(await count(),0);
-    assert.equal((await f.call('zana_session_status',{},otro)).writerMarked,false);
     v=await f.call('zana_mission_init',{spec:f.spec,github:{repo:'o/r',base:'dev'},
       milestone:{id:'core',final:true}},f.owner);
     assert.match(v.error,/RUN_REPO_MISMATCH/);assert.equal(await count(),0);
-    const branchHead=f.runtime.github.branchHead.bind(f.runtime.github);
-    f.runtime.github.branchHead=async()=>{throw new Error('down');};
-    v=await init(f,{milestone:{id:'core',final:false}});
-    assert.match(v.error,/GITHUB_UNAVAILABLE/);assert.equal(await count(),0);
-    f.runtime.github.branchHead=branchHead;
     const m=await init(f,{milestone:{id:'core',final:false}});
     assert.equal(m.error,undefined,m.error);
     assert.deepEqual([m.run.milestoneId,m.run.final,m.run.outsidePlan],[ 'core',false,false ]);
     assert.equal((await run(f)).milestones[0].status,'RUNNING');
     const stored=await remoteRead(db=>loadRun(db,m.memory.projectId).milestones[0].running);
     assert.equal(stored.baseSha,sha('0'));
-    assert.match(JSON.stringify(m.memory.context),/En curso/);
-    assert.equal((await f.call('zana_merge',{missionId:m.id},f.owner)).state,'NOT_READY');
-    assert.equal((await run(f)).milestones[0].status,'RUNNING');
+    assert.match(m.memory.context.entries.find(x=>x.topic==='hito:core')?.body??'',/En curso/);
   }finally{await f.cleanup();}
 });
 
@@ -86,9 +78,6 @@ test('init: plan externo, proyecto sin corrida y fallback cuando falla el punter
   const f=await remoteFixture();
   try{
     const s=await f.session();
-    assert.match((await init(f,{milestone:{id:'core',final:true}},s)).error,/RUN_NOT_FOUND/);
-    const blocked=await init(f,{outsidePlan:'Corrección urgente fuera del plan'},s);
-    assert.match(blocked.error,/RUN_NOT_FOUND/);
     const ordinary=await init(f,{},s);
     assert.equal(ordinary.error,undefined,ordinary.error);
     await f.call('zana_mission_cancel',{},s);
@@ -99,12 +88,10 @@ test('init: plan externo, proyecto sin corrida y fallback cuando falla el punter
     const ext=await init(f,{outsidePlan:'Corrección urgente fuera del plan'});
     assert.equal(ext.error,undefined,ext.error);
     assert.equal(ext.run.outsidePlan,true);
+    assert.ok((await f.runtime.readAudit({missionId:ext.id,limit:100})).some(x=>x.category==='project_run'&&JSON.stringify(x).includes('OUTSIDE_PLAN')));
     const next=await run(f);
     assert.equal(next.milestones[0].status,'PENDING');
     assert.equal(await remoteRead(db=>loadRun(db,ext.memory.projectId).outsidePlan.length),1);
-    const cancelled=await f.call('zana_mission_cancel',{},f.owner);
-    assert.equal(cancelled.run,undefined);
-    assert.equal((await run(f)).milestones[0].status,'PENDING');
   }finally{await f.cleanup();}
 });
 
@@ -118,7 +105,7 @@ test('merge: parcial, cierre final, memoria retirada, reintento y recuperación'
     assert.ok(merged.run,'Falta integración de merge en corrida');
     assert.deepEqual([merged.run.recorded,merged.run.status],[true,'PARTIAL']);
     let next=await run(f);assert.equal(next.milestones[0].status,'PARTIAL');
-    assert.match(JSON.stringify(next.memory),/Parcial/);
+    assert.match(next.memory.entries.find(x=>x.topic==='hito:core')?.body??'',/Parcial/);
     const again=await f.call('zana_merge',{missionId:m.id},f.owner);
     assert.equal(again.run.already,true,again.error);
     const closed=await f.call('zana_mission_close',{summary},f.owner);
@@ -173,6 +160,7 @@ test('merge: SHA recuperable, ausencia de SHA y fallo de la máquina no invalida
       else {
         assert.equal(merged.run.recorded,false);
         assert.equal(merged.run.reason,scenario==='missing'?'MERGE_SHA_UNKNOWN':'DUPLICATE_PR');
+        if(scenario==='missing')assert.ok((await f.runtime.readAudit({missionId:m.id,limit:100})).some(x=>x.category==='project_run'&&JSON.stringify(x).includes('MERGE_SHA_UNKNOWN')));
         if(scenario==='duplicate')assert.ok((await f.runtime.readAudit({missionId:m.id,limit:100}))
           .some(x=>x.category==='project_run'&&JSON.stringify(x).includes('DUPLICATE_PR')));
       }
@@ -194,8 +182,7 @@ test('cancel: libera hito, registra intento/rondas; revisora no puede cancelar n
     const reviewer=await f.session();
     assert.equal((await f.call('zana_review_claim',{ticket:req.ticket},reviewer)).error,undefined);
     assert.match((await f.call('zana_mission_cancel',{},reviewer)).error,/REVIEWER_READ_ONLY/);
-    assert.equal((await f.call('zana_session_status',{},reviewer)).writerMarked,false);
-    assert.match((await init(f,{outsidePlan:'Trabajo revisor prohibido'},reviewer)).error,/REVIEWER_READ_ONLY/);
+    assert.match((await init(f,{milestone:{id:'core',final:true}},reviewer)).error,/REVIEWER_READ_ONLY/);
     assert.equal((await f.call('zana_session_status',{},reviewer)).writerMarked,false);
     const cancel=await f.call('zana_mission_cancel',{},f.owner);
     assert.ok(cancel.run,'Falta campo run en cancelación');
@@ -209,9 +196,9 @@ test('cancel: libera hito, registra intento/rondas; revisora no puede cancelar n
     await transact(mission=>{mission.reviewCount=mission.budget.maxReviewRounds;return mission;});
     const closed=await f.call('zana_mission_cancel',{},f.owner);
     assert.equal(closed.run.released,true,closed.error);
+    assert.match(JSON.stringify(await remoteRead(db=>loadRun(db,start.projectId).milestones[0].attempts)),/rondas de revisión agotadas/);
     assert.match(JSON.stringify(await remoteRead(db=>loadRun(db,start.projectId).milestones[0].attempts)),/REVIEW_ROUNDS_EXHAUSTED/);
-    assert.equal(second.error,undefined,second.error);assert.equal(second.run.milestoneId,'core');
-    assert.ok(reviewer.sessionId);
+    assert.equal(second.error,undefined,second.error);assert.equal(second.run.milestoneId,'core');assert.equal(second.run.final,true);assert.ok(reviewer.sessionId);
   }finally{await f.cleanup();}
 });
 
@@ -229,50 +216,137 @@ test('marca dirty: claim repara proyección, sin reescribir memoria de sesión',
   }finally{await f.cleanup();}
 });
 
-test('merge ya ejecutado conserva MERGED si la corrida queda corrupta y audita project_run',async()=>{
+test('merge exitoso con RUN_CORRUPT conserva resultado y deja auditoría project_run',async()=>{
   const f=await remoteFixture();
   try{
     const started=await setup(f),m=await init(f,{milestone:{id:'core',final:true}});
     const merge=f.runtime.github.merge.bind(f.runtime.github);
-    f.runtime.github.merge=async(...args)=>{
-      const result=await merge(...args);
-      await remoteWrite(db=>db.prepare('UPDATE metadata SET value=? WHERE key=?')
-        .run('{corrupto','zana:run:'+started.projectId));
-      return result;
-    };
-    const got=await approvedMerge(f,m);
-    assert.equal(got.state,'MERGED',got.error);
-    assert.equal(got.run.recorded,false);
-    assert.equal(got.run.reason,'RUN_CORRUPT');
+    f.runtime.github.merge=async(...args)=>{const result=await merge(...args);
+      await remoteWrite(db=>db.prepare('UPDATE metadata SET value=? WHERE key=?').run('{corrupt','zana:run:'+started.projectId));
+      return result;};
+    const result=await approvedMerge(f,m);
+    assert.equal(result.error,undefined);assert.equal(result.state,'MERGED');
+    assert.equal(result.merged,true);assert.deepEqual(result.run,{recorded:false,reason:'RUN_CORRUPT'});
     assert.ok((await f.runtime.readAudit({missionId:m.id,limit:100}))
       .some(x=>x.category==='project_run'&&JSON.stringify(x).includes('RUN_CORRUPT')));
   }finally{await f.cleanup();}
 });
 
-test('éxitos de corrida y memoryError quedan visibles y auditados',async()=>{
+test('auditoría project_run en claim, outsidePlan, parte y liberación; memoria de saveRun visible',async()=>{
   const f=await remoteFixture();
   try{
     await setup(f);
-    await remoteWrite(db=>db.exec("CREATE TRIGGER fail_run_memory BEFORE INSERT ON project_memory BEGIN SELECT RAISE(ABORT,'boom'); END"));
-    const m=await init(f,{milestone:{id:'core',final:true}});
-    assert.match(m.run.memoryError,/MEMORY_UNAVAILABLE/);
-    const rows=await f.runtime.readAudit({missionId:m.id,limit:100});
-    assert.ok(rows.some(x=>x.category==='project_run'&&JSON.stringify(x).includes('claim')));
-    assert.ok(rows.some(x=>x.category==='project_run'&&JSON.stringify(x).includes('MEMORY_UNAVAILABLE')));
+    let m=await init(f,{milestone:{id:'core',final:false}});
+    assert.ok((await f.runtime.readAudit({missionId:m.id,limit:100}))
+      .some(x=>x.category==='project_run'&&JSON.stringify(x).includes('core')));
+    await approvedMerge(f,m);
+    assert.ok((await f.runtime.readAudit({missionId:m.id,limit:100}))
+      .some(x=>x.category==='project_run'&&JSON.stringify(x).includes('PARTIAL')));
+    await f.call('zana_mission_close',{summary},f.owner);
+    await f.call('zana_mission_archive',{},f.owner);
+    m=await init(f,{milestone:{id:'core',final:true}});
+    assert.equal(m.error,undefined);
+    await remoteWrite(db=>db.exec("CREATE TRIGGER reject_run_memory BEFORE INSERT ON project_memory BEGIN SELECT RAISE(ABORT,'NO_MEMORY'); END"));
+    const cancelled=await f.call('zana_mission_cancel',{},f.owner);
+    assert.equal(cancelled.run.released,true,cancelled.error);
+    assert.match(cancelled.run.memoryError,/MEMORY_UNAVAILABLE/);
+    assert.ok((await f.runtime.readAudit({missionId:m.id,limit:100}))
+      .some(x=>x.category==='project_run'&&JSON.stringify(x).includes('MEMORY_UNAVAILABLE')));
   }finally{await f.cleanup();}
 });
 
-test('fallo al guardar liberación no revierte cancelación y queda auditado',async()=>{
+test('init: rechazos no marcan escritora, carrera relee corrida y valida entrada',async()=>{
+  const f=await remoteFixture();
+  try{
+    const outside=await f.session();
+    assert.match((await init(f,{milestone:{id:'core',final:true}},outside)).error,/RUN_NOT_FOUND/);
+    assert.match((await init(f,{outsidePlan:'Trabajo legítimo sin corrida'},outside)).error,/RUN_NOT_FOUND/);
+    assert.equal((await f.call('zana_session_status',{},outside)).writerMarked,false);
+    const started=await setup(f),intruder=await f.session('zana-chatgpt','other-client');
+    assert.match((await init(f,{milestone:{id:'core',final:true}},intruder)).error,/RUN_OTHER_CLIENT/);
+    assert.equal((await f.call('zana_session_status',{},intruder)).writerMarked,false);
+    assert.match((await init(f,{outsidePlan:'Trabajo excepcional válido'},intruder)).error,/RUN_OTHER_CLIENT/);
+    assert.equal((await f.call('zana_session_status',{},intruder)).writerMarked,false);
+    assert.match((await init(f,{milestone:{id:'CORE',final:true}})).error,/invalid|regex|format/i);
+    assert.match((await init(f,{milestone:{id:'a'.repeat(49),final:true}})).error,/INVALID_ID|large|long|max|48/i);
+    const original=f.runtime.github.branchHead.bind(f.runtime.github);
+    let triggered=false;
+    f.runtime.github.branchHead=async(...args)=>{if(!triggered){triggered=true;
+      await remoteWrite(db=>{const r=loadRun(db,started.projectId);
+        saveRun(db,r,recordOutsidePlan(r,{missionId:'another-task',reason:'Trabajo adicional simultáneo',now:new Date().toISOString()}));});
+    }return original(...args);};
+    const claim=await init(f,{milestone:{id:'core',final:true}});
+    assert.equal(claim.error,undefined,claim.error);
+    assert.equal((await remoteRead(db=>loadRun(db,started.projectId))).outsidePlan.length,1);
+    assert.equal((await remoteRead(db=>loadRun(db,started.projectId))).revision,2);
+  }finally{await f.cleanup();}
+});
+
+test('outsidePlan no modifica el hito RUNNING de otra misión en merge ni cancel',async()=>{
+  for(const operation of ['merge','cancel']){
+    const f=await remoteFixture();
+    try{
+      const started=await setup(f),m=await init(f,{outsidePlan:'Corrección documentada fuera del plan'});
+      await remoteWrite(db=>{const r=loadRun(db,started.projectId);
+        saveRun(db,r,claimMilestone(r,{missionId:'other-task',milestoneId:'core',final:true,baseSha:sha('0'),now:new Date().toISOString()}));});
+      const result=operation==='merge'?await approvedMerge(f,m):await f.call('zana_mission_cancel',{},f.owner);
+      assert.equal(result.error,undefined,result.error);
+      assert.equal(result.run,undefined);
+      const runNow=await remoteRead(db=>loadRun(db,started.projectId));
+      assert.equal(runNow.milestones[0].running.missionId,'other-task');
+      assert.equal(runNow.milestones[0].status,'RUNNING');
+    }finally{await f.cleanup();}
+  }
+});
+
+test('no-merge no altera hito; falla branchHead no crea misión',async()=>{
   const f=await remoteFixture();
   try{
     await setup(f);
-    const m=await init(f,{milestone:{id:'core',final:false}});
-    await remoteWrite(db=>db.exec("CREATE TRIGGER fail_run_save BEFORE INSERT ON metadata WHEN NEW.key LIKE 'zana:run:%' BEGIN SELECT RAISE(ABORT,'boom'); END"));
-    const cancelled=await f.call('zana_mission_cancel',{},f.owner);
-    assert.equal(cancelled.status,'CANCELLED');
-    assert.equal(cancelled.run.released,false);
-    assert.ok(cancelled.run.reason);
-    assert.ok((await f.runtime.readAudit({missionId:m.id,limit:100}))
-      .some(x=>x.category==='project_run'&&x.outcome==='ERROR'));
+    const branch=f.runtime.github.branchHead.bind(f.runtime.github);
+    f.runtime.github.branchHead=async()=>{throw new Error('unavailable');};
+    assert.match((await init(f,{milestone:{id:'core',final:true}})).error,/GITHUB_UNAVAILABLE/);
+    assert.equal(await count(),0);
+    f.runtime.github.branchHead=branch;
+    const m=await init(f,{milestone:{id:'core',final:true}});
+    const before=await run(f);
+    const rejected=await f.call('zana_merge',{missionId:m.id},f.owner);
+    assert.ok(rejected.error||rejected.state!=='MERGED');
+    const after=await run(f);
+    assert.equal(after.revision,before.revision);
+    assert.equal(after.milestones[0].status,'RUNNING');
   }finally{await f.cleanup();}
+});
+
+test('cancel mantiene misión CANCELLED aun si falla releaseMilestone',async()=>{
+  const f=await remoteFixture();
+  try{
+    const started=await setup(f),m=await init(f,{milestone:{id:'core',final:true}});
+    await remoteWrite(db=>{const r=loadRun(db,started.projectId);
+      saveRun(db,r,recordOutsidePlan(r,{missionId:'time-shift',reason:'Cambio temporal intencional',now:'2099-01-01T00:00:00.000Z'}));});
+    const result=await f.call('zana_mission_cancel',{},f.owner);
+    assert.equal(result.error,undefined,result.error);
+    assert.equal(result.status,'CANCELLED');
+    assert.deepEqual(result.run,{released:false,reason:'INVALID_TIME'});
+    assert.ok((await f.runtime.readAudit({missionId:m.id,limit:100}))
+      .some(x=>x.category==='project_run'&&JSON.stringify(x).includes('INVALID_TIME')));
+  }finally{await f.cleanup();}
+});
+
+test('corrida cancelada rechaza milestone; SHA obsoleto no registra parte',async()=>{
+  const f=await remoteFixture();
+  try{
+    const started=await setup(f);
+    await remoteWrite(db=>{const r=loadRun(db,started.projectId);saveRun(db,r,cancelProjectRun(r,{reason:'Cancelar la corrida para validar init',now:new Date().toISOString()}));});
+    assert.match((await init(f,{milestone:{id:'core',final:true}})).error,/RUN_NOT_ACTIVE/);
+  }finally{await f.cleanup();}
+  const g=await remoteFixture();
+  try{
+    await setup(g);const m=await init(g,{milestone:{id:'core',final:true}}),before=await run(g);
+    g.runtime.github.merge=async()=>{const e=new Error('head SHA modified');e.status=409;throw e;};
+    const merged=await approvedMerge(g,m);
+    assert.equal(merged.state,'STALE_SHA');assert.equal(merged.merged,false);
+    assert.equal((await run(g)).revision,before.revision);
+    assert.equal((await run(g)).milestones[0].status,'RUNNING');
+  }finally{await g.cleanup();}
 });

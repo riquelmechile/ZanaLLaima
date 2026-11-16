@@ -135,7 +135,7 @@ test('temas reservados se rechazan antes de escribir',async()=>{
   try{
     const s=await f.session(),init=await f.call('zana_mission_init',{spec:{objective:'Reserva',units:[{id:'a',effect:'READ',instruction:'Leer'}]},github:{repo:'o/r',base:'main'}},s);
     const disguised=['\u200bhito:x','\u2060hito:x','\u202ehito:x','\ufeffhito:x','hi\u200dto:x','ｈｉｔｏ:x','hito：x','\u00a0hito:x','\nhito:x','HITO:X'];
-    const more=['proyecto:x','Proyecto:avance','hi\u0001to:x','\u034Fhito:x','hi\uFE0Fto:x','hi\u180Bto:x','\u3164hito:x','hi\u0301to:x','hi\u0300to:x','h\u0308ito:x','proy\u0301ecto:x','proy\u0300ecto:x','proy\u0308ecto:x'];
+    const more=['proyecto:x','Proyecto:avance','hi\u0001to:x','hi\u0600to:x','\u034Fhito:x','hi\uFE0Fto:x','hi\u180Bto:x','\u3164hito:x','hi\u0301to:x','hi\u0300to:x','h\u0308ito:x','proy\u0301ecto:x','proy\u0300ecto:x','proy\u0308ecto:x'];
     for(const topic of [...disguised,...more])
       assert.match((await f.call('zana_memory_save',{missionId:init.id,kind:'decision',topic,body:'No escribir'},s)).error,/RESERVED_TOPIC/);
     for(const topic of ['hito 3: diseño','historia:x','hitos-del-plan'])

@@ -595,4 +595,504 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
           ctx.db.exec('SAVEPOINT release_run');
           try{
             const ticket=ctx.db.prepare('SELECT pr_number FROM review_tickets WHERE mission_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1').get(mission.id);
-       
+            const motivo=(mission.reviewCount||0)>=budgetOf(mission).maxReviewRounds
+              ?'REVIEW_ROUNDS_EXHAUSTED: Misión cancelada por rondas de revisión agotadas':'Misión cancelada';
+            const next=releaseMilestone(run,{missionId:mission.id,reason:motivo,prNumber:ticket?.pr_number??null,now:new Date().toISOString()});
+            const saved=saveRun(ctx.db,run,next,{missionId:mission.id,secrets:secrets()});
+            runInfo={released:true,milestoneId:hito.id,status:next.milestones.find(x=>x.id===hito.id).status,
+              ...(saved.memoryError?{memoryError:saved.memoryError}:{})};
+            writeAudit(ctx.db,{caller:session,tool:'zana_mission_cancel.run',missionId:mission.id,
+              category:'project_run',outcome:'OK',detail:{projectId:pid,milestoneId:hito.id,transition:'release'}});
+            if(saved.memoryError)writeAudit(ctx.db,{caller:session,tool:'zana_mission_cancel.run',missionId:mission.id,
+              category:'project_run',outcome:'ERROR',detail:{code:saved.memoryError.split(':')[0]}});
+            ctx.db.exec('RELEASE release_run');
+          }catch(error){
+            if(!ctx.db.isTransaction)throw error;
+            ctx.db.exec('ROLLBACK TO release_run');ctx.db.exec('RELEASE release_run');
+            const code=String(error.message).split(':')[0];
+            runInfo={released:false,reason:code};
+            writeAudit(ctx.db,{caller:session,tool:'zana_mission_cancel.run',missionId:mission.id,
+              category:'project_run',outcome:'ERROR',detail:{code}});
+          }
+        }
+        return mission;
+      });
+      return {...status,...(runInfo?{run:runInfo}:{})};
+    },
+    // Summary first (dispatch does not validate schemas), then the project:
+    // a mission created without one (0.6.0 or a GitHub failure) resolves it now.
+    async zana_mission_close(args,session){
+      const parsed=CLOSE_SCHEMA.safeParse(args);
+      if(!parsed.success)throw new Error('SUMMARY_REQUIRED: zana_mission_close needs summary {done, decisions, conventions, pending, keyFiles}: '+
+        parsed.error.issues.map(i=>i.path.join('.')+' '+i.message).join('; ').slice(0,200));
+      const {summary}=parsed.data;
+      if(['decisions','conventions','pending'].some(k=>summary[k].some(x=>reservedTopic(x.topic))))
+        throw new Error('RESERVED_TOPIC: los temas que empiezan con hito: o proyecto: los escribe el servidor');
+      const pre=await projectFor(session);
+      let status,memory;
+      await transact((existing,txc)=>{
+        guard(txc.db,existing,session,'zana_mission_close');
+        const {projectId,pointer}=projectIn(txc.db,existing,pre);
+        status=closeMission(existing);
+        const sha=txc.db.prepare('SELECT sha FROM review_tickets WHERE mission_id=? ORDER BY created_at DESC LIMIT 1').get(existing.id)?.sha??null;
+        memory={...saveSummary(txc.db,{projectId,missionId:existing.id,summary,sha,sessionId:session.sessionId,secrets:secrets()}),
+          ...(pointer?{pointer}:{})};
+        return existing;
+      });
+      return {...status,memory};
+    },
+    async zana_mission_archive(args,session){
+      await rr((db,mission)=>{
+        allow(db,mission,session);
+        if(!['CLOSED','CANCELLED'].includes(mission.status))
+          throw new Error('MISSION_NOT_FINISHED: archive needs a CLOSED or CANCELLED mission (it is '+mission.status+')');
+      });
+      return operations.archive();
+    },
+    // Add one PENDING code unit after a REQUEST_CHANGES review. It consumes
+    // the normal budget when started (maxWorkStarts, maxUnitAttempts) and the
+    // next ticket consumes a review round (maxReviewRounds).
+    async zana_correction_start({missionId:id},session){
+      // Only the unit id comes from this read; the authoritative check runs
+      // inside the mission transaction below.
+      const last=await review.latest(id);
+      if(!last)throw new Error('NO_CHANGES_REQUESTED: mission '+id+' has no review ticket');
+      const unitId='fix-'+last.ticket_id.slice(0,8);
+      let added;
+      await transact((existing,txc)=>{
+        if(existing?.id!==id)throw new Error('MISSION_NOT_ACTIVE: mission '+id+' is not the active mission');
+        guard(txc.db,existing,session,'zana_correction_start');
+        // Revalidate inside the mission transaction: the pre-check above ran
+        // before it, and a newer ticket may have appeared meanwhile (TOCTOU).
+        const now=review.latestIn(txc.db,id);
+        if(now?.ticket_id!==last.ticket_id||now.state!=='FINALIZED'||now.verdict!=='REQUEST_CHANGES')
+          throw new Error('NO_CHANGES_REQUESTED: the latest ticket of mission '+id+' changed and did not end in REQUEST_CHANGES');
+        if((existing.status||'ACTIVE')!=='ACTIVE')throw new Error('MISSION_NOT_ACTIVE: mission '+id+' is '+existing.status);
+        if(!remoteMission(txc.db,id).codeUnits.length)throw new Error('NO_CODE_UNITS: mission '+id+' has no code units to correct');
+        if(existing.units.some(u=>u.id===unitId))throw new Error('CORRECTION_EXISTS: unit '+unitId+' already corrects that review');
+        if((existing.reviewCount||0)>=budgetOf(existing).maxReviewRounds)
+          throw new Error('REVIEW_ROUNDS_EXHAUSTED: no review round left for a corrected candidate');
+        if(remainingStarts(existing)<=0)throw new Error('Mission work-start budget exhausted');
+        if(existing.units.length>=100)throw new Error('Mission already has 100 units');
+        existing.units.push({id:unitId,instruction:'Corregir los hallazgos BLOCKER/CRITICAL que no sean PREEXISTING de la review del ticket '+last.ticket_id+
+          ' (SHA '+last.sha+') en la rama de la misión: zana_start_batch → escribir → zana_checks_* hasta verde → zana_complete_unit → zana_review_request (ticket nuevo).',
+          effect:'READ',dependsOn:[],paths:[],status:'PENDING',attempts:0,run:null,result:null});
+        existing.revision++;
+        const rm=remoteMission(txc.db,id);
+        txc.db.prepare('UPDATE remote_missions SET code_units=? WHERE mission_id=?').run(JSON.stringify([...rm.codeUnits,unitId]),id);
+        added=existing;
+        return existing;
+      });
+      let measured=null;
+      try{measured=JSON.parse(last.line_budget);}catch{measured=null;}
+      const maxLines=Number.isSafeInteger(measured?.lines)&&Array.isArray(measured.touched)&&!measured.truncated?correctionLimit(measured.lines):null;
+      return {missionId:id,unitId,correctsTicket:last.ticket_id,sha:last.sha,mission:publicStatus(added),
+        correctionBudget:{files:'los archivos del PR y tests',prFiles:maxLines===null?null:measured.touched.slice(0,100),maxLines,
+          ...(maxLines===null?{unmeasured:'el ticket no guardó la medida del PR: zana_review_request responde CORRECTION_UNMEASURED'}:{})},
+        next:'zana_start_batch → write on the mission branch (only the PR files and tests, at most correctionBudget.maxLines lines) → zana_checks_start/zana_checks_status until green → zana_complete_unit → zana_review_request'};
+    },
+    // Move a RUNNING unit to this session (after a restart or a new MCP
+    // session) without consuming an attempt. The new session counts as a
+    // holder of the unit: it can never claim a ticket of this mission.
+    async zana_session_rebind({missionId:id,unitId,token,leaseGeneration},session){
+      let packet;
+      await transact((existing,txc)=>{
+        if(existing?.id!==id)throw new Error('MISSION_NOT_ACTIVE: mission '+id+' is not the active mission');
+        guard(txc.db,existing,session,'zana_session_rebind','UNIT_REBIND');
+        const unit=existing.units.find(u=>u.id===unitId);
+        if(unit?.status!=='RUNNING'||unit.run?.token!==token||unit.run?.leaseGeneration!==leaseGeneration)
+          throw new Error('Invalid or stale run token');
+        if(!(Date.parse(unit.run.expiresAt)>Date.now()))throw new Error('Lease expired; reconciliation required');
+        unit.run.previousSessionId=unit.run.sessionId??null;
+        unit.run.sessionId=session.sessionId;unit.run.host=session.host;
+        existing.revision++;
+        packet={missionId:id,unitId,leaseGeneration,expiresAt:unit.run.expiresAt,previousSessionId:unit.run.previousSessionId};
+        return existing;
+      });
+      return {...packet,rebound:true,attempts:'unchanged'};
+    },
+    zana_session_status:(args,session,extra)=>rr((db,mission)=>({
+      ...reviewerMonitorStatus(db,session.sessionId),
+      session:{id:session.sessionId,host:session.host,createdAt:session.createdAt,source:session.source??'transport'},
+      client:extra?.client??null,
+      activeMission:mission&&db?{id:mission.id,remote:remoteMission(db,mission.id),
+        wrote:sessionWrote(db,session.sessionId,mission.id),reviewer:sessionReviews(db,session.sessionId,mission.id)}:null,
+      note:'Separate conversations must show different session ids; that is what review separation relies on.'})),
+    zana_skill_list:()=>({skills:listSkills()}),
+    zana_skill_load:({name})=>loadSkill(name),
+    zana_checks_start:({missionId:id},session)=>checks.start(id,session),
+    zana_checks_status:({checkId})=>checks.status(checkId),
+    zana_review_request:({missionId:id},session)=>review.request(id,session),
+    // The server cannot verify the user's consent: the tool is a write (ChatGPT
+    // asks for confirmation), needs a reason and is audited as 'write'.
+    async zana_budget_extend({missionId:id,lines,reason,scope='pr',forSha,outOfScopeCount},session){
+      if(!['pr','correction'].includes(scope))throw new Error("INVALID_ARGUMENTS: scope must be 'pr' or 'correction'");
+      let previous,forTicket,pick;
+      await transact((existing,txc)=>{
+        if(existing?.id!==id)throw new Error('MISSION_NOT_ACTIVE: mission '+id+' is not the active mission');
+        const rm=guard(txc.db,existing,session,'zana_budget_extend');
+        // Same sessions that may merge: the creator or a holder of one of its units.
+        if(!sessionIsMissionAuthor(txc.db,session.sessionId,id))
+          throw new Error('NOT_AUTHOR: only the session that created the mission or held one of its units may extend its line budget');
+        if((existing.status||'ACTIVE')!=='ACTIVE')throw new Error('MISSION_NOT_ACTIVE: mission '+id+' is '+existing.status);
+        // 'correction' copia la medición del último rechazo de esta ronda (SHA, archivos, N); cada scope conserva el otro.
+        const grant={limit:lines,reason,sessionId:session.sessionId,at:nowIso()},kept=rm.lineBudgetExtension??{};
+        if(scope==='correction'){
+          forTicket=correctionPrev(txc.db,id)?.ticket_id;
+          if(!forTicket)throw new Error('NO_CHANGES_REQUESTED: the last finalized review of mission '+id+' did not request changes; there is no correction round');
+          if(kept.pendingCorrection?.forTicket!==forTicket)throw new Error('NO_CORRECTION_PENDING: zana_review_request has not refused this correction round; there is nothing to authorize');
+          previous=kept.correction?.forTicket===forTicket?kept.correction.limit:null;
+          Object.assign(grant,pick=kept.pendingCorrection);
+          // El sí del usuario fue a un SHA y a un total de rutas: otro rechazo posterior no lo reapunta.
+          if(pick.forSha!==forSha||pick.outOfScope.length!==outOfScopeCount)throw new Error('CORRECTION_MISMATCH: el último rechazo midió '+
+            pick.forSha+' con '+pick.outOfScope.length+' rutas fuera del PR; pregúntale de nuevo al usuario con esas cifras');
+        }else previous=lineLimit(rm,config);
+        txc.db.prepare('UPDATE remote_missions SET line_budget_extension=? WHERE mission_id=?')
+          .run(JSON.stringify(scope==='correction'?{...kept,correction:grant}:{...kept,...grant}),id);
+        existing.revision++;
+        return existing;
+      });
+      return scope==='correction'?{missionId:id,correctionBudget:{...pick,limit:lines,previous,reason}}:{missionId:id,lineBudget:{limit:lines,previous,reason}};
+    },
+    zana_review_claim:({ticket:code},session)=>review.claim(code,session),
+    zana_review_lens_submit:(args,session)=>review.lensSubmit(args,session),
+    zana_review_diff:(args,session)=>review.diff(args,session),
+    zana_review_finalize:(args,session)=>review.finalize(args,session),
+    async zana_delivery_status({missionId:id}){
+      const ctx=await missionContext(id,null,{allowInactive:true});
+      // Informative only: the budget is enforced at zana_review_request, not at the merge.
+      const lineBudgetOf=async pull=>{
+        try{return lineBudget(await github.pullFiles(ctx.repo,pull.number),{limit:lineLimit(ctx,config),changedFiles:pull.changed_files});}
+        catch(error){return {error:clean(error,secrets())};}
+      };
+      return deliveryStatus({github,config,ctx,openBlockingTickets:await review.openBlocking(id),currentTicket:await review.latest(id),lineBudgetOf});
+    },
+    async zana_merge({missionId:id},session){
+      const ctx=await missionContext(id,session.sessionId,{allowInactive:true});
+      if(!session.operator){
+        if(ctx.reviewer)throw new Error('REVIEWER_READ_ONLY: a reviewer session cannot merge');
+        if(!await rr(db=>sessionIsMissionAuthor(db,session.sessionId,id)))
+          throw new Error('NOT_AUTHOR: only the session that created the mission, a session that held one of its units, or the operator may merge');
+      }
+      let result;
+      // Serialized with ticket requests and publications of this mission; the
+      // DB re-read before the merge call also covers other processes.
+      try{
+        result=await review.withMissionLock(id,async()=>{
+          const evaluated=await review.latest(id);
+          return mergeMission({github,config,ctx,openBlockingTickets:await review.openBlocking(id),currentTicket:evaluated,
+            revalidate:async()=>{
+              const now=await review.latest(id);
+              // Any live (possibly blocking) ticket would be newer than the evaluated one.
+              return ticketView(now)!==ticketView(evaluated)
+                ?'Current review ticket changed during the merge checks ('+(now?now.ticket_id+' '+now.state:'none')+'); evaluate again':null;
+            },
+            onAttempt:headSha=>audit({caller:session,tool:'zana_merge.attempt',missionId:id,outcome:'ATTEMPT',
+              args:{missionId:id},detail:{headSha,method:config.mergeMethod},category:'merge'})});
+        });
+      }catch(error){
+        await audit({caller:session,tool:'zana_merge.result',missionId:id,outcome:'ERROR',args:{missionId:id},
+          detail:{error:clean(error,secrets())},category:'merge'});
+        throw error;
+      }
+      await audit({caller:session,tool:'zana_merge.result',missionId:id,outcome:result.state,args:{missionId:id},
+        detail:{headSha:result.headSha??null,mergeCommitSha:result.mergeCommitSha??null,method:result.method??null,
+          recovered:result.recovered??false},category:'merge'});
+      let runInfo;
+      try{
+        const pid=await rr(db=>missionProject(db,id));
+        const stored=pid&&await rr(db=>loadRun(db,pid));
+        const already=stored?.milestones.find(x=>x.parts.some(p=>p.missionId.toLowerCase()===id.toLowerCase()));
+        if(already)return {...result,run:{recorded:true,already:true}};
+        if(result.state!=='MERGED'||!stored?.milestones.some(x=>x.running?.missionId.toLowerCase()===id.toLowerCase()))
+          return result;
+        let mergeCommitSha=result.mergeCommitSha;
+        if(!mergeCommitSha)try{mergeCommitSha=(await github.pull(ctx.repo,result.pullNumber)).merge_commit_sha;}catch{}
+        if(!mergeCommitSha)throw new Error('MERGE_SHA_UNKNOWN');
+        runInfo=await rw(db=>{
+          const run=loadRun(db,pid);
+          const done=run.milestones.find(x=>x.parts.some(p=>p.missionId.toLowerCase()===id.toLowerCase()));
+          if(done)return {recorded:true,already:true};
+          const hito=run.milestones.find(x=>x.running?.missionId.toLowerCase()===id.toLowerCase());
+          if(!hito)return {recorded:false,reason:'MILESTONE_NOT_RUNNING'};
+          // mergeMission ya exigió CI verde en headSha exacto, 4R y aprobación independiente.
+          const next=completePart(run,{missionId:id,prNumber:result.pullNumber,headSha:result.headSha,
+            mergeCommitSha,evidence:{sha:result.headSha,ci:'SUCCESS',review:'APPROVED',merged:true,mergeCommitSha},
+            now:new Date().toISOString()});
+          const saved=saveRun(db,run,next,{missionId:id,secrets:secrets()});
+          return {recorded:true,milestoneId:hito.id,status:next.milestones.find(x=>x.id===hito.id).status,
+            runStatus:next.status,...(saved.memoryError?{memoryError:saved.memoryError}:{})};
+        });
+        await audit({caller:session,tool:'zana_merge.run',missionId:id,category:'project_run',
+          outcome:'OK',detail:{projectId:pid,milestoneId:runInfo.milestoneId,transition:'part'}});
+        if(runInfo.memoryError)await audit({caller:session,tool:'zana_merge.run',missionId:id,
+          category:'project_run',outcome:'ERROR',detail:{code:runInfo.memoryError.split(':')[0]}});
+      }catch(error){
+        const code=String(error.message).split(':')[0];
+        await audit({caller:session,tool:'zana_merge.run',missionId:id,category:'project_run',
+          outcome:'ERROR',detail:{code}});
+        runInfo={recorded:false,reason:code};
+      }
+      return {...result,run:runInfo};
+    },
+    zana_memory_context:({projectId:pid,missionId:id},session)=>rr((db,mission)=>{
+      if(pid&&id)throw new Error('INVALID_ARGUMENTS: pass projectId or missionId, not both');
+      const wanted=pid??missionProject(db,id??mission?.id??'');
+      const project=wanted?db.prepare('SELECT project_id,repo FROM projects WHERE project_id=?').get(wanted):null;
+      if(!project)throw new Error('NO_PROJECT: '+(pid?'unknown project '+pid:'that mission has no project yet (it is resolved at the first zana_memory_save or at zana_mission_close)'));
+      return {repo:project.repo,...memoryContext(db,project.project_id,{maxBytes:16384})};
+    }),
+    zana_memory_search:({query,projectId:pid,all=false,limit=10},session)=>rr((db,mission)=>{
+      if(typeof query!=='string'||query.trim().length<2||query.length>200)throw new Error('INVALID_QUERY: query needs 2 to 200 characters');
+      if(all===true&&pid)throw new Error('INVALID_ARGUMENTS: pass projectId or all:true, not both');
+      if(pid&&!db.prepare('SELECT 1 FROM projects WHERE project_id=?').get(pid))throw new Error('NO_PROJECT: unknown project '+pid);
+      const scope=all===true?null:pid??missionProject(db,mission?.id??'');
+      if(all!==true&&!scope)throw new Error('NO_PROJECT: pass projectId or all:true (no active mission with a project)');
+      return {query,scope:scope??'all',...searchMemory(db,{query,projectId:scope,limit:Number.isInteger(limit)&&limit>=1&&limit<=50?limit:10})};
+    }),
+    async zana_memory_save({missionId:id,kind,topic,body},session){
+      if(reservedTopic(topic))throw new Error('RESERVED_TOPIC: los temas que empiezan con hito: o proyecto: los escribe el servidor');
+      if(!NOTE_KINDS.includes(kind))throw new Error('INVALID_MEMORY_KIND: use '+NOTE_KINDS.join(', ')+' (the summary goes in zana_mission_close)');
+      const pre=await projectFor(session);
+      return rw((db,mission)=>{
+        guard(db,mission,session,'zana_memory_save');
+        if(mission.id!==id)throw new Error('MISSION_NOT_ACTIVE: mission '+id+' is not the active mission');
+        const {projectId:project,pointer}=projectIn(db,mission,pre);
+        return {missionId:id,projectId:project,...saveEntry(db,{projectId:project,kind,topic,body,missionId:id,sessionId:session.sessionId,secrets:secrets()}),
+          ...(pointer?{pointer}:{})};
+      });
+    },
+    zana_memory_resolve:({missionId:id,seq},session)=>rw((db,mission)=>{
+      guard(db,mission,session,'zana_memory_resolve');
+      if(mission.id!==id||(mission.status||'ACTIVE')!=='ACTIVE')throw new Error('MISSION_NOT_ACTIVE: mission '+id+' is not the active mission');
+      const project=missionProject(db,id);
+      const row=db.prepare('SELECT * FROM project_memory WHERE seq=? AND project_id=?').get(seq,project);
+      if(row?.kind!=='pending'||row.superseded_by)throw new Error('NOT_PENDING: '+seq+' is not a live pending entry of the project of mission '+id);
+      if(reservedTopic(row.topic))throw new Error('RESERVED_TOPIC: los temas que empiezan con hito: o proyecto: los escribe el servidor');
+      const resolvedAt=row.resolved_at??nowIso();
+      db.prepare('UPDATE project_memory SET resolved_at=? WHERE seq=?').run(resolvedAt,seq);
+      return {missionId:id,projectId:project,seq,resolvedAt};
+    }),
+    async zana_github_request(args,session){
+      if(!config.githubFullAccess)throw new Error('GITHUB_FULL_ACCESS_DISABLED: habilítalo en el servidor');
+      await rr((db,mission)=>{
+        if(mission&&sessionReviews(db,session.sessionId,mission.id))
+          throw new Error('REVIEWER_READ_ONLY: this session reviews mission '+mission.id+' and cannot administer GitHub');
+      });
+      return githubAdminRequest(args,{owner:bootstrapGithub,reviewer:reviewerGithub});
+    },
+    async zana_ds_github({operation,arguments:args={},missionId:id},session){
+      if(operation==='index'){
+        await gateway.ensureFresh();
+        const tools=gateway.tools();
+        const name=typeof args.operation==='string'?args.operation:null;
+        const describe=t=>{const e=CATALOG.tools[t.name];return {name:t.name,cls:t.cls,zana:e?.zana??'unclassified',
+          ...(e?.rule?{rule:e.rule}:{}),...(e?.reason?{reason:e.reason}:{})};};
+        if(name){
+          const t=tools.find(x=>x.name===name);
+          if(!t)throw new Error('Unknown tool '+name);
+          return {...describe(t),description:t.description,inputSchema:t.inputSchema};
+        }
+        return {server:gateway.status(),catalogVersion:CATALOG.version,tools:tools.map(describe),problems:liveProblems(tools)};
+      }
+      const reviewer=id?await rr(db=>Boolean(db&&sessionReviews(db,session.sessionId,id))):false;
+      const result=await gateway.call({host:session.host,sessionId:session.sessionId,clientId:session.clientId,role:reviewer?'reviewer':'author'},
+        operation,args,{missionId:id??null});
+      // Las escrituras exitosas vuelven compactas (rutas, SHA, link); las lecturas
+      // conservan todo su contenido. En ambas, un recurso de texto sale como texto
+      // (sin adjunto para el anfitrión). dispatch redacta después de esta conversión.
+      return {passthrough:inlineResources(CATALOG.tools[operation]?.zana==='write'?compactWrite(operation,args,result):result)};
+    },
+  };
+
+  const readOnlyTool=name=>Boolean(NEW_TOOLS[name]?.[1]??TOOL_DESCRIPTIONS[name]?.[2]);
+  const REVIEW_TOOLS=new Set(['zana_review_claim','zana_review_diff','zana_review_lens_submit','zana_review_finalize']);
+  const guardedWrites=new Set([...REUSED.filter(name=>!readOnlyTool(name)),
+    'zana_mission_init','zana_mission_adopt','zana_checks_start','zana_review_request','zana_merge',
+    'zana_memory_save','zana_memory_resolve','zana_project_run_start','zana_github_request',
+    'zana_mission_close','zana_mission_archive','zana_correction_start','zana_session_rebind','zana_budget_extend']);
+  // Toda tool declarada no-lectura (incluidas las reutilizadas y el router downstream)
+  // marca ANTES del efecto. Excepciones: las cuatro tools revisoras y GitHub GET.
+  // La validación MCP precede a dispatch; las guardas de sesión se comprueban antes.
+  const marksWriter=(name,args)=>!readOnlyTool(name)&&!REVIEW_TOOLS.has(name)&&
+    !(name==='zana_github_request'&&args?.method==='GET')&&
+    !(name==='zana_ds_github'&&(args?.operation==='index'||CATALOG.tools[args?.operation]?.zana==='read'));
+  let epochReady=false;
+  const categoryOf=name=>name==='zana_project_run_start'?'project_run':name==='zana_github_request'?'github_admin':/^zana_review_/.test(name)?'review':name==='zana_merge'?'merge':readOnlyTool(name)?'read':'write';
+  // Every tool has a total deadline (ZANA_TOOL_DEADLINE_MS). A late operation
+  // may still finish on its own; the caller is told to read state first.
+  async function dispatch(name,args,session,extra){
+    const fn=ops[name];
+    if(!fn)return {isError:true,content:[{type:'text',text:'Unknown tool'}]};
+    let outcome='OK',data=null,result,failure=null,failureStatus=null;
+    try{
+      if((name==='zana_project_approval_panel'||name==='zana_panel_decide')&&extra?.uiAvailable!==true)
+        throw new Error('UI_UNAVAILABLE: este cliente no muestra paneles; usa zana_plan_approval_request y la página del operador');
+      // Primera llamada del runtime: inicia una sola época para sesiones legadas.
+      if(!epochReady){await rw(db=>ensureSessionWriterEpoch(db));epochReady=true;}
+      if(marksWriter(name,args)){
+        if(name==='zana_github_request'&&!config.githubFullAccess)
+          throw new Error('GITHUB_FULL_ACCESS_DISABLED: habilítalo en el servidor');
+        const protectedWrite=guardedWrites.has(name)||(name==='zana_ds_github'&&
+          CATALOG.tools[args?.operation]?.zana==='write');
+        const id=args?.missionId??(await rr((db,mission)=>mission?.id??null));
+        const rejected=protectedWrite&&await rr((db,mission)=>Boolean(db&&(
+          (id&&sessionReviews(db,session.sessionId,id))||
+          (mission?.id&&sessionReviews(db,session.sessionId,mission.id)))));
+        if(rejected){
+          const error='REVIEWER_READ_ONLY: esta sesión revisa la misión y no puede escribir en ella';
+          // La negativa previa al gateway conserva su fila de auditoría normal.
+          if(name==='zana_ds_github')await audit({caller:session,tool:'github.'+args.operation,missionId:id,
+            outcome:'REFUSED',args:args?.arguments??{},
+            detail:{class:gateway.tools().find(t=>t.name===args.operation)?.cls??
+              classify(CATALOG.tools[args.operation]),ms:0,error,policy:null},
+            category:'refused'});
+          throw new Error(error);
+        }
+        if(name==='zana_mission_init'){
+          const foreign=await rr(db=>{const p=db.prepare('SELECT project_id FROM projects WHERE repo=? COLLATE NOCASE ORDER BY created_at DESC LIMIT 1').get(args?.github?.repo);
+            const run=p&&loadRun(db,p.project_id);return run?.status==='ACTIVE'&&run.ownerClient!==session.clientId;});
+          if(foreign)throw new Error('RUN_OTHER_CLIENT: la corrida pertenece a otro cliente');
+        }
+        await rw(db=>markSessionWriter(db,session.sessionId));
+      }
+      data=await within(Promise.resolve().then(()=>fn(args??{},session,extra)),config.toolDeadlineMs,name);
+      if(name==='zana_panel_decide'&&data?.denied===true)outcome='REFUSED';
+      result=data?.passthrough?redactDeep(data.passthrough,secrets()):redactDeep(data,secrets());
+    }catch(error){
+      outcome='ERROR';
+      failureStatus=Number.isInteger(error?.status)?error.status:null;
+      const text=error instanceof DeadlineError
+        ?'TOOL_DEADLINE: '+name+' exceeded '+config.toolDeadlineMs+' ms; the operation may still complete, read state before retrying'
+        :clean(error,secrets());
+      failure=String(text).slice(0,300);
+      result={isError:true,content:[{type:'text',text}]};
+    }
+    let auditFailed=false;
+    // The downstream router is audited per forwarded call by the gateway.
+    if(name!=='zana_ds_github'){
+      try{
+        // The mission the call belongs to: named, returned, or the active one.
+        const missionId=args?.missionId??data?.missionId??(await readState().catch(()=>null))?.id??null;
+        const githubDetail=name==='zana_github_request'?githubAdminAudit(args,data?.status??failureStatus):null;
+        const runDetail=name==='zana_project_run_start'&&data?{created:data.created,projectId:data.projectId,memoryError:data.memoryError??null,memoryRepaired:data.memoryRepaired??false}:null;
+        const auditArgs=name==='zana_panel_decide'?{panelId:args?.panelId,decision:args?.decision}:
+          name==='zana_github_request'?undefined:args;
+        await audit({caller:session,tool:name,missionId,outcome,args:auditArgs,category:categoryOf(name),
+          ...(githubDetail?{detail:githubDetail}:runDetail?{detail:runDetail}:failure?{detail:{error:failure}}:{})});
+      }catch(error){
+        auditFailed=true;
+        console.error('ZanaLLaima audit write failed:',clean(error,secrets()));
+      }
+    }
+    if(result.isError){
+      if(auditFailed)result.content[0].text+=' (audit write failed)';
+      return result;
+    }
+    if(data?.passthrough)return auditFailed?{...result,_meta:{...(result._meta??{}),'zana-llaima/auditFailed':true}}:result;
+    const safe=auditFailed?{...result,auditFailed:true}:result;
+    return {content:[{type:'text',text:JSON.stringify(safe)}],structuredContent:safe};
+  }
+  // Lo que el cliente MCP declaró al conectarse (nombre, versión y capacidades).
+  // Sirve para saber qué se le puede pedir, por ejemplo sampling. Son datos del
+  // cliente: se acotan y no deciden ningún permiso.
+  function clientInfo(server){
+    // Sin caracteres de control ni de dirección de texto; acotado.
+    const text=v=>typeof v==='string'?v.replace(/[\p{Cc}\p{Cf}]/gu,'').slice(0,100):null;
+    const keys=o=>o&&typeof o==='object'?Object.keys(o).map(k=>text(k).slice(0,80)).sort().slice(0,20):[];
+    try{
+      const caps=server.server.getClientCapabilities()??null,who=server.server.getClientVersion()??null;
+      // La versión negociada en initialize: lo que una llamada diga en su _meta no la cambia.
+      return {name:text(who?.name),version:text(who?.version),protocolVersion:text(server.server.getNegotiatedProtocolVersion()),
+        capabilities:{declared:keys(caps),sampling:Boolean(caps?.sampling),samplingTools:Boolean(caps?.sampling?.tools),
+          elicitation:Boolean(caps?.elicitation),roots:Boolean(caps?.roots),tasks:Boolean(caps?.tasks),extensions:keys(caps?.extensions)}};
+    }catch{return null;}
+  }
+  const uiAvailable=server=>{
+    const ui=server.server.getClientCapabilities()?.extensions?.['io.modelcontextprotocol/ui'];
+    return Array.isArray(ui?.mimeTypes)&&ui.mimeTypes.includes(PANEL_MIME);
+  };
+  // Un McpServer por sesión MCP. getSession(ctx) da la identidad de cada llamada:
+  // la conversación de ChatGPT si la llamada la trae, si no la del transporte.
+  // Si no se puede resolver, la tool no corre (falla cerrado) y el error sale limpio.
+  function createServer(getSession){
+    const server=new McpServer({name:'zana-llaima',version:packageVersion},
+      {maxToolInputElements:1000,instructions:REMOTE_INSTRUCTIONS,capabilities:{events:{}}});
+    // Métodos nativos de MCP Events (no son tools). La identidad sale de la sesión autenticada.
+    const identityOf=async ctx=>{const s=await getSession(ctx);return {clientId:s.clientId,host:s.host};};
+    const filter=z.object({host:z.string().max(100)}).strict(),named=z.enum([REVIEW_EVENT,REVIEW_DONE_EVENT]);
+    server.server.setRequestHandler('events/list',{params:z.object({cursor:z.string().optional()}).passthrough().optional(),
+      result:z.object({events:z.array(z.unknown())}).passthrough()},async(_input,ctx)=>events.list(await identityOf(ctx)));
+    server.server.setRequestHandler('events/subscribe',{params:z.object({name:named,arguments:filter,
+      delivery:z.object({mode:z.literal('webhook'),url:z.string().max(2048),secret:z.string().max(256)}).strict(),
+      cursor:z.string().nullable().optional(),ttlMs:z.number().int().nonnegative().nullable().optional()}).strict(),
+      result:z.object({id:z.string(),refreshBefore:z.string().nullable(),cursor:z.null(),truncated:z.boolean()}).strict()},
+      async(input,ctx)=>events.subscribe(await identityOf(ctx),input));
+    server.server.setRequestHandler('events/unsubscribe',{params:z.object({name:named,arguments:filter,
+      delivery:z.object({mode:z.literal('webhook').optional(),url:z.string().max(2048)}).strict()}).strict(),
+      result:z.object({}).strict()},async(input,ctx)=>events.unsubscribe(await identityOf(ctx),input));
+    server.registerResource('approval-panel',PANEL_URI,{mimeType:PANEL_MIME},async uri=>({contents:[{
+      uri:uri.href,mimeType:PANEL_MIME,text:panelHtml(),
+      _meta:{ui:{csp:{connectDomains:[],resourceDomains:[]},prefersBorder:true}},
+    }]}));
+    const register=(name,description,readOnly,inputSchema)=>{
+      const meta=name==='zana_project_approval_panel'?{ui:{resourceUri:PANEL_URI},'openai/outputTemplate':PANEL_URI}:
+        name==='zana_panel_decide'?{ui:{resourceUri:PANEL_URI,visibility:['app']},
+          'openai/widgetAccessible':true,'openai/visibility':'private'}:undefined;
+      return server.registerTool(name,{description,inputSchema,...(meta?{_meta:meta}:{}),
+      annotations:{readOnlyHint:readOnly,destructiveHint:!readOnly,idempotentHint:readOnly&&name!=='zana_bootstrap_prepare'}},
+      async(args,ctx)=>{
+        let session;
+        try{session=await getSession(ctx);}
+        catch(error){return {isError:true,content:[{type:'text',text:'SESSION_UNAVAILABLE: '+clean(error,secrets())}]};}
+        return dispatch(name,args,session,{uiAvailable:uiAvailable(server),
+          ...(name==='zana_session_status'?{client:clientInfo(server)}:{})});
+      });
+    };
+    for(const name of REUSED){const [,description,readOnly]=TOOL_DESCRIPTIONS[name];register(name,description,readOnly,schemas[name]);}
+    let panelDecisionTool;
+    for(const [name,[description,readOnly,schema]] of Object.entries(NEW_TOOLS)){
+      if(name==='zana_github_request'&&!config.githubFullAccess)continue;
+      const registered=register(name,description,readOnly,schema);
+      if(name==='zana_panel_decide')panelDecisionTool=registered;
+    }
+    server.server.oninitialized=()=>{if(!uiAvailable(server))panelDecisionTool.disable();};
+    return server;
+  }
+  // Health: degraded when the database cannot be read or a token is missing.
+  async function health(){
+    const problems=[];
+    let schemaVersion=null,staleTickets=null;
+    try{
+      ({schemaVersion,staleTickets}=await rr(db=>{
+        if(!db)throw new Error('database not created yet');
+        const cutoff=new Date(Date.now()-config.claimTtlMinutes*60_000).toISOString();
+        return {schemaVersion:db.prepare('PRAGMA user_version').get().user_version,
+          staleTickets:db.prepare("SELECT COUNT(*) n FROM review_tickets WHERE state IN ('CLAIMED','FINALIZING') AND claimed_at<=?").get(cutoff).n};
+      }));
+    }catch(error){problems.push('database: '+clean(error,secrets()));}
+    if(!config.authorToken)problems.push('ZANA_DOWNSTREAM_GITHUB_TOKEN missing');
+    if(!config.reviewerToken)problems.push('ZANA_REVIEWER_TOKEN missing');
+    if(!config.reviewerLogin)problems.push('ZANA_REVIEWER_LOGIN missing');
+    if(bootstrapShared)problems.push('ZANA_BOOTSTRAP_GITHUB_TOKEN is the same as ZANA_DOWNSTREAM_GITHUB_TOKEN');
+    let eventCounts=null;
+    try{eventCounts=await rr(db=>eventStatus(db));}catch{}
+    return {status:problems.length?'degraded':'ok',problems,schemaVersion,staleTickets,events:eventCounts,
+      authorToken:config.authorToken?'configured':'missing',reviewerToken:config.reviewerToken?'configured':'missing',
+      bootstrapToken:config.bootstrapToken?'configured':'missing',
+      downstream:gateway.status().state};
+  }
+  // Decisión del operador: la llama la página HTTP, nunca una tool. Queda auditada.
+  const planApproval={
+    describe:approvalId=>rr(db=>describePlanApproval(db,{approvalId})),
+    decide:({approvalId,decision,passwordOk,from=null})=>rw(db=>{
+      const r=decidePlanApproval(db,{approvalId,decision,passwordOk});
+      writeAudit(db,{caller:{host:'operator',sessionId:null},tool:r.effect==='CREATE_REPOSITORY'?'operator_repository_approval':'operator_plan_approval',
+        outcome:r.denied?'REFUSED':r.status,detail:{workspaceId:r.workspaceId,planDigest:r.planDigest,subject:r.subject,from},category:'operator'});
+      return r;
+    }),
+  };
+  return {config,github,reviewerGithub,gateway,checks,review,ops,dispatch,createServer,missionContext,health,events,planApproval,
+    actorKeys:()=>({keys:[signer.jwk()]}),readAudit:opts=>readAudit(opts),
+    close:()=>gateway.close()};
+}

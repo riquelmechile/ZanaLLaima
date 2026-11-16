@@ -381,6 +381,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       let found;try{found=await readPointer(github,repo,base);}
       catch{throw new Error('MEMORY_UNAVAILABLE: no se pudo resolver el proyecto');}
       return rw((db,mission)=>{
+        // Defensa en profundidad: el dispatcher ya rechaza a la revisora antes de llegar aquí.
         if(mission&&sessionReviews(db,session.sessionId,mission.id))
           throw new Error('REVIEWER_READ_ONLY: esta sesión revisa la misión activa');
         const {projectId,pointer}=resolveProject(db,{...found});
@@ -406,7 +407,8 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       const run=project&&loadRun(db,project.project_id);
       if(!run)throw new Error('RUN_NOT_FOUND: no existe una corrida para el repositorio');
       if(run.ownerClient!==session.clientId)throw new Error('RUN_OTHER_CLIENT: la corrida pertenece a otro cliente');
-      return {projectId:run.projectId,repo:run.repo,base:run.base,status:run.status,revision:run.revision,
+      const memoryStale=Boolean(db.prepare('SELECT 1 FROM metadata WHERE key=?').get('zana:run-memory-dirty:'+run.projectId));
+      return {projectId:run.projectId,repo:run.repo,base:run.base,status:run.status,revision:run.revision,memoryStale,
         planDigest:run.planDigest,board:runBoard(run),milestones:run.milestones.map(m=>({id:m.id,status:m.status,
           parts:m.parts.length,running:m.running&&{missionId:m.running.missionId,final:m.running.final},attempts:m.attempts.length})),
         ready:readyMilestones(run),memory:memoryContext(db,run.projectId,{maxBytes:4096})};

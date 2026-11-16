@@ -2,6 +2,8 @@
 
 ## [Sin publicar]
 
+- Las misiones se enlazan a hitos o trabajos fuera del plan y actualizan la corrida al fusionarse o cancelarse, con memoria transaccional y evidencia de los gates.
+
 - La memoria de proyectos endurece `reservedTopic` frente a marcas Unicode e invisibles y conserva los registros posteriores al recorte estricto de 4 KB, con origen de sesión en contexto y búsqueda.
 
 - La memoria distingue `origin: server|session` y `zana_project_next` informa `memoryStale` mientras una proyección esté pendiente.

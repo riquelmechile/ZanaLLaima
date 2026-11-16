@@ -29,8 +29,15 @@ test('memoryContext excluye entradas retiradas de cualquier tipo',async()=>{
       assert.equal(saved.error,undefined,saved.error);
       await remoteWrite(db=>db.prepare('UPDATE project_memory SET resolved_at=? WHERE seq=?').run(new Date().toISOString(),saved.seq));
     }
+    const server=await remoteWrite(db=>saveEntry(db,{projectId:init.memory.projectId,kind:'decision',topic:'proyecto:avance',body:'origen tablero'}).seq);
+    const model=await f.call('zana_memory_save',{missionId:init.id,kind:'decision',topic:'һіto:parecido',body:'origen modelo'},s);
     const ctx=await f.call('zana_memory_context',{projectId:init.memory.projectId},s);
     assert.equal(ctx.entries.some(e=>e.topic.startsWith('viejo-')),false);
+    assert.match(ctx.note,/Solo las entradas con origin server las escribió el servidor/);
+    assert.deepEqual([ctx.entries.find(e=>e.seq===server).origin,ctx.entries.find(e=>e.seq===model.seq).origin],['server','session']);
+    const found=await f.call('zana_memory_search',{query:'origen',projectId:init.memory.projectId},s);
+    assert.deepEqual([found.entries.find(e=>e.seq===server).origin,found.entries.find(e=>e.seq===model.seq).origin],['server','session']);
+    assert.equal(found.entries.find(e=>e.seq===model.seq).topic,'һіto:parecido');
   }finally{await f.cleanup();}
 });
 
@@ -50,7 +57,7 @@ test('run_start exige aprobación, crea memoria, es idempotente y next no marca 
     assert.deepEqual([again.created,again.run.revision,await count('SELECT COUNT(*) n FROM project_memory')],[false,0,before]);assert.ok(again.pointer);
     assert.match((await f.call('zana_project_run_start',{workspaceId:w.workspaceId,repo:'o/r',base:'develop'},s)).error,/RUN_BASE_CHANGED.*main/);
     const reader=await f.session(),next=await f.call('zana_project_next',{repo:'O/R'},reader);
-    assert.deepEqual([next.ready[0].id,next.memory.entries[0].topic],['core','proyecto:avance']);
+    assert.deepEqual([next.ready[0].id,next.memory.entries[0].topic,next.memoryStale],['core','proyecto:avance',false]);
     assert.equal(await count("SELECT COUNT(*) n FROM metadata WHERE key=?", 'zana:session-writer:'+reader.sessionId),0);
     const changed=await f.call('zana_workspace_update',{workspaceId:w.workspaceId,expectedVersion:w.version,plan:makePlan(w.brief,'Otro modelo')},s);
     await approve(f,s,changed);
@@ -112,6 +119,13 @@ test('store controla revisión, conserva corrida si falla memoria y retira por p
       const beforeRows=db.prepare('SELECT COUNT(*) n FROM project_memory').get().n,saved=saveRun(db,run,next);
       assert.match(saved.memoryError,/MEMORY_UNAVAILABLE/);assert.equal(db.prepare('SELECT COUNT(*) n FROM project_memory').get().n,beforeRows);
       assert.equal(loadRun(db,run.projectId).revision,1);
+      saveEntry(db,{projectId:run.projectId,kind:'issue',topic:'hito:basura',body:'retirar'});
+      db.exec('DROP TRIGGER bloquea_memoria');
+      const after=structuredClone(next);after.revision=2;after.updatedAt=new Date(Date.parse(next.updatedAt)+1).toISOString();
+      const projected=saveRun(db,next,after);
+      assert.equal(projected.memoryError,undefined);
+      assert.equal(db.prepare('SELECT 1 FROM metadata WHERE key=?').get('zana:run-memory-dirty:'+run.projectId),undefined);
+      assert.ok(db.prepare("SELECT resolved_at FROM project_memory WHERE project_id=? AND topic='hito:basura'").get(run.projectId).resolved_at);
     });
   }finally{await f.cleanup();}
 });
@@ -145,7 +159,7 @@ test('una sesión revisora no puede iniciar la corrida',async()=>{
     const requested=await f.call('zana_review_request',{missionId:ready.missionId},ready.author);
     const reviewer=await f.session();await f.call('zana_review_claim',{ticket:requested.ticket},reviewer);
     assert.match((await f.call('zana_project_run_start',{workspaceId:w.workspaceId,repo:'o/r',base:'main'},reviewer)).error,/REVIEWER_READ_ONLY/);
-    assert.equal((await f.call('zana_session_status',{},reviewer)).writerMarked,false);
+    assert.equal((await f.call('zana_session_status',{},reviewer)).writerMarked,false,'C1: el rechazo previo no marca a la revisora');
   }finally{await f.cleanup();}
 });
 
@@ -161,12 +175,21 @@ test('run_start repara memoria pendiente sin cambiar revisión',async()=>{
     await remoteWrite(db=>db.exec("CREATE TRIGGER falla_proyeccion BEFORE INSERT ON project_memory BEGIN SELECT RAISE(ABORT,'x'); END"));
     const first=await f.call('zana_project_run_start',{workspaceId:w.workspaceId,repo:'o/r',base:'release'},s);
     assert.match(first.memoryError,/MEMORY_UNAVAILABLE/);assert.equal(first.run.revision,0);
-    const detail=await remoteRead(db=>db.prepare("SELECT detail FROM remote_audit WHERE tool='zana_project_run_start' ORDER BY seq DESC LIMIT 1").get().detail);
+    let detail=await remoteRead(db=>db.prepare("SELECT detail FROM remote_audit WHERE tool='zana_project_run_start' ORDER BY seq DESC LIMIT 1").get().detail);
     assert.match(JSON.parse(detail).memoryError,/MEMORY_UNAVAILABLE/);
+    assert.equal((await f.call('zana_project_next',{repo:'o/r'},s)).memoryStale,true);
+    const failedRepair=await f.call('zana_project_run_start',{workspaceId:w.workspaceId,repo:'o/r',base:'release'},s);
+    assert.match(failedRepair.memoryError,/MEMORY_UNAVAILABLE/);assert.notEqual(failedRepair.memoryRepaired,true);
+    assert.equal(await count("SELECT COUNT(*) n FROM metadata WHERE key=?", 'zana:run-memory-dirty:'+first.projectId),1);
+    detail=await remoteRead(db=>db.prepare("SELECT detail FROM remote_audit WHERE tool='zana_project_run_start' ORDER BY seq DESC LIMIT 1").get().detail);
+    assert.equal(JSON.parse(detail).memoryRepaired,false);
     await remoteWrite(db=>db.exec('DROP TRIGGER falla_proyeccion'));
     const retry=await f.call('zana_project_run_start',{workspaceId:w.workspaceId,repo:'o/r',base:'release'},s);
     assert.deepEqual([retry.created,retry.memoryRepaired,retry.run.revision],[false,true,0]);
-    assert.equal((await f.call('zana_project_next',{repo:'o/r'},s)).memory.entries[0].topic,'proyecto:avance');
+    detail=await remoteRead(db=>db.prepare("SELECT detail FROM remote_audit WHERE tool='zana_project_run_start' ORDER BY seq DESC LIMIT 1").get().detail);
+    assert.equal(JSON.parse(detail).memoryRepaired,true);
+    const fresh=await f.call('zana_project_next',{repo:'o/r'},s);
+    assert.deepEqual([fresh.memory.entries[0].topic,fresh.memoryStale],['proyecto:avance',false]);
     assert.ok(f.api.state.requests.some(x=>x.path.includes('/contents/.zanallaima.json')&&x.search.includes('ref=release')));
   }finally{await f.cleanup();}
 });
@@ -179,6 +202,8 @@ test('corrida cancelada se reemplaza y conserva el estado previo',async()=>{
     await remoteWrite(db=>{const run=loadRun(db,first.projectId),cancel=cancelProjectRun(run,{expectedRevision:0,reason:'Cambio solicitado',now:new Date(Date.parse(run.updatedAt)+1).toISOString()});db.prepare('UPDATE metadata SET value=? WHERE key=?').run(JSON.stringify(cancel),'zana:run:'+run.projectId);});
     const next=await f.call('zana_project_run_start',{workspaceId:w.workspaceId,repo:'o/r',base:'main'},s);
     assert.equal(next.created,true);assert.equal(next.run.revision,0);
+    const stored=await remoteRead(db=>({run:loadRun(db,first.projectId),prev:JSON.parse(db.prepare('SELECT value FROM metadata WHERE key=?').get('zana:run-prev:'+first.projectId).value)}));
+    assert.deepEqual([stored.run.revision,stored.prev.status],[0,'CANCELLED']);
     assert.equal(await count("SELECT COUNT(*) n FROM metadata WHERE key=?", 'zana:run-prev:'+first.projectId),1);
   }finally{await f.cleanup();}
 });

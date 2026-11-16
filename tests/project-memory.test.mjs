@@ -117,7 +117,7 @@ test('close: resumen obligatorio, entradas redactadas, supersesión y contexto e
     const second=await closeWith(f,s,summary({decisions:[{topic:'estilo',body:'Con punto y coma'}]}));
     const ctx=second.init.memory.context;
     assert.deepEqual(ctx.entries.map(e=>e.kind),['convention','decision','pending','summary']);
-    assert.deepEqual(Object.keys(ctx.entries[0]),['seq','kind','topic','body','missionId','sha','at']);
+    assert.deepEqual(Object.keys(ctx.entries[0]),['seq','kind','topic','body','missionId','sha','at','origin']);
     assert.equal(second.closed.memory.superseded,1);
     const estilo=await q("SELECT seq,body,superseded_by FROM project_memory WHERE topic='estilo' ORDER BY seq");
     assert.deepEqual(estilo.map(r=>r.superseded_by),[estilo[1].seq,null]);
@@ -159,8 +159,8 @@ test('el contexto se corta a maxBytes con truncated:true, en el orden del diseñ
     const big=await remoteRead(db=>memoryContext(db,projectId,{maxBytes:16384}));
     assert.deepEqual([big.truncated,big.entries.length],[false,22]);
     assert.deepEqual(big.entries.slice(-2).map(e=>e.kind),['issue','summary']);
-    // Small entries after the cut still get in: the issue and the summary fit at 4 KB.
-    assert.deepEqual(small.entries.slice(-2).map(e=>e.kind),['issue','summary']);
+    // El campo origin también entra en el presupuesto estricto de 4 KB.
+    assert.deepEqual(small.entries.slice(-2).map(e=>e.kind),['decision','decision']);
     // One entry that cannot fit does not empty the context.
     await remoteWrite(db=>saveEntry(db,{projectId,kind:'convention',topic:'enorme',body:'\u0001'.repeat(1000)}));
     const odd=await remoteRead(db=>memoryContext(db,projectId));

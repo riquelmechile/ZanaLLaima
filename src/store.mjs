@@ -215,6 +215,8 @@ function load(db) {
   const r = db.prepare('SELECT content FROM active_review WHERE mission_id=?').get(m.id);
   const state = { schema:1, id:m.id, status:m.lifecycle||'ACTIVE', objective:m.objective,
     authorization:parse(m.authorization), revision:m.revision, reviewCount:m.review_count||0, createdAt:m.created_at, budget:parse(m.budget),units };
+  const refunds=db.prepare('SELECT value FROM metadata WHERE key=?').get('zana:expired-refunds:'+m.id);
+  if(refunds)state.expiredRefunds=Number(refunds.value);
   if(m.closed_at)state.closedAt=m.closed_at;
   if (r) state.review = parse(r.content);
   return validate(state);
@@ -241,6 +243,8 @@ function persist(db, previous, next, kind = 'STATE_CHANGED') {
   if (previous && next.revision < previous.revision) fail('Mission revision went backwards');
   if(previous && json(previous.budget??null)!==json(next.budget??null))
     fail('Mission resource budget cannot be modified after creation');
+  if(next.expiredRefunds!==undefined&&(!Number.isSafeInteger(next.expiredRefunds)||
+    next.expiredRefunds<0||next.expiredRefunds>5))fail('Invalid expired review refunds');
   const activeWriters=next.units.filter(u=>u.effect==='WRITE'&&u.status==='RUNNING');
   const activeReaders=next.units.filter(u=>u.effect==='READ'&&u.status==='RUNNING');
   if(activeWriters.length>1||(activeWriters.length&&activeReaders.length))
@@ -261,6 +265,9 @@ function persist(db, previous, next, kind = 'STATE_CHANGED') {
       .run(next.objective,json(next.authorization),next.revision,now(),next.status||'ACTIVE',next.closedAt||null,next.reviewCount||0,json(next.budget??null));
   }
 
+  if(next.expiredRefunds!==undefined)
+    db.prepare('INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=MAX(CAST(value AS INTEGER),CAST(excluded.value AS INTEGER))')
+      .run('zana:expired-refunds:'+next.id,String(next.expiredRefunds));
   const prior = new Map((previous?.units || []).map(x => [x.id,x]));
   const ids = new Set(next.units.map(x => x.id));
   for (const old of prior.keys()) if (!ids.has(old)) fail('Deleting work units is not supported');

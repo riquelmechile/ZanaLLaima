@@ -103,7 +103,8 @@ export function httpSettings(env=process.env){
 }
 
 export function createHttpServer({runtime,oauth,settings,log=console,maxSessions=MAX_SESSIONS,
-  idleMs=IDLE_MS,conversationIdleMs=CONVERSATION_IDLE_MS,busyMs=(runtime?.config?.toolDeadlineMs??45_000)+BUSY_MARGIN_MS}){
+  idleMs=IDLE_MS,conversationIdleMs=CONVERSATION_IDLE_MS,busyMs=(runtime?.config?.toolDeadlineMs??45_000)+BUSY_MARGIN_MS,
+  reviewSweepMs=60_000}){
   if(!Number.isInteger(maxSessions)||maxSessions<1)throw new Error('INVALID_MAX_SESSIONS: maxSessions debe ser un entero de al menos 1');
   const sessions=new Map();
   const operatorPage=runtime?.planApproval?createOperatorPage({oauth,approvals:runtime.planApproval}):async()=>false;
@@ -252,7 +253,17 @@ export function createHttpServer({runtime,oauth,settings,log=console,maxSessions
   // Reintentos de los avisos pendientes (MCP Events); el primer envío sale al encolar.
   const eventTimer=runtime?.events?setInterval(()=>{void runtime.events.flush();},30_000):null;
   eventTimer?.unref();
-  server.on('close',()=>clearInterval(eventTimer));
+  let sweeping=false;
+  const sweep=async()=>{
+    if(sweeping)return;
+    sweeping=true;
+    try{await runtime.review.expire();}
+    catch(error){log.error('Review sweep failed:',clean(error,secrets()));}
+    finally{sweeping=false;}
+  };
+  const reviewTimer=runtime?.review?.expire&&reviewSweepMs>0?setInterval(()=>{void sweep();},reviewSweepMs):null;
+  reviewTimer?.unref();
+  server.on('close',()=>{clearInterval(eventTimer);clearInterval(reviewTimer);});
   return server;
 }
 

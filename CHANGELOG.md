@@ -2,6 +2,8 @@
 
 ## [Sin publicar]
 
+- F1: devuelve hasta cinco rondas por misión al vencer tickets sin veredicto, encola `zana.review.done` EXPIRED al autor y barre tickets cada 60 segundos, sin consultas; pruebas de idempotencia y HTTP.
+
 - C6: aclara cierre de misiones fuera del plan sin campo run, sincroniza guías de merge y elimina redundancias; refuerza pruebas de códigos completos.
 - C5: cierre seguro tras merge/attach, autorización exclusiva de HITOS, release condicional y cierre externo de PR; ROADMAP histórico, herramientas MCP reales y códigos completos.
 

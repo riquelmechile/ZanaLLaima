@@ -559,7 +559,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
           throw new Error('REVIEWER_READ_ONLY: una sesión revisora no puede adoptar');
         if(mission.units.some(u=>u.status==='RUNNING'&&u.run?.sessionId!==session.sessionId&&Date.parse(u.run?.expiresAt)>Date.now()))
           throw new Error('ADOPT_MISSION_BUSY: otra sesión tiene una unidad activa');
-        review.expireIn(db);
+        review.expireIn(db,mission);
         const latest=db.prepare('SELECT state FROM review_tickets WHERE mission_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1').get(id);
         if(latest&&!['FINALIZED','STALE_SHA','EXPIRED','ABANDONED'].includes(latest.state))
           throw new Error('ADOPT_REVIEW_IN_PROGRESS: existe una revisión en curso');

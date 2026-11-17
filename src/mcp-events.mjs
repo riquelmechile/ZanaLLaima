@@ -97,9 +97,9 @@ export function listEvents({host}){
     description:'A review ticket of this account is ready. Start a new run, load the zana-4r skill and claim it with zana_review_claim.',
     inputSchema:{type:'object',properties:{host:{type:'string',enum:[host]}},required:['host'],additionalProperties:false},
     payloadSchema:{type:'object',properties:{ticketId:{type:'string',format:'uuid'}},required:['ticketId'],additionalProperties:false}},
-    {name:REVIEW_DONE_EVENT,delivery:['webhook'],description:'A 4R review of this account finished. Start a new run, load the zana-project-orchestrator skill, adopt the mission with zana_mission_adopt and resume it.',
+    {name:REVIEW_DONE_EVENT,delivery:['webhook'],description:'A 4R review finished or a ticket expired without verdict (EXPIRED). Start a new run, load zana-project-orchestrator, adopt the mission and resume it.',
       inputSchema:{type:'object',properties:{host:{type:'string',enum:[host]}},required:['host'],additionalProperties:false},
-      payloadSchema:{type:'object',properties:{ticketId:{type:'string',format:'uuid'},verdict:{type:'string',enum:['APPROVE','REQUEST_CHANGES']}},required:['ticketId','verdict'],additionalProperties:false}}]};
+      payloadSchema:{type:'object',properties:{ticketId:{type:'string',format:'uuid'},verdict:{type:'string',enum:['APPROVE','REQUEST_CHANGES','EXPIRED']}},required:['ticketId','verdict'],additionalProperties:false}}]};
 }
 
 // rw: transacción de escritura. post: envío saliente (safeWebhookPost en producción).
@@ -150,7 +150,7 @@ export function unsubscribeEvent(db,{identity,input}){
 // Va en la misma transacción que emite el ticket. Devuelve cuántos encoló.
 export function queueEvent(db,{clientId,ticketId,name=REVIEW_EVENT,data=null,now=Date.now()}){
   if(![REVIEW_EVENT,REVIEW_DONE_EVENT].includes(name))fail('UNKNOWN_EVENT','Unknown event');
-  if(name===REVIEW_DONE_EVENT&&(!data||!['APPROVE','REQUEST_CHANGES'].includes(data.verdict)))fail('INVALID_EVENT_POINTER','Invalid review verdict');
+  if(name===REVIEW_DONE_EVENT&&(!data||!['APPROVE','REQUEST_CHANGES','EXPIRED'].includes(data.verdict)))fail('INVALID_EVENT_POINTER','Invalid review verdict');
   if(!UUID.test(String(ticketId)))fail('INVALID_EVENT_POINTER','El aviso solo lleva el id del ticket');
   const all=rows(db,OUT);
   for(const old of all)if(terminal(old)&&now-(old.terminalAt??0)>=HISTORY_MS)del(db,OUT,old.id);

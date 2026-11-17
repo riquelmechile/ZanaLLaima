@@ -1,0 +1,137 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {remoteFixture,sha,REVIEWER_LOGIN} from './helpers/remote-fixture.mjs';
+import {makePlan} from './helpers/plan-fixture.mjs';
+import {remoteRead,transact} from '../src/store.mjs';
+import {loadRun} from '../src/project-run-store.mjs';
+import {cancelMission} from '../src/lifecycle.mjs';
+
+const gh={repo:'o/r',base:'main'};
+async function setup(f){
+  f.owner=await f.session();
+  let w=await f.call('zana_workspace_create',{idea:'Sistema de hitos de equipo'},f.owner);
+  w=await f.call('zana_workspace_update',{workspaceId:w.workspaceId,expectedVersion:0,
+    answers:{goal:'Gestionar hitos',users:'Equipos',platform:'Web',features:'Planes',data:'Sin secretos'}},f.owner);
+  w=await f.call('zana_workspace_update',{workspaceId:w.workspaceId,expectedVersion:1,plan:makePlan(w.brief)},f.owner);
+  const a=await f.call('zana_plan_approval_request',{workspaceId:w.workspaceId,expectedVersion:w.version},f.owner);
+  f.runtime.planApproval.decide({approvalId:a.approvalId,decision:'allow',passwordOk:true});
+  return f.call('zana_project_run_start',{workspaceId:w.workspaceId,...gh},f.owner);
+}
+const init=(f,final=true)=>f.call('zana_mission_init',{spec:f.spec,github:gh,milestone:{id:'core',final}},f.owner);
+const reconcile=(f,started,id,extra={})=>f.call('zana_project_reconcile',
+  {repo:gh.repo,expectedRevision:started.revision,milestoneId:'core',missionId:id,final:true,action:'attach',...extra},f.owner);
+function proof(f,id,number=7,{merged=true,approved=true,green=true}={}){
+  const branch='zana/'+id;f.api.state.push(branch,sha('a'));f.api.state.openPull(branch,number);
+  const pull=f.api.state.pulls.at(-1);
+  pull.state=merged?'closed':'open';pull.merged=merged;pull.merged_at=merged?'2026-11-17T00:00:00Z':null;
+  pull.merge_commit_sha=merged?sha('9'):null;
+  if(approved)f.api.state.reviews[number]=[{id:901,user:{login:REVIEWER_LOGIN},state:'APPROVED',commit_id:sha('a')}];
+  if(green)f.api.state.green(sha('a'));
+  return pull;
+}
+const run=f=>f.call('zana_project_next',{repo:gh.repo},f.owner);
+
+test('C1: attach reconciles a human-merged PR with exact evidence and is idempotent',async()=>{
+  const f=await remoteFixture();
+  try{
+    await setup(f);const m=await init(f);
+    proof(f,m.id);
+    const before=await run(f);
+    const first=await reconcile(f,before,m.id);
+    assert.equal(first.error,undefined,first.error);
+    assert.equal(first.recorded,true);
+    assert.equal(first.status,'DONE');
+    assert.equal((await run(f)).status,'READY_TO_DELIVER');
+    assert.deepEqual((await f.runtime.readAudit({missionId:m.id,limit:100})).find(x=>
+      x.tool==='zana_project_reconcile.run'&&x.outcome==='SUCCESS')?.detail,
+      {projectId:m.memory.projectId,milestoneId:'core',missionId:m.id,transition:'DONE'});
+    const second=await reconcile(f,await run(f),m.id);
+    assert.equal(second.already,true,second.error);
+    const cancelled=await f.call('zana_mission_cancel',{},f.owner);
+    assert.equal(cancelled.error,undefined,cancelled.error);
+    assert.deepEqual(cancelled.run,{released:false,reason:'PART_RECORDED'});
+  }finally{await f.cleanup();}
+});
+
+test('C1: attachPart registers a merged PR created before the run',async()=>{
+  const f=await remoteFixture();
+  try{
+    await setup(f);
+    proof(f,'previous-work');
+    const before=await run(f);
+    const result=await reconcile(f,before,'previous-work');
+    assert.equal(result.error,undefined,result.error);
+    assert.equal(result.recorded,true);
+    assert.equal((await run(f)).milestones[0].status,'DONE');
+  }finally{await f.cleanup();}
+});
+
+test('C1: fail-closed GitHub evidence and stale revision leave run untouched',async()=>{
+  for(const [caseName,option,code] of [
+    ['not-merged',{merged:false},'PR_NOT_MERGED'],
+    ['no-review',{approved:false},'REVIEW_NOT_APPROVED'],
+    ['no-ci',{green:false},'CI_NOT_GREEN']]){
+    const f=await remoteFixture();
+    try{
+      await setup(f);const m=await init(f);proof(f,m.id,7,option);
+      const before=await run(f);
+      assert.match((await reconcile(f,before,m.id)).error??'',new RegExp(code),caseName);
+      assert.equal((await run(f)).revision,before.revision);
+      assert.equal((await run(f)).milestones[0].status,'RUNNING');
+    }finally{await f.cleanup();}
+  }
+  const f=await remoteFixture();
+  try{
+    await setup(f);const m=await init(f);proof(f,m.id);
+    const before=await run(f);
+    assert.match((await reconcile(f,before,m.id,{expectedRevision:before.revision-1})).error??'',/STALE_REVISION/);
+    assert.equal((await run(f)).revision,before.revision);
+    const original=f.runtime.github.openPullsFor;
+    f.runtime.github.openPullsFor=async()=>{throw Error('network down');};
+    assert.match((await reconcile(f,before,m.id)).error??'',/GITHUB_UNAVAILABLE/);
+    f.runtime.github.openPullsFor=original;
+    const other=await f.session('zana-chatgpt','different-client');
+    const args={repo:gh.repo,expectedRevision:before.revision,milestoneId:'core',missionId:m.id,final:true};
+    assert.match((await f.call('zana_project_reconcile',args,other)).error??'',/RUN_OTHER_CLIENT/);
+    assert.equal((await f.call('zana_session_status',{},other)).writerMarked,false);
+  }finally{await f.cleanup();}
+});
+
+test('C1: release only inactive unmerged missions, never merged/active',async()=>{
+  const f=await remoteFixture();
+  try{
+    await setup(f);const m=await init(f);
+    const args={repo:gh.repo,expectedRevision:(await run(f)).revision,
+      milestoneId:'core',missionId:m.id,final:true,action:'release'};
+    assert.match((await f.call('zana_project_reconcile',args,f.owner)).error??'',/MISSION_ACTIVE/);
+    const pull=proof(f,m.id,7,{merged:false});
+    await transact(mission=>cancelMission(mission));
+    pull.state='closed';pull.merged=true;pull.merged_at='2026-11-17T00:00:00Z';
+    assert.match((await f.call('zana_project_reconcile',args,f.owner)).error??'',/PR_ALREADY_MERGED/);
+    pull.state='open';pull.merged=false;pull.merged_at=null;
+    const released=await f.call('zana_project_reconcile',args,f.owner);
+    assert.equal(released.error,undefined,released.error);
+    assert.equal(released.released,true);
+    const before=await run(f);assert.equal(before.milestones[0].status,'PENDING');
+    assert.match(JSON.stringify(await remoteRead(db=>loadRun(db,m.memory.projectId).milestones[0].attempts)),/OPERATOR_RELEASE/);
+  }finally{await f.cleanup();}
+});
+
+test('C1: mission init rejects open PR of earlier attempt, permits closed and fails closed on GitHub outage',async()=>{
+  const f=await remoteFixture();
+  try{
+    await setup(f);const m=await init(f);
+    const pull=proof(f,m.id,7,{merged:false});
+    const cancelled=await f.call('zana_mission_cancel',{},f.owner);
+    assert.equal(cancelled.run.released,true,cancelled.error);
+    await f.call('zana_mission_archive',{},f.owner);
+    assert.match((await init(f)).error??'',/PRIOR_PR_OPEN/);
+    const original=f.runtime.github.openPullsFor;
+    f.runtime.github.openPullsFor=async()=>{throw Error('offline');};
+    assert.match((await init(f)).error??'',/GITHUB_UNAVAILABLE/);
+    f.runtime.github.openPullsFor=original;
+    pull.state='closed';
+    const next=await init(f);
+    assert.equal(next.error,undefined,next.error);
+  }finally{await f.cleanup();}
+});

@@ -32,7 +32,7 @@ Hecho en esta versión:
 - [x] **CI por repositorio** (`ZANA_REPO_CHECKS_JSON`), aplicado en checks, entrega, merge y dispatch.
 - [x] **Repos permitidos por cuenta** (`owner/*` en `ZANA_GITHUB_REPOS`).
 - [x] Lecturas de archivos como texto, sin el aviso de "materializar archivos" de ChatGPT.
-- [ ] **0.8.0 histórica:** el orquestador de hitos aún no estaba conectado a tools MCP ni memoria proyectada; delegación y entrega continuaban pendientes.
+- [x] Contratos con tests, **sin tool que los ejecute**: creación de repositorios (del bootstrap solo está conectada la propuesta, `zana_bootstrap_prepare`), orquestador de hitos con recuperación, paquetes 4R para subagentes, gate de entrega de proyecto y eventos firmados.
 
 Lo que sigue:
 

@@ -555,3 +555,10 @@ test('A4 memoria: createdAt distinto fuerza reconciliación total',()=>{
   const prev={...next,createdAt:'2026-11-13T15:00:00.000Z'};
   assert.deepEqual(runMemoryEntries(prev,next),runMemoryEntries(null,next));
 });
+
+
+test('C4: tablero muestra sufijo explícito de cancelación, no su motivo',()=>{
+  const board=runBoard(state([milestone()],{status:'CANCELLED',updatedAt:at,reason:'Motivo secreto'}));
+  assert.ok(board.includes(' · cancelada '+at));
+  assert.ok(!board.includes('Motivo secreto'));
+});

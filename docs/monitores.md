@@ -25,8 +25,8 @@ Se suscribe a `zana.review.done`, cuyo payload es `{ticketId, verdict}`. El avis
 1. Carga la skill `zana-project-orchestrator`.
 2. Resuelve la misión del ticket en el backend y llama a `zana_mission_adopt({missionId})`.
 3. Detente ante `ADOPT_OTHER_CLIENT`, `REVIEWER_READ_ONLY`, `ADOPT_MISSION_BUSY` o `ADOPT_REVIEW_IN_PROGRESS`.
-4. Con `APPROVE`, exige `zana_delivery_status` completamente verde sobre el SHA exacto antes de llamar a `zana_merge`; después consulta `zana_project_next` para avanzar al siguiente hito listo. `PR_ALREADY_MERGED` o `AUDIT_UNAVAILABLE` se concilian con `zana_project_reconcile` attach, no repitiendo el merge.
-5. Con `REQUEST_CHANGES`, inicia la corrección, modifica solo lo autorizado, vuelve a dejar los checks verdes y pide un ticket nuevo. Si el operador canceló una misión, usa `zana_project_reconcile` release tras cerrar los PR sin merge; `zana_project_run_cancel` exige un sí explícito.
+4. Con `APPROVE`, `zana_delivery_status` debe estar verde sobre SHA exacto. El inicio de corrida del usuario sobre plan aprobado autoriza `zana_merge` para cada hito; fuera de ella rige la petición puntual de `zana-odd`. Si `zana_merge` resulta exitoso con `merged:true` y `run.recorded:false` (`AUDIT_UNAVAILABLE`), concilia con `zana_project_reconcile` attach sin repetir el merge. Después `zana_mission_close` con `summary` obligatorio sin temas `hito:`/`proyecto:` → `zana_mission_archive` → `zana_project_next` → `zana_mission_init` con `spec`. Sigue `zana-odd` dentro de la misión.
+5. Con `REQUEST_CHANGES`, corrige solo lo autorizado, repite CI y pide ticket nuevo. Con `PRIOR_PR_OPEN` o `PR_STILL_OPEN`, detente y pide al usuario u operador que cierre el PR anterior SIN merge en GitHub; el modelo no puede cerrarlo ni fusionarlo por fuera de `zana_merge`. Para cancelar una misión, `zana_mission_cancel`; para liberar, `zana_project_reconcile` release solo con misión inactiva y PR cerrados sin merge. `zana_project_run_cancel` requiere un sí explícito.
 6. Nunca revisa un ticket de la misión que adoptó.
 
 ### Prompt de ejemplo

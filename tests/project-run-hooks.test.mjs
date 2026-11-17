@@ -553,3 +553,91 @@ test('B2b: outsidePlan mantiene dueño OAuth; sin corrida conserva las reglas an
     assert.equal((await remoteRead(db=>loadRun(db,m.memory.projectId).outsidePlan[0].missionId)),m.id);
   }finally{await f.cleanup();}
 });
+
+test('R2: una misión normal de B funciona aunque la corrida de A terminó',async()=>{
+  for(const state of ['READY_TO_DELIVER','CANCELLED']){
+    const f=await remoteFixture();
+    try{
+      const started=await setup(f);
+      if(state==='READY_TO_DELIVER'){const m=await init(f,{milestone:{id:'core',final:true}});
+        assert.equal((await approvedMerge(f,m)).state,'MERGED');
+        await f.call('zana_mission_close',{summary},f.owner);await f.call('zana_mission_archive',{},f.owner);
+      }else await remoteWrite(db=>{const r=loadRun(db,started.projectId);
+        saveRun(db,r,cancelProjectRun(r,{reason:'Corrida detenida por la prueba',now:new Date().toISOString()}));});
+      const other=await f.session('zana-chatgpt','cliente-b'),ordinary=await init(f,{},other);
+      assert.equal(ordinary.error,undefined,ordinary.error);
+      assert.equal((await f.call('zana_start_batch',{},other)).error,undefined,state);
+      assert.doesNotMatch((await f.call('zana_merge',{missionId:ordinary.id},other)).error??'',/RUN_OTHER_CLIENT/,state);
+      assert.equal((await f.call('zana_mission_cancel',{},other)).status,'CANCELLED');
+    }finally{await f.cleanup();}
+  }
+});
+test('R2: el dueño protege todas las escrituras antes de marcar writer',async()=>{
+  for(const name of ['zana_start_batch','zana_mission_cancel','zana_mission_close','zana_mission_archive',
+    'zana_memory_save','zana_memory_resolve','zana_unit_retry','zana_unit_heartbeat',
+    'zana_review_request','zana_correction_start','zana_budget_extend']){
+    const f=await remoteFixture();
+    try{
+      await setup(f);const m=await init(f,{milestone:{id:'core',final:true}});
+      if(['zana_mission_close','zana_mission_archive'].includes(name))await approvedMerge(f,m);
+      if(name==='zana_mission_archive')await f.call('zana_mission_close',{summary},f.owner);
+      const other=await f.session('zana-chatgpt','client-b');
+      const v=await f.call(name,name==='zana_mission_close'?{summary}:name==='zana_review_request'?{missionId:m.id}:{},other);
+      assert.match(v.error??'',/RUN_OTHER_CLIENT/,name+': '+JSON.stringify(v));
+      assert.equal((await f.call('zana_session_status',{},other)).writerMarked,false,name);
+    }finally{await f.cleanup();}
+  }
+});
+test('R2: RUN_CORRUPT mantiene el comportamiento del main',async()=>{
+  for(const name of ['zana_start_batch','zana_mission_close','zana_mission_cancel']){
+    const f=await remoteFixture();
+    try{
+      await setup(f);const m=await init(f,{milestone:{id:'core',final:true}});
+      if(name==='zana_mission_close')await approvedMerge(f,m);
+      await remoteWrite(db=>db.prepare('UPDATE metadata SET value=? WHERE key=?').run('{corrupt','zana:run:'+m.memory.projectId));
+      const v=await f.call(name,name==='zana_mission_close'?{summary}:{},f.owner);
+      assert.equal(v.error,undefined,name+': '+v.error);
+      if(name==='zana_mission_cancel'){assert.equal(v.status,'CANCELLED');assert.deepEqual(v.run,{released:false,reason:'RUN_CORRUPT'});}
+      if(name==='zana_mission_close')assert.equal(v.status,'CLOSED');
+    }finally{await f.cleanup();}
+  }
+});
+test('R2: cierre sin prefijo rechaza suplantación normalizada',async()=>{
+  for(const done of ['\u202e[hito core parte 1] Cierre fingido','  [fuera del plan] Cierre fingido']){
+    const f=await remoteFixture();
+    try{f.owner=await f.session();const m=await init(f);await approvedMerge(f,m);
+      assert.match((await f.call('zana_mission_close',{summary:{...summary,done}},f.owner)).error??'',/RESERVED_PREFIX/);
+    }finally{await f.cleanup();}
+  }
+});
+test('R2: merge exterior o GitHub caído no cancela sin auditoría',async()=>{
+  for(const unavailable of [false,true]){
+    const f=await remoteFixture();
+    try{
+      await setup(f);const m=await init(f,{milestone:{id:'core',final:true}});
+      await remoteWrite(db=>db.exec("CREATE TRIGGER deny_result BEFORE INSERT ON remote_audit WHEN NEW.tool='zana_merge.result' AND NEW.outcome='MERGED' BEGIN SELECT RAISE(ABORT,'NO_AUDIT'); END"));
+      await approvedMerge(f,m);await remoteWrite(db=>db.exec('DROP TRIGGER deny_result'));
+      if(unavailable)f.runtime.github.pull=async()=>{throw new Error('GitHub fuera de servicio');};
+      const v=await f.call('zana_mission_cancel',{},f.owner);
+      assert.match(v.error??'',unavailable?/GITHUB_UNAVAILABLE/:/PR_ALREADY_MERGED/);
+      assert.equal((await f.call('zana_mission_status',{},f.owner)).status,'ACTIVE');
+      assert.equal((await run(f)).milestones[0].status,'RUNNING');
+      assert.ok((await f.runtime.readAudit({missionId:m.id,limit:100})).some(x=>x.tool==='zana_mission_cancel.run'&&x.outcome==='ERROR'));
+    }finally{await f.cleanup();}
+  }
+});
+test('R2: MERGED auditado permite rescatar SHA exacto si completePart falla',async()=>{
+  const f=await remoteFixture();
+  try{
+    const started=await setup(f),m=await init(f,{milestone:{id:'core',final:true}});
+    await remoteWrite(db=>db.exec("CREATE TRIGGER deny_part BEFORE INSERT ON metadata WHEN NEW.key LIKE 'zana:run:%' BEGIN SELECT RAISE(ABORT,'PART_FAILED'); END"));
+    const merged=await approvedMerge(f,m);assert.equal(merged.run.recorded,false);
+    await remoteWrite(db=>db.exec('DROP TRIGGER deny_part'));
+    const v=await f.call('zana_mission_cancel',{},f.owner);
+    assert.equal(v.run.recorded,true,v.error);assert.equal(v.run.status,'DONE');
+    const state=await remoteRead(db=>loadRun(db,started.projectId));
+    assert.equal(state.milestones[0].parts[0].headSha,sha('a'));
+    assert.deepEqual((await f.runtime.readAudit({missionId:m.id,limit:100})).find(x=>x.tool==='zana_mission_cancel.run'&&x.outcome==='SUCCESS')?.detail,
+      {projectId:started.projectId,milestoneId:'core',transition:'DONE'});
+  }finally{await f.cleanup();}
+});

@@ -109,6 +109,8 @@ test('C1: release only inactive unmerged missions, never merged/active',async()=
     pull.state='closed';pull.merged=true;pull.merged_at='2026-11-17T00:00:00Z';
     assert.match((await f.call('zana_project_reconcile',args,f.owner)).error??'',/PR_ALREADY_MERGED/);
     pull.state='open';pull.merged=false;pull.merged_at=null;
+    assert.match((await f.call('zana_project_reconcile',args,f.owner)).error??'',/PR_STILL_OPEN/);
+    pull.state='closed';
     const released=await f.call('zana_project_reconcile',args,f.owner);
     assert.equal(released.error,undefined,released.error);
     assert.equal(released.released,true);
@@ -194,6 +196,7 @@ test('C2: release inspecciona todos los PR de la rama y exige que estén cerrado
     try{
       await setup(f);const m=await init(f);
       const a=proof(f,m.id,7,{merged:flags[0]===true});
+      if(!flags[0])a.state='closed';
       const b=proof(f,m.id,8,{merged:false});
       if(flags[1]==='open')b.state='open';
       else b.state='closed';
@@ -261,7 +264,7 @@ test('C2: cancelar corrida exige consentimiento, propietario y ausencia de misi�
     assert.equal(cancelled.status,'CANCELLED',cancelled.error);
     const next=await run(f);
     assert.equal(next.status,'CANCELLED');assert.equal(next.revision,before.revision+1);
-    assert.equal(next.ready.length,0);assert.equal(next.memory.entries.some(x=>x.topic==='proyecto:estado'),true);
+    assert.equal(next.ready.length,0);assert.equal(next.memory.entries.some(x=>x.topic==='proyecto:avance'),true);
     const restarted=await f.call('zana_project_run_start',{workspaceId:started.run.workspaceId,...gh},f.owner);
     assert.equal(restarted.created,true,restarted.error);
     assert.equal(restarted.run.revision,0);
@@ -276,5 +279,30 @@ test('C2: una misión activa impide cancelar la corrida sin efectos',async()=>{
       reason:'Necesitamos cancelar esta corrida'},f.owner);
     assert.match(r.error??'',/RUN_HAS_ACTIVE_MISSION/);
     assert.equal((await run(f)).revision,before.revision);
+  }finally{await f.cleanup();}
+});
+
+
+test('C2: release fail-closed ante GitHub caído sin cambiar revisión',async()=>{
+  const f=await remoteFixture();
+  try{
+    await setup(f);const m=await init(f),before=await run(f);
+    await transact(mission=>{cancelMission(mission);return mission;});
+    f.runtime.github.openPullsFor=async()=>{throw Error('red sin conexión');};
+    const denied=await reconcile(f,before,m.id,{action:'release'});
+    assert.match(denied.error??'',/GITHUB_UNAVAILABLE/);
+    assert.equal((await run(f)).revision,before.revision);
+    assert.equal((await run(f)).milestones[0].status,'RUNNING');
+  }finally{await f.cleanup();}
+});
+
+test('C2: attach acepta id MAYÚSCULO y conserva la identidad canónica',async()=>{
+  const f=await remoteFixture();
+  try{
+    await setup(f);const m=await init(f);proof(f,m.id);
+    const result=await reconcile(f,await run(f),m.id.toUpperCase());
+    assert.equal(result.recorded,true,result.error);
+    assert.equal((await run(f)).milestones[0].status,'DONE');
+    assert.equal(await remoteRead(db=>loadRun(db,m.memory.projectId).milestones[0].parts[0].missionId),m.id);
   }finally{await f.cleanup();}
 });

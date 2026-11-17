@@ -193,6 +193,9 @@ test('cancel: libera hito, registra intento/rondas; revisora no puede cancelar n
     const reviewer=await f.session();
     assert.equal((await f.call('zana_review_claim',{ticket:req.ticket},reviewer)).error,undefined);
     assert.match((await f.call('zana_mission_cancel',{},reviewer)).error,/REVIEWER_READ_ONLY/);
+    assert.match((await f.call('zana_project_run_cancel',{repo:gh.repo,
+      expectedRevision:(await run(f)).revision,reason:'Cancelación de corrida solicitada'},reviewer)).error,
+    /REVIEWER_READ_ONLY/);
     assert.match((await init(f,{milestone:{id:'core',final:true}},reviewer)).error,/REVIEWER_READ_ONLY/);
     assert.equal((await f.call('zana_session_status',{},reviewer)).writerMarked,false);
     const cancel=await f.call('zana_mission_cancel',{},f.owner);
@@ -856,5 +859,22 @@ test('C1: búsqueda por rama omite pulls no fusionados o de otro head.ref',async
     f.api.state.pulls.unshift({...structuredClone(real),number:88,head:{...real.head,ref:'otra'}},{...structuredClone(real),number:89,merged:false,merged_at:null});
     const v=await f.call('zana_mission_cancel',{},f.owner);assert.equal(v.run.recorded,true,v.error);
     assert.equal((await remoteRead(db=>loadRun(db,started.projectId).milestones[0].parts[0].prNumber)),real.number);
+  }finally{await f.cleanup();}
+});
+
+
+test('C2: cancel rechaza auditoría de merge que no corresponde a head remoto',async()=>{
+  const f=await remoteFixture();
+  try{
+    const started=await setup(f),m=await init(f,{milestone:{id:'core',final:true}});
+    await remoteWrite(db=>db.exec("CREATE TRIGGER deny_part_c2 BEFORE INSERT ON metadata WHEN NEW.key LIKE 'zana:run:%' BEGIN SELECT RAISE(ABORT,'PART_FAILED'); END"));
+    assert.equal((await approvedMerge(f,m)).run.recorded,false);
+    await remoteWrite(db=>db.exec('DROP TRIGGER deny_part_c2'));
+    f.api.state.branches[m.github.branch]=sha('b');
+    const before=await run(f);
+    const denied=await f.call('zana_mission_cancel',{},f.owner);
+    assert.match(denied.error??'',/MERGE_EVIDENCE_MISMATCH/);
+    assert.equal((await run(f)).revision,before.revision);
+    assert.equal((await remoteRead(db=>loadRun(db,started.projectId).milestones[0].status)),'RUNNING');
   }finally{await f.cleanup();}
 });

@@ -203,6 +203,10 @@ test('cancel: libera hito, registra intento/rondas; revisora no puede cancelar n
     assert.match(next.memory.entries.find(x=>x.topic==='hito:core')?.body??'',/Intento fallido/);
     assert.match((await remoteRead(db=>loadRun(db,start.projectId).milestones[0].attempts.at(-1)?.reason))??'',/Misión cancelada/);
     await f.call('zana_mission_archive',{},f.owner);
+    const beforeRetry=await count();
+    assert.match((await init(f,{milestone:{id:'core',final:true}})).error,/PRIOR_PR_OPEN/);
+    assert.equal(await count(),beforeRetry);
+    Object.assign(f.api.state.pulls.at(-1),{state:'closed',merged:false});
     const second=await init(f,{milestone:{id:'core',final:true}});
     await transact(mission=>{mission.reviewCount=mission.budget.maxReviewRounds;return mission;});
     const closed=await f.call('zana_mission_cancel',{},f.owner);

@@ -69,7 +69,7 @@ export async function fakeGitHubApi(){
     }
     if(p==='/pulls'&&req.method==='GET'){
       const head=url.searchParams.get('head');
-      return send(200,state.pulls.filter(x=>(url.searchParams.get('state')==='all'||x.state===(url.searchParams.get('state')||'open'))&&(!head||'o:'+x.head.ref===head)));
+      return send(200,state.pulls.filter(x=>(url.searchParams.get('state')==='all'||x.state===(url.searchParams.get('state')||'open'))&&(!head||'o:'+x.head.ref===head)).sort((a,b)=>b.number-a.number));
     }
     // compareError: {status, body} as GitHub answers a diff it will not render (406/422).
     // compareFiles: files of a SHA...SHA compare (correction rounds); compareFilesError: {status, message}.

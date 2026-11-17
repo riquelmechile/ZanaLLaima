@@ -130,7 +130,7 @@ const NEW_TOOLS={
     z.object({repo:z.string().min(3).max(201),expectedRevision:z.number().int().min(0),
       milestoneId:projectMilestoneId(),missionId:projectMissionId(),final:z.boolean(),
       action:z.enum(['attach','release']).default('attach')}).strict()],
-  zana_project_run_cancel:['Cancel an active project run only after the user explicitly authorizes it; first cancel any active milestone mission. A later zana_project_run_start with the same approved plan creates a fresh run',false,
+  zana_project_run_cancel:['Never call it without asking the user. Cancel an active project run only after explicit authorization; first cancel any active milestone mission. A later zana_project_run_start with the same approved plan creates a new run',false,
     z.object({repo:z.string().min(3).max(201),expectedRevision:z.number().int().min(0),
       reason:z.string().min(8).max(300).regex(/^[^\p{Cc}\p{Cf}]+$/u)}).strict()],
   zana_project_next:['Read the project run after each merge to learn which milestone is ready next',true,
@@ -412,8 +412,8 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         if(prev)db.prepare('INSERT OR REPLACE INTO metadata(key,value) VALUES(?,?)')
           .run('zana:run-prev:'+projectId,JSON.stringify(prev));
         const next=initializeProjectRun(workspace.plan,{projectId,approvedDigest:approval.planDigest,repo:found.repo,base,
-          ownerClient:session.clientId,workspaceId,now:new Date().toISOString()});
-        const memory=saveRun(db,null,next,{secrets:secrets()});
+          ownerClient:session.clientId,workspaceId,now:new Date().toISOString(),revision:prev?prev.revision+1:0});
+        const memory=saveRun(db,prev,next,{secrets:secrets()});
         return {created:true,projectId,...(pointer.status!=='OK'?{pointer}:{}),run:next,...memory};
       });
     },
@@ -425,7 +425,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       if(!run)throw new Error('RUN_NOT_FOUND: no existe una corrida para el repositorio');
       if(run.ownerClient!==session.clientId)throw new Error('RUN_OTHER_CLIENT: la corrida pertenece a otro cliente');
       if(run.revision!==expectedRevision)throw new Error('STALE_REVISION: revisión distinta');
-      if(run.milestones.some(m=>m.running))throw new Error('RUN_HAS_ACTIVE_MISSION: cancela primero la misión del hito');
+      if(run.milestones.some(m=>m.running))throw new Error("RUN_HAS_ACTIVE_MISSION: cancela primero la misión del hito; si ya no está activa, usa zana_project_reconcile action:'release'");
       const next=cancelProjectRun(run,{expectedRevision,reason,now:new Date().toISOString()});
       const saved=saveRun(db,run,next,{secrets:secrets()});
       writeAudit(db,{caller:session,tool:'zana_project_run_cancel.run',category:'project_run',
@@ -453,6 +453,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         if(!run)throw new Error('RUN_NOT_FOUND: no existe corrida');
         if(run.ownerClient!==session.clientId)throw new Error('RUN_OTHER_CLIENT: otro cliente');
         if(run.revision!==expectedRevision)throw new Error('STALE_REVISION: revisión distinta');
+        if(action==='release'&&run.status!=='ACTIVE')throw new Error('RUN_NOT_ACTIVE: corrida no activa');
         if(!run.milestones.some(x=>x.id===milestoneId))throw new Error('INVALID_ID: hito desconocido');
         const known=run.milestones.flatMap(m=>[m.running?.missionId,
           ...m.parts.map(p=>p.missionId),...m.attempts.map(a=>a.missionId)])
@@ -488,7 +489,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
           throw new Error('PR_ALREADY_MERGED: usa attach');
         if(pulls.some(x=>x.state==='open'))
           throw new Error('PR_STILL_OPEN: cierra el PR antes de liberar');
-        pull=pulls.at(-1)??null;
+        pull=pulls.reduce((latest,p)=>!latest||p.number>latest.number?p:latest,null);
       }
       const merged=pull?.merged===true&&pull?.state==='closed';
       if(action==='attach'){
@@ -1190,6 +1191,10 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
             return pid?loadRun(db,pid):null;
             }catch(error){if(runErrorCode(error)==='RUN_CORRUPT')return null;throw error;}
           });
+          if(!run&&name==='zana_project_reconcile'&&!['attach','release'].includes(args?.action))
+            throw new Error('INVALID_ACTION: usar attach o release');
+          if(!run&&(name==='zana_project_reconcile'||name==='zana_project_run_cancel'))
+            throw new Error('RUN_NOT_FOUND: no existe una corrida para el repositorio');
           const belongs=['zana_mission_init','zana_project_reconcile','zana_project_run_cancel'].includes(name)||!run||await rr((db,mission)=>{
             const id=name==='zana_merge'?args?.missionId:args?.missionId??mission?.id;
             const same=x=>String(x).toLowerCase()===String(id).toLowerCase();
@@ -1215,6 +1220,8 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
             category:'refused'});
           throw new Error(error);
         }
+        if(name==='zana_project_reconcile'&&!['attach','release'].includes(args?.action))
+          throw new Error('INVALID_ACTION: usar attach o release');
         await rw(db=>markSessionWriter(db,session.sessionId));
       }
       data=await within(Promise.resolve().then(()=>fn(args??{},session,extra)),config.toolDeadlineMs,name);

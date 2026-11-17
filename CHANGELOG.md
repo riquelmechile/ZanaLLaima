@@ -2,6 +2,8 @@
 
 ## [Sin publicar]
 
+- C3: separa motivo de cancelación de memoria servidor, conserva revisiones entre corridas, elige el PR más nuevo en release y conecta la guía operativa del orquestador con conciliación y seguridad.
+
 - C2: reconcile elige PR fusionado único o valida todos los PR antes de liberar, usa la misión canónica y rechaza acciones desconocidas; cancelación explícita de corrida con control de dueño, revisión y memoria, más regresiones de seguridad.
 
 - B2b R2: ownership por misión antes de marcar escritor, cancelación sin evidencia inventada, RUN_CORRUPT tolerado, prefijos reservados y recuperación de outsidePlan desde auditoría tras retención de 50; regresiones y gates.

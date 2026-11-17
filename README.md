@@ -89,7 +89,8 @@ Tus valores reales (dominio, cuentas, tokens y clave del operador) viven **solo*
 | Acceso GitHub completo opcional del orquestador (`zana_github_request`, `ZANA_GITHUB_FULL_ACCESS`) | Observado en uso real: GPT configuró CI y protección del repositorio nuevo |
 | 4R automática por evento `zana.review.ready` | Observada en uso real: el monitor del anfitrión despertó una ejecución nueva, reclamó el ticket sin código `ZR-` y publicó una revisión que pidió cambios, sin abrir una conversación manual |
 | Evento `zana.review.done` y `zana_mission_adopt` | Implementados, probados y desplegados con 0.9.0; todavía no observados en vivo. El lease dura `claimTtlMinutes` (240 min por defecto) y solo vale para la adopción más reciente |
-| `project-orchestrator`, `project-review-delegation`, `project-delivery` y `project-events` | Contratos con tests, sin tool que los ejecute; ningún módulo de `src/` los importa. El orquestador de hitos no está conectado: la skill `zana-project-orchestrator` retoma la misión usando las tools de misión |
+| `project-orchestrator` y corrida de hitos (`zana_project_run_start`, `zana_project_next`, `zana_project_reconcile`, `zana_project_run_cancel`) | **Conectados al servidor**, con revisiones optimistas, memoria proyectada y conciliación verificada en GitHub |
+| `project-review-delegation`, `project-delivery` y `project-events` | Contratos auxiliares; los gates de revisión, entrega y eventos operan a través de las tools y rutas remotas disponibles |
 | CI por repositorio (`ZANA_REPO_CHECKS_JSON`) y repos permitidos por cuenta (`owner/*`) | Implementado y probado |
 | Una corrida de Actions por SHA | Observado: una misión con una corrección de CI y una ronda de corrección de la revisión gastó 3 corridas, una por SHA |
 | Casos negativos en vivo (la revisora intenta escribir, la autora reclama su ticket, push después del ticket) | Probados contra servidores falsos; **sin observar en vivo** |

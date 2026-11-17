@@ -102,7 +102,7 @@ export function validateRun(s){
   return s;
 }
 export function initializeProjectRun(plan,options){
-  const {projectId,approvedDigest,repo,base,ownerClient,workspaceId,now}=options??{};
+  const {projectId,approvedDigest,repo,base,ownerClient,workspaceId,now,revision:initialRevision=0}=options??{};
   const p=canonicalPlan(plan);
   if(typeof projectId!=='string'||!PROJECT_ID.test(projectId))fail('INVALID_ID','Project ID inválido');
   if(approvedDigest!==p.digest)fail('APPROVAL_REQUIRED','El digest del plan no está aprobado');
@@ -114,7 +114,7 @@ export function initializeProjectRun(plan,options){
   time(now);
   const s={
     schema:'zana.project-run.v2',projectId,repo,base,ownerClient,workspaceId,planDigest:p.digest,
-    revision:0,status:'ACTIVE',
+    revision:initialRevision,status:'ACTIVE',
     milestones:p.milestones.map(({id,dependsOn,objective,acceptance})=>({
       id,dependsOn:[...dependsOn],objective,acceptance,status:'PENDING',parts:[],running:null,attempts:[]
     })),
@@ -207,7 +207,7 @@ export function releaseMilestone(s,options){
 }
 export function cancelProjectRun(s,options){
   const {expectedRevision,reason:why,now}=options??{};
-  revision(s,expectedRevision);if(s.status!=='ACTIVE')fail('INVALID_STATE','Solo se cancela una corrida activa');
+  revision(s,expectedRevision);if(s.status!=='ACTIVE')fail('RUN_NOT_ACTIVE','Solo se cancela una corrida activa');
   const text=reason(why);return bump(s,now,v=>{for(const m of v.milestones)if(m.running){
     const attemptReason=clean(Array.from('Corrida cancelada: '+text).slice(0,300).join(''));
     m.attempts=[...m.attempts,{

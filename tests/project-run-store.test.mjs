@@ -231,9 +231,9 @@ test('corrida cancelada se reemplaza y conserva el estado previo',async()=>{
     const first=await f.call('zana_project_run_start',{workspaceId:w.workspaceId,repo:'o/r',base:'main'},s);
     await remoteWrite(db=>{const run=loadRun(db,first.projectId),cancel=cancelProjectRun(run,{expectedRevision:0,reason:'Cambio solicitado',now:new Date(Date.parse(run.updatedAt)+1).toISOString()});db.prepare('UPDATE metadata SET value=? WHERE key=?').run(JSON.stringify(cancel),'zana:run:'+run.projectId);});
     const next=await f.call('zana_project_run_start',{workspaceId:w.workspaceId,repo:'o/r',base:'main'},s);
-    assert.equal(next.created,true);assert.equal(next.run.revision,0);
+    assert.equal(next.created,true);assert.equal(next.run.revision,2);
     const stored=await remoteRead(db=>({run:loadRun(db,first.projectId),prev:JSON.parse(db.prepare('SELECT value FROM metadata WHERE key=?').get('zana:run-prev:'+first.projectId).value)}));
-    assert.deepEqual([stored.run.revision,stored.prev.status],[0,'CANCELLED']);
+    assert.deepEqual([stored.run.revision,stored.prev.status],[2,'CANCELLED']);
     assert.equal(await count("SELECT COUNT(*) n FROM metadata WHERE key=?", 'zana:run-prev:'+first.projectId),1);
   }finally{await f.cleanup();}
 });

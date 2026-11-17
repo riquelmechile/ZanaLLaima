@@ -8,7 +8,7 @@ Se suscribe a `zana.review.ready`, cuyo payload es `{ticketId}`.
 
 **Advertencia de separación estricta:** con `ZANA_DISTINCT_REVIEWER_CLIENT=true`, este monitor revisor no sirve. Los eventos se entregan solo al cliente OAuth autor y el reclamo desde ese cliente responde `SAME_CLIENT`. En ese modo la revisión debe hacerse manualmente desde otro cliente OAuth, usando el código `ZR-`.
 
-1. **No invoques ninguna tool de ZanaLLaima antes del primer evento**: la sesión se registra en el primer acceso del conector, incluso al cargar skills o consultar estado. El primer ticket debe existir *antes* de registrar la sesión; si ya se registró, recrea el monitor. Tras desplegar esta versión, recrea el monitor una vez: las sesiones anteriores a la época de marca no acceden a la excepción. Al despertar, carga la skill `zana-4r`.
+1. **No invoques ninguna tool de ZanaLLaima antes del primer evento** (tampoco `zana_session_status`): la sesión se registra en el primer acceso del conector, incluso al cargar skills o consultar estado. El primer ticket debe existir *antes* de registrar la sesión; si ya se registró, recrea el monitor. Tras desplegar esta versión, recrea el monitor una vez: las sesiones anteriores a la época de marca no acceden a la excepción. Al despertar, carga la skill `zana-4r`.
 2. Llama a `zana_review_claim` con `ticketId` (también puede reclamar sin argumentos el ticket abierto más antiguo del mismo cliente OAuth).
 3. Lee el diff completo, ejecuta los cuatro lentes y finaliza la 4R.
 4. Publica la revisión con la cuenta revisora.
@@ -25,8 +25,8 @@ Se suscribe a `zana.review.done`, cuyo payload es `{ticketId, verdict}`. El avis
 1. Carga la skill `zana-project-orchestrator`.
 2. Resuelve la misión del ticket en el backend y llama a `zana_mission_adopt({missionId})`.
 3. Detente ante `ADOPT_OTHER_CLIENT`, `REVIEWER_READ_ONLY`, `ADOPT_MISSION_BUSY` o `ADOPT_REVIEW_IN_PROGRESS`.
-4. Con `APPROVE`, exige `zana_delivery_status` completamente verde sobre el SHA exacto antes de llamar a `zana_merge`; después cierra la misión y continúa el siguiente hito listo.
-5. Con `REQUEST_CHANGES`, inicia la corrección, modifica solo lo autorizado, vuelve a dejar los checks verdes y pide un ticket nuevo.
+4. Con `APPROVE`, exige `zana_delivery_status` completamente verde sobre el SHA exacto antes de llamar a `zana_merge`; después consulta `zana_project_next` para avanzar al siguiente hito listo. `PR_ALREADY_MERGED` o `AUDIT_UNAVAILABLE` se concilian con `zana_project_reconcile` attach, no repitiendo el merge.
+5. Con `REQUEST_CHANGES`, inicia la corrección, modifica solo lo autorizado, vuelve a dejar los checks verdes y pide un ticket nuevo. Si el operador canceló una misión, usa `zana_project_reconcile` release tras cerrar los PR sin merge; `zana_project_run_cancel` exige un sí explícito.
 6. Nunca revisa un ticket de la misión que adoptó.
 
 ### Prompt de ejemplo
@@ -34,5 +34,7 @@ Se suscribe a `zana.review.done`, cuyo payload es `{ticketId, verdict}`. El avis
 > Al recibir `zana.review.done`, carga `zana-project-orchestrator`, contrasta el `ticketId`, el veredicto y la misión en ZanaLLaima y adopta esa misión. Con aprobación, exige delivery verde sobre el SHA exacto antes de fusionar; con cambios pedidos, corrige y solicita un ticket nuevo. Detente ante cualquier error de adopción. Nunca revises un ticket de la misión adoptada. Mantén la suscripción habilitada y renuévala antes de `refreshBefore`.
 
 ## Separación con una sola cuenta
+
+Al crear el monitor **no consultes `zana_session_status` antes del primer evento**: incluso una lectura registra una sesión y puede invalidar la excepción de revisión. Después del primer reclamo sí sirve para diagnóstico.
 
 La separación autor/revisor no depende de que cada webhook abra una conversación nueva: el anfitrión puede reusar la misma sesión para varios tickets. En ese caso el backend permite la antigüedad solo a la **revisora pura** nacida después de la época de marca, que ya reclamó algún ticket en la encarnación actual de su sesión y carece de marca durable de escritora, actividad autoral registrada, misiones creadas o tickets solicitados y sigue aplicando `AUTHOR_SESSION`, `SAME_CLIENT` cuando está configurado, `SESSION_WROTE` y `REVIEWER_READ_ONLY`. Después de CUALQUIER restore (normal o ciego) o adopción de cuarentena se mueve la época al máximo entre la hora actual y las épocas previas: recrea el monitor revisor, aunque alguna marca se haya perdido. Usa `zana_session_status` para consultar `writerMarked`, `reviewerMonitorEligible` y motivo `WRITER`, `BEFORE_EPOCH`, `NO_PRIOR_CLAIM` o `LEGACY_ROWS`. La marca se elimina al podar la sesión, y un id recreado no hereda reclamos previos. El servidor rechaza escrituras protegidas en la misión revisada y marca las llamadas de escritura de otras tools, incluido GitHub REST no-GET; la autora no puede reclamar su propio ticket. No ve lo conversado en el chat: el monitor ha de ser una tarea dedicada exclusivamente a revisar. El límite es honesto: ambas sesiones pertenecen al mismo dueño. Es separación de sesiones y credenciales de GitHub, no independencia organizacional ni una auditoría externa.

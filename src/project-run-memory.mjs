@@ -36,7 +36,7 @@ export function runBoard(state){
   const ms=state.milestones,completed=ms.filter(m=>m.status==='DONE');
   let header='Plan '+clean(state.planDigest).slice(0,8)+' · '+clean(state.status)+
     ' · revisión '+state.revision+' · '+completed.length+'/'+ms.length+' hitos';
-  if(state.status==='CANCELLED')header+=' · motivo: '+short(state.reason,180);
+  if(state.status==='CANCELLED')header+=' · cancelada '+clean(state.updatedAt);
   if(state.outsidePlan.length)header+=' · fuera del plan: '+
     (state.outsidePlan.length>=50?'50+':state.outsidePlan.length);
   let doneLine='';

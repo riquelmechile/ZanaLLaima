@@ -815,23 +815,26 @@ test('C1: cancelar sin misión conserva respuesta legada',async()=>{
     assert.match((await f.call('zana_mission_cancel',{},author)).error??'',/No mission initialized/);
   }finally{await f.cleanup();}
 });
-
 test('C1: cancel solo recupera merge SHA de un pull fusionado en el head auditado',async()=>{
-  for(const tamper of [p=>{p.merged=false;p.merged_at=null;},p=>{p.head.sha=sha('b');}]){
+  for(const [tamper,blocked] of [[p=>{p.merged=false;p.merged_at=null;},false],[(p,f)=>{f.api.state.branches[p.head.ref]=sha('b');},true]]){
     const f=await remoteFixture();
     try{
       const started=await setup(f),m=await init(f,{milestone:{id:'core',final:true}});
       await remoteWrite(db=>db.exec("CREATE TRIGGER deny_part_c1 BEFORE INSERT ON metadata WHEN NEW.key LIKE 'zana:run:%' BEGIN SELECT RAISE(ABORT,'PART_FAILED'); END"));
       assert.equal((await approvedMerge(f,m)).run.recorded,false);
-      await remoteWrite(db=>db.exec('DROP TRIGGER deny_part_c1'));
-      tamper(f.api.state.pulls.at(-1));
+      await remoteWrite(db=>{
+        db.exec('DROP TRIGGER deny_part_c1');
+        const row=db.prepare("SELECT seq,detail FROM remote_audit WHERE mission_id=? AND tool='zana_merge.result' AND outcome='MERGED' ORDER BY seq DESC LIMIT 1").get(m.id);
+        db.prepare('UPDATE remote_audit SET detail=? WHERE seq=?').run(JSON.stringify({...JSON.parse(row.detail),mergeCommitSha:null}),row.seq);
+      });
+      tamper(f.api.state.pulls.at(-1),f);
       const v=await f.call('zana_mission_cancel',{},f.owner);
-      assert.match(v.error??'',/MERGE_EVIDENCE_MISMATCH/);
-      assert.equal((await remoteRead(db=>loadRun(db,started.projectId).milestones[0].status)),'RUNNING');
+      if(blocked)assert.match(v.error??'',/PR_ALREADY_MERGED/);
+      else assert.equal(v.run.released,true,v.error);
+      assert.equal((await remoteRead(db=>loadRun(db,started.projectId).milestones[0].status)),blocked?'RUNNING':'PENDING');
     }finally{await f.cleanup();}
   }
 });
-
 test('C1: cancel conserva identidad de misión y usa withMissionLock',async()=>{
   const f=await remoteFixture();
   try{

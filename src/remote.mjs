@@ -593,6 +593,8 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     zana_recover_expired:(args,session)=>checked(session,'zana_recover_expired',()=>operations.recoverExpired()),
     zana_unit_retry:(args,session)=>checked(session,'zana_unit_retry',()=>operations.retry(args)),
     async zana_mission_cancel(args,session){
+      const lockedId=await rr((db,mission)=>mission?.id??null);
+      const perform=async()=>{
       let status,runInfo=null;
       // Consultar GitHub antes de la transacción: cancelar jamás puede deshacer
       // un PR ya fusionado, incluso si el registro de completePart falló.
@@ -604,19 +606,32 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         const rm=remoteMission(db,mission.id);
         const ticket=db.prepare('SELECT pr_number FROM review_tickets WHERE mission_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1').get(mission.id);
         const audit=db.prepare("SELECT detail FROM remote_audit WHERE mission_id=? AND tool='zana_merge.result' AND outcome='MERGED' ORDER BY seq DESC LIMIT 1").get(mission.id);
-        return {repo:rm?.repo,projectId:pid,missionId:mission.id,prNumber:ticket?.pr_number??null,detail:audit?.detail?JSON.parse(audit.detail):null};
+        return {repo:rm?.repo,branch:rm?.branch,projectId:pid,missionId:mission.id,
+          prNumber:ticket?.pr_number??null,detail:audit?.detail?JSON.parse(audit.detail):null};
       });
-      // Solo zana_merge.result MERGED acredita CI/4R; un PR externo requiere reconciliación.
-      const mergedProof=proof?.detail?.headSha&&proof?.detail?.mergeCommitSha&&proof.prNumber?
-        {prNumber:proof.prNumber,headSha:proof.detail.headSha,mergeCommitSha:proof.detail.mergeCommitSha}:null;
+      // Un merge externo nunca acredita gates; la auditoría MERGED conserva la evidencia.
       const reject=async code=>{await audit({caller:session,tool:'zana_mission_cancel.run',missionId:proof.missionId,
         category:'project_run',outcome:'ERROR',detail:{projectId:proof.projectId,code}});
         throw new Error(code+': requiere reconciliación PR C');};
-      if(proof?.prNumber&&!mergedProof){let pull;
-        try{pull=await github.pull(proof.repo,proof.prNumber);}catch{await reject('GITHUB_UNAVAILABLE');}
-        if(pull?.merged===true||pull?.merged_at)await reject('PR_ALREADY_MERGED');
+      let prNumber=proof?.prNumber??null,pull=null;
+      const audited=Boolean(proof?.detail?.headSha&&proof?.detail?.mergeCommitSha&&prNumber);
+      if(proof?.repo&&!audited&&(prNumber||proof.branch)){
+        try{
+          if(!prNumber){
+            const candidates=await github.openPullsFor(proof.repo,proof.branch,'all');
+            const found=candidates.find(x=>x.head?.ref===proof.branch&&(x.merged||x.merged_at));
+            prNumber=found?.number??null;
+          }
+          if(prNumber)pull=await github.pull(proof.repo,prNumber);
+        }catch{await reject('GITHUB_UNAVAILABLE');}
       }
+      const mergeCommitSha=proof?.detail?.mergeCommitSha??pull?.merge_commit_sha;
+      const mergedProof=proof?.detail?.headSha&&mergeCommitSha&&prNumber?
+        {prNumber,headSha:proof.detail.headSha,mergeCommitSha}:null;
+      if((pull?.merged===true||pull?.merged_at)&&!mergedProof)await reject('PR_ALREADY_MERGED');
       try{await transact((mission,ctx)=>{
+        if(mission?.id!==lockedId||(proof&&mission.id!==proof.missionId))
+          throw new Error('MISSION_CHANGED: reintenta cancel sin efectos');
         guard(ctx.db,mission,session,'zana_mission_cancel');
         status=cancelMission(mission);
         const pid=missionProject(ctx.db,mission.id);
@@ -670,6 +685,9 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         throw error;
       }
       return {...status,...(runInfo?{run:runInfo}:{})};
+      };
+      return lockedId&&review.withMissionLock
+        ?review.withMissionLock(lockedId,perform):perform();
     },
     // Summary first (dispatch does not validate schemas), then the project:
     // a mission created without one (0.6.0 or a GitHub failure) resolves it now.
@@ -695,9 +713,13 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         const provenance=run&&txc.db.prepare("SELECT detail FROM remote_audit WHERE mission_id=? AND tool='zana_mission_init.run' AND outcome='SUCCESS' ORDER BY seq DESC LIMIT 1").get(existing.id)?.detail;
         const outside=run&&(run.outsidePlan.some(x=>same(x.missionId))||(()=>{try{const d=JSON.parse(provenance);return d.projectId===projectId&&d.transition==='OUTSIDE_PLAN';}catch{return false;}})());
         const prefix=hito?'[hito '+hito.id+' parte '+(number>=0?number+1:hito.parts.length+1)+'] ':outside?'[fuera del plan] ':'';
-        if(!prefix&&/^\[(?:hito|fueradelplan)/.test(summary.done.normalize('NFKD').replace(/[\p{M}\p{Cf}\p{Cc}\p{White_Space}\p{Default_Ignorable_Code_Point}]/gu,'').toLowerCase()))
+        const normalized=summary.done.normalize('NFKD')
+          .replace(/[\p{M}\p{Cf}\p{Default_Ignorable_Code_Point}]/gu,'')
+          .replace(/[\p{Cc}\p{White_Space}]+/gu,' ').normalize('NFKC').trimStart().toLowerCase();
+        if(!prefix&&/^\[(?:hito(?:\s|\])|fuera\s+del\s+plan\])/.test(normalized))
           throw new Error('RESERVED_PREFIX: el prefijo del hito lo escribe el servidor');
-        const serverSummary=prefix?{...summary,done:prefix+summary.done.replace(/\p{Cf}/gu,'').replace(/[\r\n]+/g,' ')}:summary;
+        const serverSummary=prefix?{...summary,done:prefix+summary.done.replace(/\p{Cf}/gu,'')
+          .replace(/[\r\n\v\f\u0085\u2028\u2029]/g,' ')}:summary;
         memory={...saveSummary(txc.db,{projectId,missionId:existing.id,summary:serverSummary,sha,sessionId:session.sessionId,secrets:secrets()}),
           ...(pointer?{pointer}:{})};
         return existing;
@@ -858,9 +880,19 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
           detail:{error:clean(error,secrets())},category:'merge'});
         throw error;
       }
+      let auditFailed=false;
       try{await audit({caller:session,tool:'zana_merge.result',missionId:id,outcome:result.state,args:{missionId:id},
         detail:{headSha:result.headSha??null,mergeCommitSha:result.mergeCommitSha??null,method:result.method??null,
-          recovered:result.recovered??false},category:'merge'});}catch(error){throw error;}
+          recovered:result.recovered??false},category:'merge'});}
+      catch(error){if(result.state!=='MERGED')throw error;auditFailed=true;}
+      if(auditFailed){
+        // Con auditoría principal ausente no certificar el hito. Conservar los SHA
+        // y la evidencia real de los gates para reconciliación, sin inventar parte.
+        await audit({caller:session,tool:'zana_merge.run',missionId:id,category:'project_run',
+          outcome:'ERROR',detail:{code:'AUDIT_UNAVAILABLE',headSha:result.headSha,
+            mergeCommitSha:result.mergeCommitSha,ci:'SUCCESS',review:'APPROVED'}}).catch(()=>{});
+        return {...result,merged:true,run:{recorded:false,reason:'AUDIT_UNAVAILABLE'}};
+      }
       let pid=null,runInfo;
       try{
       pid=await rr(db=>missionProject(db,id));
@@ -978,7 +1010,8 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     'zana_mission_close','zana_mission_archive','zana_correction_start','zana_session_rebind','zana_budget_extend']);
   const missionWrites=new Set(['zana_mission_adopt','zana_start_batch','zana_complete_unit','zana_unit_heartbeat','zana_unit_retry',
     'zana_recover_expired','zana_mission_cancel','zana_mission_close','zana_mission_archive','zana_merge','zana_review_request',
-    'zana_correction_start','zana_budget_extend','zana_memory_save','zana_memory_resolve','zana_checks_start']);
+    'zana_correction_start','zana_budget_extend','zana_memory_save','zana_memory_resolve','zana_checks_start',
+    'zana_session_rebind']);
   // Toda tool declarada no-lectura (incluidas las reutilizadas y el router downstream)
   // marca ANTES del efecto. Excepciones: las cuatro tools revisoras y GitHub GET.
   // La validación MCP precede a dispatch; las guardas de sesión se comprueban antes.

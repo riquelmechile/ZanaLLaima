@@ -878,3 +878,105 @@ test('C2: cancel rechaza auditoría de merge que no corresponde a head remoto',a
     assert.equal((await remoteRead(db=>loadRun(db,started.projectId).milestones[0].status)),'RUNNING');
   }finally{await f.cleanup();}
 });
+
+test('E1: las tools reales de merge emiten DONE y READY solo al owner, nunca en parcial ni replay',async()=>{
+  const posts=[];
+  const eventPost=async(url,headers,body)=>{
+    const data=JSON.parse(body);posts.push({url,data});
+    return {status:200,body:JSON.stringify(data.type==='verification'?{challenge:data.challenge}:{})};
+  };
+  const f=await remoteFixture({runtimeOptions:{eventPost}});
+  try{
+    await setup(f);
+    const who={clientId:f.owner.clientId,host:'zana-chatgpt'},other={clientId:'cliente-ajeno',host:'zana-chatgpt'};
+    const secret='whsec_'+Buffer.alloc(32,5).toString('base64');
+    const sub=(name,url)=>({name,arguments:{host:'zana-chatgpt'},delivery:{mode:'webhook',url,secret}});
+    const done='zana.project.milestone_done',ready='zana.project.ready_to_deliver';
+    for(const [client,name,url] of [[who,done,'https://hooks.example.com/owner1'],[who,ready,'https://hooks.example.com/owner2'],
+      [other,done,'https://hooks.example.com/other1'],[other,ready,'https://hooks.example.com/other2']])
+      assert.ok((await f.runtime.events.subscribe(client,sub(name,url))).id);
+    let m=await init(f,{milestone:{id:'core',final:false}});
+    assert.equal((await approvedMerge(f,m)).run.status,'PARTIAL');
+    await f.runtime.events.flush();
+    assert.equal(posts.filter(x=>x.data.eventId).length,0,'merge parcial no notifica');
+    assert.equal((await f.call('zana_mission_close',{summary},f.owner)).error,undefined);
+    assert.equal((await f.call('zana_mission_archive',{},f.owner)).error,undefined);
+    m=await init(f,{milestone:{id:'core',final:true}});
+    const originalMerge=f.runtime.github.merge.bind(f.runtime.github);
+    f.runtime.github.merge=async(...args)=>({...await originalMerge(...args),sha:sha('8')});
+    const merged=await approvedMerge(f,m,8,'b');
+    assert.equal(merged.run?.recorded,true,JSON.stringify(merged));
+    assert.deepEqual([merged.run.status,merged.run.runStatus],['DONE','READY_TO_DELIVER']);
+    await f.runtime.events.flush();
+    const sent=posts.filter(x=>x.data.eventId);
+    assert.deepEqual(sent.map(x=>x.data.name).sort(),[done,ready].sort());
+    assert.ok(sent.every(x=>!x.url.includes('other')),'no se notifica a otros clientes');
+    const current=await run(f);
+    assert.deepEqual(sent.find(x=>x.data.name===done).data.data,
+      {projectId:current.projectId,repo:'o/r',milestoneId:'core',revision:current.revision});
+    assert.deepEqual(sent.find(x=>x.data.name===ready).data.data,
+      {projectId:current.projectId,repo:'o/r',revision:current.revision});
+    assert.ok(!JSON.stringify(sent).includes(summary.done),'solo punteros, sin texto del modelo');
+    assert.equal((await f.call('zana_merge',{missionId:m.id},f.owner)).run.already,true);
+    await f.runtime.events.flush();
+    assert.equal(posts.filter(x=>x.data.eventId).length,2,'replay idempotente');
+  }finally{await f.cleanup();}
+});
+
+test('E1: caída de cola no revierte el merge y registra el error',async()=>{
+  const f=await remoteFixture({runtimeOptions:{eventPost:async(url,headers,body)=>{
+    const data=JSON.parse(body);return {status:200,body:JSON.stringify({challenge:data.challenge})};
+  }}});
+  try{
+    const start=await setup(f),m=await init(f,{milestone:{id:'core',final:true}});
+    await remoteWrite(db=>db.exec("CREATE TRIGGER e1_fail_events BEFORE INSERT ON metadata WHEN NEW.key LIKE 'zana:evout:%' BEGIN SELECT RAISE(ABORT,'QUEUE_DOWN'); END"));
+    const identity={clientId:f.owner.clientId,host:'zana-chatgpt'};
+    const secret='whsec_'+Buffer.alloc(32,4).toString('base64');
+    await f.runtime.events.subscribe(identity,{name:'zana.project.milestone_done',arguments:{host:'zana-chatgpt'},
+      delivery:{mode:'webhook',url:'https://hooks.example.com/owner',secret}});
+    const merged=await approvedMerge(f,m);
+    assert.equal(merged.state,'MERGED',merged.error);
+    assert.equal(merged.run.recorded,true,merged.run.reason);
+    assert.equal((await run(f)).status,'READY_TO_DELIVER');
+    assert.equal((await remoteRead(db=>loadRun(db,start.projectId).milestones[0].status)),'DONE');
+    const audit=await f.runtime.readAudit({missionId:m.id,limit:100});
+    assert.ok(audit.some(x=>x.tool==='zana_merge.run'&&x.detail?.code==='PROJECT_EVENT_QUEUE_FAILED'));
+  }finally{await f.cleanup();}
+});
+
+test('E1: reconcile attach acreditado emite una sola vez ambos eventos',async()=>{
+  const posts=[];
+  const eventPost=async(url,headers,body)=>{
+    const data=JSON.parse(body);posts.push({url,data});
+    return {status:200,body:JSON.stringify(data.type==='verification'?{challenge:data.challenge}:{})};
+  };
+  const f=await remoteFixture({runtimeOptions:{eventPost}});
+  try{
+    await setup(f);
+    const id={clientId:f.owner.clientId,host:'zana-chatgpt'};
+    const secret='whsec_'+Buffer.alloc(32,2).toString('base64');
+    for(const name of ['zana.project.milestone_done','zana.project.ready_to_deliver'])
+      await f.runtime.events.subscribe(id,{name,arguments:{host:'zana-chatgpt'},
+        delivery:{mode:'webhook',url:'https://hooks.example.com/'+name,secret}});
+    const m=await init(f,{milestone:{id:'core',final:true}});
+    await remoteWrite(db=>db.exec("CREATE TRIGGER e1_fail_part BEFORE INSERT ON metadata WHEN NEW.key LIKE 'zana:run:%' BEGIN SELECT RAISE(ABORT,'PART_FAILED'); END"));
+    const merged=await approvedMerge(f,m);
+    assert.equal(merged.state,'MERGED');
+    assert.equal(merged.run.recorded,false);
+    await remoteWrite(db=>db.exec('DROP TRIGGER e1_fail_part'));
+    fakeAllPulls(f);
+    const params={repo:'o/r',expectedRevision:(await run(f)).revision,milestoneId:'core',missionId:m.id,
+      final:true,action:'attach'};
+    const attached=await f.call('zana_project_reconcile',params,f.owner);
+    assert.equal(attached.recorded,true,attached.error);
+    assert.equal(attached.runStatus,'READY_TO_DELIVER');
+    await f.runtime.events.flush();
+    assert.deepEqual(posts.filter(x=>x.data.eventId).map(x=>x.data.name).sort(),
+      ['zana.project.milestone_done','zana.project.ready_to_deliver']);
+    const replay=await f.call('zana_project_reconcile',
+      {...params,expectedRevision:(await run(f)).revision},f.owner);
+    assert.equal(replay.already,true,replay.error);
+    await f.runtime.events.flush();
+    assert.equal(posts.filter(x=>x.data.eventId).length,2);
+  }finally{await f.cleanup();}
+});

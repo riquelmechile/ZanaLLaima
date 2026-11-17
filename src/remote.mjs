@@ -32,7 +32,7 @@ import {requestBootstrap,bootstrapStatus,readOperation} from './bootstrap-reques
 import {runBootstrapSetup} from './bootstrap-setup.mjs';
 import {checksForRepo} from './checks-policy.mjs';
 import {runBootstrap,reconcileBootstrap} from './bootstrap-execute.mjs';
-import {REVIEW_EVENT,REVIEW_DONE_EVENT,safeWebhookPost,listEvents,subscribeEvent,unsubscribeEvent,queueEvent,flushEvents,eventStatus} from './mcp-events.mjs';
+import {REVIEW_EVENT,REVIEW_DONE_EVENT,PROJECT_MILESTONE_EVENT,PROJECT_DELIVERY_EVENT,safeWebhookPost,listEvents,subscribeEvent,unsubscribeEvent,queueEvent,flushEvents,eventStatus} from './mcp-events.mjs';
 import {ActorSigner} from './actor-assertion.mjs';
 import {lineBudget,lineLimit,EXTEND_MAX,correctionLimit} from './line-budget.mjs';
 import {nowIso,recordActivity,remoteMission,sessionReviews,sessionWrote,sessionIsMissionAuthor,markSessionWriter,ensureSessionWriterEpoch,sessionIsWriter,reviewerMonitorStatus,writeAudit,readAudit} from './remote-state.mjs';
@@ -196,6 +196,28 @@ const NEW_TOOLS={
 };
 export const REMOTE_TOOL_NAMES=Object.freeze([...REUSED,...Object.keys(NEW_TOOLS)
   .filter(name=>name!=='zana_github_request')].sort());
+
+// Encolar dentro de la transacción de la corrida, nunca revertir un merge real
+// ni el estado DONE si se agota la cola de webhooks.
+function queueProjectChanges(db,prev,next,session,tool,missionId){
+  const completed=next.milestones.filter(m=>m.status==='DONE'&&
+    prev.milestones.find(p=>p.id===m.id)?.status!=='DONE');
+  const delivering=next.status==='READY_TO_DELIVER'&&prev.status!=='READY_TO_DELIVER';
+  if(!completed.length&&!delivering)return;
+  db.exec('SAVEPOINT project_event_queue');
+  try{
+    for(const m of completed)queueEvent(db,{clientId:next.ownerClient,name:PROJECT_MILESTONE_EVENT,
+      data:{projectId:next.projectId,repo:next.repo,milestoneId:m.id,revision:next.revision}});
+    if(delivering)queueEvent(db,{clientId:next.ownerClient,name:PROJECT_DELIVERY_EVENT,
+      data:{projectId:next.projectId,repo:next.repo,revision:next.revision}});
+    db.exec('RELEASE project_event_queue');
+  }catch(error){
+    if(db.isTransaction){db.exec('ROLLBACK TO project_event_queue');db.exec('RELEASE project_event_queue');}
+    console.error('PROJECT_EVENT_QUEUE_FAILED',error?.code??'UNKNOWN',next.projectId);
+    try{writeAudit(db,{caller:session,tool,missionId,category:'project_run',outcome:'ERROR',
+      detail:{projectId:next.projectId,code:'PROJECT_EVENT_QUEUE_FAILED'}});}catch{}
+  }
+}
 
 export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fetcher=globalThis.fetch,
   downstreamFetcher=fetcher,signer=ActorSigner.generate(),eventPost=safeWebhookPost}={}){
@@ -552,6 +574,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
             ?completePart(run,{expectedRevision,missionId:id,prNumber:pull.number,headSha:head,mergeCommitSha,evidence,now})
             :attachPart(run,{expectedRevision,milestoneId,missionId:id,final,prNumber:pull.number,headSha:head,mergeCommitSha,evidence,now});
           const saved=saveRun(db,run,next,{missionId:id,secrets:secrets()});
+          queueProjectChanges(db,run,next,session,'zana_project_reconcile.run',id);
           const status=next.milestones.find(x=>x.id===milestoneId).status;
           writeAudit(db,{caller:session,tool:'zana_project_reconcile.run',missionId:id,
             category:'project_run',outcome:'SUCCESS',
@@ -823,6 +846,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
                 evidence:{sha:mergedProof.headSha,ci:'SUCCESS',review:'APPROVED',
                   merged:true,mergeCommitSha:mergedProof.mergeCommitSha},now:new Date().toISOString()});
               const saved=saveRun(ctx.db,run,next,{missionId:mission.id,secrets:secrets()});
+              queueProjectChanges(ctx.db,run,next,session,'zana_mission_cancel.run',mission.id);
               const state=next.milestones.find(x=>x.id===hito.id).status;
               runInfo={released:false,recorded:true,milestoneId:hito.id,status:state,
                 ...(saved.memoryError?{memoryError:saved.memoryError}:{})};
@@ -1092,6 +1116,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
           mergeCommitSha,evidence:{sha:result.headSha,ci:'SUCCESS',review:'APPROVED',merged:true,mergeCommitSha},
           now:new Date().toISOString()});
         const saved=saveRun(db,run,next,{missionId:id,secrets:secrets()});
+        queueProjectChanges(db,run,next,session,'zana_merge.run',id);
         const status=next.milestones.find(x=>x.id===hito.id).status;
         writeAudit(db,{caller:session,tool:'zana_merge.run',missionId:id,
           category:'project_run',outcome:'SUCCESS',detail:{projectId:pid,milestoneId:hito.id,transition:status}});

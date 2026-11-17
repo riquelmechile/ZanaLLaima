@@ -242,3 +242,5 @@ Versión candidata en PR #1. Sin tag, release ni despliegue.
 - Revisión independiente, aprobación de PR sobre SHA exacto y decisión humana de merge.
 
 - PR C1: `zana_project_reconcile` certifica en servidor CI, revisión por SHA y merge para adjuntar partes; libera intentos inactivos sin PR fusionado. `zana_mission_init` rechaza PRIOR_PR_OPEN. El CLI no reconcilia la corrida.
+
+- PR E1: eventos MCP de hito DONE y corrida READY_TO_DELIVER, solo al OAuth dueño, punteros sin texto del modelo y cola idempotente dentro de la transacción; un error de cola se registra sin revertir la parte fusionada. Documentados los monitores y sus pruebas.

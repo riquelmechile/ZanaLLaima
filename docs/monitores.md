@@ -33,6 +33,16 @@ Se suscribe a `zana.review.done`, cuyo payload es `{ticketId, verdict}`. El avis
 
 > Al recibir `zana.review.done`, carga `zana-project-orchestrator`, contrasta el `ticketId`, el veredicto y la misión en ZanaLLaima y adopta esa misión. Con aprobación, exige delivery verde sobre el SHA exacto antes de fusionar; con `EXPIRED`, ignora salvo existe PR y `currentTicket.ticketId === ticketId` antes y después de adoptar y pide ticket nuevo; con `CHANGES_REQUESTED_SAME_SHA`, sigue `zana-odd`; ante `REVIEW_ROUNDS_EXHAUSTED`, detente. Con cambios pedidos, corrige y solicita un ticket nuevo. Detente ante cualquier error de adopción. Nunca revises un ticket de la misión adoptada. Mantén la suscripción habilitada y renuévala antes de `refreshBefore`.
 
+
+## Eventos de hitos y entrega
+
+El monitor orquestador del cliente OAuth ownerClient puede suscribirse a zana.project.milestone_done y zana.project.ready_to_deliver mediante dos llamadas independientes a events/subscribe; cada una lleva name, arguments:{host:host autenticado} y delivery:{mode:webhook,url:callback HTTPS público,secret:secreto de firma}. Consulta events/list para ver los esquemas, verifica el desafío, conserva id/refreshBefore y renueva antes de vencer. Las cuatro suscripciones (review.ready, review.done y las dos de proyecto) consumen el máximo por cliente; los eventos no se entregan a otro OAuth.
+
+- zana.project.milestone_done recibe únicamente {projectId,repo,milestoneId,revision}. Despierta ejecución nueva, carga zana-project-orchestrator, llama zana_project_next({repo}), verifica revisión, hitos y misión activa. Solo con siguiente hito listo y sin misión activa sigue la skill y sus gates.
+- zana.project.ready_to_deliver recibe únicamente {projectId,repo,revision}. Despierta ejecución nueva, carga la misma skill, comprueba READY_TO_DELIVER y llama zana_project_delivery_status({repo}). Informa ready:true con evidencias o detiene en ready:false; nunca despliega por el webhook.
+
+Los avisos duplicados o antiguos se ignoran si el servidor ya avanzó. Un webhook 2xx no prueba ejecución ni autoriza merge o despliegue.
+
 ## Separación con una sola cuenta
 
 Al crear el monitor **no consultes `zana_session_status` antes del primer evento**: incluso una lectura registra una sesión y puede invalidar la excepción de revisión. Después del primer reclamo sí sirve para diagnóstico.

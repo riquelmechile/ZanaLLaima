@@ -34,4 +34,12 @@ El servidor conserva la corrida, los hitos, las revisiones y su proyección de m
 5. Si está EXPIRED, tras adoptar vuelve a comprobar existe PR y `currentTicket`, y `currentTicket.ticketId === ticketId` en `zana_delivery_status({missionId})` sobre SHA vigente (si cambió, ignora el aviso); solo entonces pide `zana_review_request({missionId})` de nuevo: se descuentan hasta cinco tickets EXPIRED/ABANDONED sin veredicto del consumo efectivo, sin decrementar `reviewCount`. Si responde `REVIEW_ROUNDS_EXHAUSTED`, detente y avisa; con `CHANGES_REQUESTED_SAME_SHA`, sigue el flujo de corrección de `zana-odd` antes de un nuevo ticket. Nunca fusiones por el webhook.
 6. Nunca reclames ni revises un ticket de la misión adoptada. La revisora no adopta ni fusiona.
 
+
+## Retomar por eventos de proyecto
+
+- Suscribe el monitor del mismo cliente OAuth propietario mediante events/subscribe, arguments:{host:propio}, webhook HTTPS y los nombres zana.project.milestone_done y zana.project.ready_to_deliver (dos suscripciones). Renueva antes de refreshBefore.
+- Con zana.project.milestone_done {projectId,repo,milestoneId,revision} inicia una ejecución nueva, carga zana-project-orchestrator y llama zana_project_next({repo}). Contrasta proyecto y revisión con el servidor; si hay hito siguiente listo y ninguna misión activa, sigue los pasos Iniciar y avanzar sin saltarse autorizaciones ni gates.
+- Con zana.project.ready_to_deliver {projectId,repo,revision} inicia una ejecución nueva, carga esta skill, comprueba READY_TO_DELIVER con zana_project_next({repo}) y zana_project_delivery_status({repo}); si ready:true informa evidencia y si ready:false detente e informa code. Nunca despliegues por un webhook.
+- Los payloads solo llevan punteros persistidos y pueden llegar repetidos o desactualizados: contrasta siempre el estado y revisión real, sin fusionar únicamente por el aviso.
+
 GPT distribuye trabajo a subagentes **solo si el anfitrión los expone realmente**. Nunca delegar con Xanxito a otros hosts ni simular ejecución paralela.

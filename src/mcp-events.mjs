@@ -15,6 +15,9 @@ import {BlockList,isIP} from 'node:net';
 
 export const REVIEW_EVENT='zana.review.ready';
 export const REVIEW_DONE_EVENT='zana.review.done';
+export const PROJECT_MILESTONE_EVENT='zana.project.milestone_done';
+export const PROJECT_DELIVERY_EVENT='zana.project.ready_to_deliver';
+const PROJECT_EVENTS=[PROJECT_MILESTONE_EVENT,PROJECT_DELIVERY_EVENT];
 const SUB='zana:evsub:',OUT='zana:evout:';
 const MAX_TTL_MS=7*86_400_000,MAX_SUBSCRIPTIONS_PER_CLIENT=4,MAX_OUTSTANDING=200,MAX_ATTEMPTS=5,HISTORY_MS=7*86_400_000;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -86,7 +89,7 @@ const terminal=d=>d.state==='ACCEPTED'||d.state==='FAILED';
 const subId=({clientId,host},url,name=REVIEW_EVENT)=>'sub_'+hash([clientId,host,url,name].join('\n')).slice(0,32);
 // El filtro del anfitrión debe nombrar su propio host: la identidad sale del OAuth, no del filtro.
 function check(identity,input){
-  if(![REVIEW_EVENT,REVIEW_DONE_EVENT].includes(input?.name))fail('UNKNOWN_EVENT','Unknown event');
+  if(![REVIEW_EVENT,REVIEW_DONE_EVENT,...PROJECT_EVENTS].includes(input?.name))fail('UNKNOWN_EVENT','Unknown event');
   const args=input.arguments;
   if(!args||typeof args!=='object'||Array.isArray(args)||Object.keys(args).length!==1||args.host!==identity.host)
     fail('INVALID_EVENT_FILTER','Event filter must match the authenticated host');
@@ -99,7 +102,16 @@ export function listEvents({host}){
     payloadSchema:{type:'object',properties:{ticketId:{type:'string',format:'uuid'}},required:['ticketId'],additionalProperties:false}},
     {name:REVIEW_DONE_EVENT,delivery:['webhook'],description:'A 4R review finished or a ticket expired without verdict (EXPIRED). Start a new run, load zana-project-orchestrator, adopt the mission and resume it.',
       inputSchema:{type:'object',properties:{host:{type:'string',enum:[host]}},required:['host'],additionalProperties:false},
-      payloadSchema:{type:'object',properties:{ticketId:{type:'string',format:'uuid'},verdict:{type:'string',enum:['APPROVE','REQUEST_CHANGES','EXPIRED']}},required:['ticketId','verdict'],additionalProperties:false}}]};
+      payloadSchema:{type:'object',properties:{ticketId:{type:'string',format:'uuid'},verdict:{type:'string',enum:['APPROVE','REQUEST_CHANGES','EXPIRED']}},required:['ticketId','verdict'],additionalProperties:false}},
+    ...PROJECT_EVENTS.map((name)=>({name,delivery:['webhook'],
+      description:name===PROJECT_MILESTONE_EVENT
+        ?'A milestone is done: start a new run, load zana-project-orchestrator and call zana_project_next.'
+        :'The project is ready to deliver: start a new run, load zana-project-orchestrator and follow its READY_TO_DELIVER step (zana_project_delivery_status).',
+      inputSchema:{type:'object',properties:{host:{type:'string',enum:[host]}},required:['host'],additionalProperties:false},
+      payloadSchema:{type:'object',properties:{projectId:{type:'string'},repo:{type:'string'},
+        ...(name===PROJECT_MILESTONE_EVENT?{milestoneId:{type:'string'}}:{}),revision:{type:'integer'}},
+        required:name===PROJECT_MILESTONE_EVENT?['projectId','repo','milestoneId','revision']:['projectId','repo','revision'],
+        additionalProperties:false}}))]};
 }
 
 // rw: transacción de escritura. post: envío saliente (safeWebhookPost en producción).
@@ -149,17 +161,28 @@ export function unsubscribeEvent(db,{identity,input}){
 // Encola un aviso por cada suscripción vigente del cliente dueño del ticket.
 // Va en la misma transacción que emite el ticket. Devuelve cuántos encoló.
 export function queueEvent(db,{clientId,ticketId,name=REVIEW_EVENT,data=null,now=Date.now()}){
-  if(![REVIEW_EVENT,REVIEW_DONE_EVENT].includes(name))fail('UNKNOWN_EVENT','Unknown event');
+  const project=PROJECT_EVENTS.includes(name);
+  if(![REVIEW_EVENT,REVIEW_DONE_EVENT,...PROJECT_EVENTS].includes(name))fail('UNKNOWN_EVENT','Unknown event');
   if(name===REVIEW_DONE_EVENT&&(!data||!['APPROVE','REQUEST_CHANGES','EXPIRED'].includes(data.verdict)))fail('INVALID_EVENT_POINTER','Invalid review verdict');
-  if(!UUID.test(String(ticketId)))fail('INVALID_EVENT_POINTER','El aviso solo lleva el id del ticket');
+  if(project){
+    const fields=name===PROJECT_MILESTONE_EVENT?['milestoneId','projectId','repo','revision']:['projectId','repo','revision'];
+    if(!data||typeof data!=='object'||Array.isArray(data)||JSON.stringify(Object.keys(data).sort())!==JSON.stringify(fields)||
+      !['projectId','repo',...(name===PROJECT_MILESTONE_EVENT?['milestoneId']:[])].every(k=>typeof data[k]==='string'&&data[k].length>0&&data[k].length<=200)||
+      !Number.isSafeInteger(data.revision)||data.revision<0)fail('INVALID_EVENT_POINTER','Only project pointers are allowed');
+  }else if(!UUID.test(String(ticketId)))fail('INVALID_EVENT_POINTER','El aviso solo lleva el id del ticket');
+  const key=project?JSON.stringify(name===PROJECT_MILESTONE_EVENT?
+    [data.projectId,data.milestoneId,data.revision]:[data.projectId,data.revision]):ticketId;
   const all=rows(db,OUT);
   for(const old of all)if(terminal(old)&&now-(old.terminalAt??0)>=HISTORY_MS)del(db,OUT,old.id);
   let added=0,outstanding=all.filter(d=>!terminal(d)).length;
   for(const sub of rows(db,SUB).filter(s=>s.ownerClient===clientId&&live(s,now)&&(s.name??REVIEW_EVENT)===name)){
-    const id='evt_'+hash(sub.id+':'+(name===REVIEW_DONE_EVENT?name+':':'')+ticketId).slice(0,32);
+    const id='evt_'+hash(sub.id+':'+(name===REVIEW_DONE_EVENT||project?name+':':'')+key).slice(0,32);
     if(all.some(d=>d.id===id))continue;
     if(outstanding>=MAX_OUTSTANDING)fail('EVENT_BACKLOG_LIMIT','MCP event backlog limit reached');
-    put(db,OUT,{schema:'zana.evout.v1',id,subId:sub.id,ticketId,name,data:name===REVIEW_DONE_EVENT?{ticketId,verdict:data.verdict}:{ticketId},state:'PENDING',attempts:0,nextAt:now,lastStatus:null,terminalAt:null});
+    put(db,OUT,{schema:'zana.evout.v1',id,subId:sub.id,ticketId:project?null:ticketId,name,
+      data:project?Object.fromEntries(Object.keys(data).map(k=>[k,data[k]])):
+        name===REVIEW_DONE_EVENT?{ticketId,verdict:data.verdict}:{ticketId},
+      state:'PENDING',attempts:0,nextAt:now,lastStatus:null,terminalAt:null});
     outstanding++;added++;
   }
   return added;

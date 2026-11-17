@@ -151,7 +151,7 @@ export async function fakeGitHubApi(){
       conclusion:'failure',head_sha:commit,html_url:url,details_url:url});
     (state.runJobs[runId]??=[]).push({id:jobId,name,run_id:runId});
     state.logs[jobId]='line 1\n\x1b[31merror: expected 2 got 3\x1b[0m\ntoken '+AUTHOR_TOKEN+'\n';};
-  state.openPull=(branch,number=7,base='main')=>{state.pulls.push({number,state:'open',draft:false,mergeable:true,
+  state.openPull=(branch,number=7,base='main')=>{state.pulls.push({number,state:'open',merged:false,merged_at:null,merge_commit_sha:sha('9'),draft:false,mergeable:true,
     mergeable_state:'clean',html_url:'https://github.com/o/r/pull/'+number,user:{login:AUTHOR_LOGIN},
     head:{ref:branch,sha:state.branches[branch],repo:{full_name:'o/r'}},base:{ref:base}});
     state.commits[number]=[{author:{login:AUTHOR_LOGIN},committer:{login:'web-flow'}}];};

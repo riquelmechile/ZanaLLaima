@@ -2,6 +2,8 @@
 
 ## [Sin publicar]
 
+- C2: reconcile elige PR fusionado único o valida todos los PR antes de liberar, usa la misión canónica y rechaza acciones desconocidas; cancelación explícita de corrida con control de dueño, revisión y memoria, más regresiones de seguridad.
+
 - B2b R2: ownership por misión antes de marcar escritor, cancelación sin evidencia inventada, RUN_CORRUPT tolerado, prefijos reservados y recuperación de outsidePlan desde auditoría tras retención de 50; regresiones y gates.
 
 - B2b: resúmenes de cierre con prefijo de hito/parte o fuera del plan generado en el servidor; los escritores de una corrida requieren su clientId OAuth antes de marcar sesión; cancelación tras merge no vuelve el hito a PENDING.

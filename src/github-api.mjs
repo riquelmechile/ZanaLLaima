@@ -162,9 +162,10 @@ export class GitHubApi{
       ...(f?.previous_filename?{previousFilename:String(f.previous_filename)}:{})}));
     return Object.assign(files,{status:String(data.status??''),...(files.length>=300?{truncated:true}:{})});
   }
-  async openPullsFor(repo,branch){
+  async openPullsFor(repo,branch,state='open'){
+    if(!['open','closed','all'].includes(state))throw new GitHubApiError(400,'Invalid pull state');
     const owner=repo.split('/')[0];
-    const list=await this.request('GET',repoPath(repo)+'/pulls?state=open&per_page=100&head='+
+    const list=await this.request('GET',repoPath(repo)+'/pulls?state='+state+'&per_page=100&head='+
       encodeURIComponent(owner+':'+branch));
     return Array.isArray(list)?list:[];
   }

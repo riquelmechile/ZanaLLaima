@@ -11,6 +11,16 @@ const gh={repo:'o/r',base:'main'};
 const lenses=['risk','readability','reliability','resilience'];
 const summary={done:'Hito integrado y revisado correctamente',decisions:[],conventions:[],pending:[],keyFiles:['src/x.mjs']};
 const count=()=>remoteRead(db=>db.prepare('SELECT COUNT(*) n FROM remote_missions').get().n);
+function fakeAllPulls(f){
+  const original=f.runtime.github.openPullsFor.bind(f.runtime.github),states=[];
+  f.runtime.github.openPullsFor=(repo,branch,state='open')=>{
+    states.push(state);
+    return state==='all'
+      ?Promise.resolve(f.api.state.pulls.filter(p=>p.head.ref===branch))
+      :original(repo,branch,state);
+  };
+  return states;
+}
 const run=f=>f.call('zana_project_next',{repo:'o/r'},f.owner);
 async function setup(f){
   f.owner=await f.session();
@@ -437,7 +447,7 @@ test('B2b: cancel tras PR fusionado no libera hito si falló completePart',async
   }finally{await f.cleanup();}
 });
 
-test('B2c: auditoría fallida tras merge conserva SHAs y parte con gates de esta llamada',async()=>{
+test('B2c: auditoría fallida tras merge conserva SHAs sin certificar el hito',async()=>{
   const f=await remoteFixture();
   try{
     await setup(f);const m=await init(f,{milestone:{id:'core',final:true}});
@@ -448,7 +458,7 @@ test('B2c: auditoría fallida tras merge conserva SHAs y parte con gates de esta
     assert.equal(result.headSha,sha('a'));
     assert.equal(result.mergeCommitSha,sha('9'));
     assert.deepEqual(result.run,{recorded:false,reason:'AUDIT_UNAVAILABLE'});
-    assert.equal((await run(f)).milestones[0].status,'DONE');
+    assert.equal((await run(f)).milestones[0].status,'RUNNING');
   }finally{await f.cleanup();}
 });
 
@@ -674,7 +684,9 @@ test('B2c: cancel sin ticket detecta PR fusionado por fuera y no libera hito',as
     f.api.state.push(m.github.branch,sha('a'));f.api.state.openPull(m.github.branch,17);
     Object.assign(f.api.state.pulls.at(-1),{state:'closed',merged:true,
       merged_at:'2026-11-16T00:00:00Z',merge_commit_sha:sha('9')});
+    const states=fakeAllPulls(f);
     const v=await f.call('zana_mission_cancel',{},f.owner);
+    assert.ok(states.includes('all'));
     assert.match(v.error??'',/PR_ALREADY_MERGED/);
     assert.equal((await f.call('zana_mission_status',{},f.owner)).state,'ACTIVE');
     assert.equal((await run(f)).milestones[0].status,'RUNNING');
@@ -720,8 +732,9 @@ test('B2c: misión con identificador en mayúsculas mantiene guarda de dueño',a
   try{
     const started=await setup(f),m=await init(f,{milestone:{id:'core',final:true}});
     await remoteWrite(db=>{
-      const run=loadRun(db,started.projectId);run.milestones[0].running.missionId=m.id.toUpperCase();
-      saveRun(db,run,run);
+      const run=loadRun(db,started.projectId),next=structuredClone(run);
+      next.revision++;next.milestones[0].running.missionId=m.id.toUpperCase();
+      saveRun(db,run,next);
     });
     const other=await f.session('zana-chatgpt','cliente-b');
     const v=await f.call('zana_start_batch',{},other);
@@ -742,9 +755,26 @@ test('B2c: cancel recupera mergeCommitSha de GitHub con auditoría MERGED sin SH
       db.prepare('UPDATE remote_audit SET detail=? WHERE seq=?').run(JSON.stringify({...JSON.parse(row.detail),mergeCommitSha:null}),row.seq);
       db.prepare('DELETE FROM review_tickets WHERE mission_id=?').run(m.id);
     });
+    const states=fakeAllPulls(f);
     const v=await f.call('zana_mission_cancel',{},f.owner);
+    assert.ok(states.includes('all'));
     assert.equal(v.error,undefined,v.error);
     assert.equal(v.run.recorded,true);
     assert.equal((await remoteRead(db=>loadRun(db,started.projectId).milestones[0].parts[0].mergeCommitSha)),sha('9'));
+  }finally{await f.cleanup();}
+});
+
+test('B2c: cancel rescata parte con auditoría completa aunque GitHub no responda',async()=>{
+  const f=await remoteFixture();
+  try{
+    const started=await setup(f),m=await init(f,{milestone:{id:'core',final:true}});
+    await remoteWrite(db=>db.exec("CREATE TRIGGER deny_part_offline BEFORE INSERT ON metadata WHEN NEW.key LIKE 'zana:run:%' BEGIN SELECT RAISE(ABORT,'PART_FAILED'); END"));
+    const merged=await approvedMerge(f,m);assert.equal(merged.run.recorded,false);
+    await remoteWrite(db=>db.exec('DROP TRIGGER deny_part_offline'));
+    f.runtime.github.pull=async()=>{throw new Error('offline');};
+    const v=await f.call('zana_mission_cancel',{},f.owner);
+    assert.equal(v.error,undefined,v.error);
+    assert.equal(v.run.recorded,true);
+    assert.equal((await remoteRead(db=>loadRun(db,started.projectId).milestones[0].status)),'DONE');
   }finally{await f.cleanup();}
 });

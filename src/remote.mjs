@@ -715,7 +715,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         throw new Error(code+': requiere reconciliación PR C');};
       let prNumber=proof?.prNumber??null,pull=null;
       const audited=Boolean(proof?.detail?.headSha&&proof?.detail?.mergeCommitSha&&prNumber);
-      if(proof?.repo&&!audited&&(prNumber||proof.branch)){
+      if(proof?.repo&&(prNumber||proof.branch)){
         try{
           if(!prNumber){
             const candidates=await github.openPullsFor(proof.repo,proof.branch,'all');
@@ -726,6 +726,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         }catch{await reject('GITHUB_UNAVAILABLE');}
       }
       const liveMerged=pull?.merged===true&&pull?.head?.sha===proof?.detail?.headSha;
+      if(audited&&!liveMerged)await reject('MERGE_EVIDENCE_MISMATCH');
       const mergeCommitSha=proof?.detail?.mergeCommitSha??(liveMerged?pull?.merge_commit_sha:null);
       const mergedProof=proof?.detail?.headSha&&mergeCommitSha&&prNumber?
         {prNumber,headSha:proof.detail.headSha,mergeCommitSha}:null;

@@ -2,6 +2,9 @@
 
 ## [Sin publicar]
 
+- B2b: resúmenes de cierre con prefijo de hito/parte o fuera del plan generado en el servidor; los escritores de una corrida requieren su clientId OAuth antes de marcar sesión; cancelación tras merge no vuelve el hito a PENDING.
+- B2b: preservación del resultado MERGED ante fallos de auditoría, errores de corrida acotados a códigos válidos y pruebas MCP/SQLite de regresiones. `INVALID_BASE:` es ahora prefijo explícito del error de base inválida y puede requerir adaptación de consumidores; RUN_CORRUPT continúa bloqueando el repo sin reconciliación y TOOL_DEADLINE puede preceder a un merge ya realizado, cuyo registro se reintenta idempotentemente.
+
 - Las misiones se enlazan a hitos o trabajos fuera del plan y actualizan la corrida al fusionarse o cancelarse, con memoria transaccional y evidencia de los gates.
 
 - La memoria de proyectos endurece `reservedTopic` frente a marcas Unicode e invisibles y conserva los registros posteriores al recorte estricto de 4 KB, con origen de sesión en contexto y búsqueda.
@@ -197,29 +200,4 @@ Correcciones tras revisión del bot de GitHub sobre `a36120b4d0a03f61445dbfcff32
 
 ### Puertas pendientes
 
-Sin firma CI auténtica, aislamiento operativo del host, E2E de Codex ni aprobación independiente de GitHub. `releaseAuthorized` permanece en `false`.
-
-## [0.3.0] - No publicado
-
-Versión candidata en PR #1. Sin tag, release ni despliegue.
-
-### Añadido
-
-- \`zana_apply_write\`: frontera de efectos locales con permiso firmado Ed25519, lease, rutas y comprobación de preimagen; 24 herramientas MCP.
-- Intenciones durables, recibos de SHA previos y posteriores y estado \`OUTCOME_UNKNOWN\` ante caídas antes de confirmar el recibo. Esquema SQLite v5.
-- Anclaje Linux por descriptores y rechazo de rutas con symlinks, hardlinks o destinos irregulares.
-- Emisor opcional de atestaciones CI Ed25519 y job de GitHub Actions de ámbito restringido; depende del secreto y llave pública provistos por el operador.
-- Pruebas adversariales de filesystem, permisos, firmas, recuperaciones, CLI y control de capacidades.
-- Guías de conexión a Codex CLI y ejecución humana del E2E.
-
-### Modificado
-
-- Parser CLI exportable y probado, manteniendo los comandos existentes.
-- Umbrales globales de cobertura: 92 % líneas, 85 % ramas y 90 % funciones, sin ningún archivo de \`src/\` por debajo de 80 % de ramas.
-- README consolidado y documentación de seguridad, almacenamiento, gobernanza y roadmap sincronizada.
-
-### Pendiente antes de liberar
-
-- Llaves reales de operador y CI, environment protegido y atestación CI emitida por GitHub.
-- Verificación de aislamiento del sistema operativo y E2E Codex por el operador.
-- Revisión independiente, aprobación de PR sobre SHA exacto y decisión humana de merge.
+Sin firma CI auténtica, aislamiento operativo del host, E2E de Codex ni aprobación independiente de GitHub. `releaseAuthorized` permanece en `fa

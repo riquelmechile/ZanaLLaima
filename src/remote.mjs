@@ -725,7 +725,8 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
           if(prNumber)pull=await github.pull(proof.repo,prNumber);
         }catch{await reject('GITHUB_UNAVAILABLE');}
       }
-      const mergeCommitSha=proof?.detail?.mergeCommitSha??pull?.merge_commit_sha;
+      const liveMerged=pull?.merged===true&&pull?.head?.sha===proof?.detail?.headSha;
+      const mergeCommitSha=proof?.detail?.mergeCommitSha??(liveMerged?pull?.merge_commit_sha:null);
       const mergedProof=proof?.detail?.headSha&&mergeCommitSha&&prNumber?
         {prNumber,headSha:proof.detail.headSha,mergeCommitSha}:null;
       if((pull?.merged===true||pull?.merged_at)&&!mergedProof)await reject('PR_ALREADY_MERGED');

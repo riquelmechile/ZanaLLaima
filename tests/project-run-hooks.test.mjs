@@ -817,7 +817,7 @@ test('C1: cancelar sin misión conserva respuesta legada',async()=>{
 });
 
 test('C1: cancel solo recupera merge SHA de un pull fusionado en el head auditado',async()=>{
-  for(const tamper of [p=>{p.merged=false;p.merged_at=null;},p=>{p.head.sha=sha('b');}]){
+  for(const [tamper,blocked] of [[p=>{p.merged=false;p.merged_at=null;},false],[(p,f)=>{f.api.state.branches[p.head.ref]=sha('b');},true]]){
     const f=await remoteFixture();
     try{
       const started=await setup(f),m=await init(f,{milestone:{id:'core',final:true}});
@@ -828,9 +828,11 @@ test('C1: cancel solo recupera merge SHA de un pull fusionado en el head auditad
         const row=db.prepare("SELECT seq,detail FROM remote_audit WHERE mission_id=? AND tool='zana_merge.result' AND outcome='MERGED' ORDER BY seq DESC LIMIT 1").get(m.id);
         db.prepare('UPDATE remote_audit SET detail=? WHERE seq=?').run(JSON.stringify({...JSON.parse(row.detail),mergeCommitSha:null}),row.seq);
       });
-      tamper(f.api.state.pulls.at(-1));
-      assert.match((await f.call('zana_mission_cancel',{},f.owner)).error??'',/PR_ALREADY_MERGED/);
-      assert.equal((await remoteRead(db=>loadRun(db,started.projectId).milestones[0].status)),'RUNNING');
+      tamper(f.api.state.pulls.at(-1),f);
+      const v=await f.call('zana_mission_cancel',{},f.owner);
+      if(blocked)assert.match(v.error??'',/PR_ALREADY_MERGED/);
+      else assert.equal(v.run.released,true,v.error);
+      assert.equal((await remoteRead(db=>loadRun(db,started.projectId).milestones[0].status)),blocked?'RUNNING':'PENDING');
     }finally{await f.cleanup();}
   }
 });
@@ -843,5 +845,18 @@ test('C1: cancel conserva identidad de misión y usa withMissionLock',async()=>{
     f.runtime.review.withMissionLock=async(id,fn)=>{locked=id;await remoteWrite(db=>db.prepare('UPDATE active_mission SET id=? WHERE slot=1').run('00000000-0000-4000-8000-000000000001'));return original(id,fn);};
     assert.match((await f.call('zana_mission_cancel',{},f.owner)).error??'',/MISSION_CHANGED/);
     assert.equal(locked,m.id);
+  }finally{await f.cleanup();}
+});
+
+test('C1: búsqueda por rama omite pulls no fusionados o de otro head.ref',async()=>{
+  const f=await remoteFixture();
+  try{
+    const started=await setup(f),m=await init(f,{milestone:{id:'core',final:true}});
+    await remoteWrite(db=>db.exec("CREATE TRIGGER deny_part_search BEFORE INSERT ON metadata WHEN NEW.key LIKE 'zana:run:%' BEGIN SELECT RAISE(ABORT,'PART_FAILED'); END"));
+    assert.equal((await approvedMerge(f,m)).run.recorded,false);const real=f.api.state.pulls.at(-1);
+    await remoteWrite(db=>{db.exec('DROP TRIGGER deny_part_search');db.prepare('DELETE FROM review_tickets WHERE mission_id=?').run(m.id);const row=db.prepare("SELECT seq,detail FROM remote_audit WHERE mission_id=? AND tool='zana_merge.result' AND outcome='MERGED' ORDER BY seq DESC LIMIT 1").get(m.id);db.prepare('UPDATE remote_audit SET detail=? WHERE seq=?').run(JSON.stringify({...JSON.parse(row.detail),mergeCommitSha:null}),row.seq);});
+    f.api.state.pulls.unshift({...structuredClone(real),number:88,head:{...real.head,ref:'otra'}},{...structuredClone(real),number:89,merged:false,merged_at:null});
+    const v=await f.call('zana_mission_cancel',{},f.owner);assert.equal(v.run.recorded,true,v.error);
+    assert.equal((await remoteRead(db=>loadRun(db,started.projectId).milestones[0].parts[0].prNumber)),real.number);
   }finally{await f.cleanup();}
 });

@@ -3,19 +3,19 @@ import assert from 'node:assert/strict';
 import {assessProjectDelivery,authorizeProjectDelivery} from '../src/project-delivery.mjs';
 import {createProjectEvent,verifyProjectEvent} from '../src/project-events.mjs';
 const sha='a'.repeat(40),other='b'.repeat(40),secret='this-is-only-a-test-event-secret-value';
-const state=()=>({schema:'zana.project-run.v1',status:'READY_TO_DELIVER',
+const state=()=>({schema:'zana.project-run.v2',status:'READY_TO_DELIVER',
   projectId:'zp_1234567890abcdef',planDigest:'c'.repeat(64),
-  milestones:[{id:'final',status:'DONE',headSha:sha}]});
-const proof=()=>({sha,ci:'SUCCESS',review:'APPROVED',mergeable:null,merged:true,integrationVerified:true});
+  milestones:[{id:'final',status:'DONE',parts:[{prNumber:7,mergeCommitSha:sha}]}]});
+const proof=()=>({sha,ci:'SUCCESS',integrationVerified:true});
 const assess=(s=state(),v=async()=>proof(),expectedSha=sha)=>assessProjectDelivery(s,{repo:'riquelmechile/ZanaLLaima',expectedSha},v);
 test('entrega exige todos los hitos, SHA válidos y callback verificable',async()=>{
   await assert.rejects(assess({...state(),status:'ACTIVE'}),/PROJECT_INCOMPLETE/);
   await assert.rejects(assess(state(),async()=>proof(),other),/DELIVERY_NOT_READY/);
   await assert.rejects(assess(state(),null),/VERIFIER_REQUIRED/);
-  await assert.rejects(assess({...state(),milestones:[{id:'x',status:'DONE',headSha:'not-a-sha'}]}),/INVALID_DELIVERY_MILESTONES/);
+  await assert.rejects(assess({...state(),milestones:[{id:'x',status:'DONE',parts:[{prNumber:1,mergeCommitSha:'not-a-sha'}]}]}),/INVALID_DELIVERY_MILESTONES/);
 });
-test('CI, 4R, merge y SHA se verifican otra vez',async()=>{
-  for(const key of ['sha','ci','review','merged','integrationVerified']){
+test('CI, integración y SHA se verifican otra vez',async()=>{
+  for(const key of ['sha','ci','integrationVerified']){
     const bad={...proof(),[key]:key==='sha'?other:false};
     await assert.rejects(assess(state(),async()=>bad),/DELIVERY_NOT_READY/);
   }
@@ -50,19 +50,19 @@ test('eventos adulterados, caducados o sin deduplicación no se aceptan',async()
 test('integración de hitos en DAG acepta SHA final distinto al último del arreglo',async()=>{
   const integration='d'.repeat(40);
   const run={...state(),milestones:[
-    {id:'backend',status:'DONE',headSha:other},
-    {id:'frontend',status:'DONE',headSha:sha}
+    {id:'backend',status:'DONE',parts:[{prNumber:8,mergeCommitSha:other}]},
+    {id:'frontend',status:'DONE',parts:[{prNumber:9,mergeCommitSha:sha}]}
   ]};
   let received=null;
   const verified=async args=>{received=args;return {...proof(),sha:integration,mergeable:null};};
   const ticket=await assess(run,verified,integration);
   assert.equal(ticket.sha,integration);
-  assert.deepEqual(received.milestoneHeads,[{id:'backend',sha:other},{id:'frontend',sha}]);
+  assert.deepEqual(received.milestones,[{id:'backend',parts:[{prNumber:8,mergeCommitSha:other}]},{id:'frontend',parts:[{prNumber:9,mergeCommitSha:sha}]}]);
   await assert.rejects(assess(run,async()=>({...proof(),sha:integration,
     integrationVerified:false}),integration),/DELIVERY_NOT_READY/);
 });
-test('un PR ya mergeado con mergeable:null puede entregar con CI, 4R e integración comprobada',async()=>{
+test('la revisión 4R no se exige de nuevo sobre la cabeza integrada',async()=>{
   const final=await assess(state(),async()=>({...proof(),mergeable:null,merged:true}));
   assert.equal(final.state,'READY_FOR_OPERATOR');
-  await assert.rejects(assess(state(),async()=>({...proof(),merged:false,mergeable:true})),/DELIVERY_NOT_READY/);
+  await assert.doesNotReject(assess(state(),async()=>({...proof(),review:'CHANGES_REQUESTED',merged:false})));
 });

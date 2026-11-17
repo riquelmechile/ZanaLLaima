@@ -2,6 +2,8 @@
 
 ## [Sin publicar]
 
+- D1: incorpora verificación de entrega de hitos v2 mediante ascendencia GitHub y checks requeridos sobre la cabeza de la base; tool MCP solo lectura, sin despliegue.
+
 - C6: aclara cierre de misiones fuera del plan sin campo run, sincroniza guías de merge y elimina redundancias; refuerza pruebas de códigos completos.
 - C5: cierre seguro tras merge/attach, autorización exclusiva de HITOS, release condicional y cierre externo de PR; ROADMAP histórico, herramientas MCP reales y códigos completos.
 

@@ -181,14 +181,53 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
   const hasBlocking=(db,ticketId)=>lensRows(db,ticketId).some(l=>blocking(l.findings));
   const sameShaBlocker=(db,missionId,sha)=>db.prepare('SELECT * FROM review_tickets WHERE mission_id=? AND sha=? AND operator_released=0')
     .all(missionId,sha).find(t=>t.verdict==='REQUEST_CHANGES'||hasBlocking(db,t.ticket_id))?.ticket_id??null;
-  // Lazy expiry: OPEN past its deadline -> EXPIRED; CLAIMED/FINALIZING older
-  // than the claim TTL -> ABANDONED (terminal, never blocks a merge).
-  function expire(db,now=Date.now()){
-    const at=nowIso();
-    db.prepare("UPDATE review_tickets SET state='EXPIRED',updated_at=? WHERE state='OPEN' AND expires_at<=?")
-      .run(at,new Date(now).toISOString());
-    db.prepare("UPDATE review_tickets SET state='ABANDONED',updated_at=? WHERE state IN ('CLAIMED','FINALIZING') AND claimed_at<=?")
-      .run(at,new Date(now-config.claimTtlMinutes*60_000).toISOString());
+  // Sin veredicto: transicion terminal, reembolso acotado y outbox atomicos.
+  function expire(db,now=Date.now(),mission=null,notify=true){
+    const at=new Date(now).toISOString(),cutoff=new Date(now-config.claimTtlMinutes*60_000).toISOString();
+    const due=db.prepare("SELECT * FROM review_tickets WHERE ((state='OPEN' AND expires_at<=?) OR (state IN ('CLAIMED','FINALIZING') AND claimed_at<=?))")
+      .all(at,cutoff);
+    let expired=0,queued=0;
+    for(const t of due){
+      const next=t.state==='OPEN'?'EXPIRED':'ABANDONED';
+      if(!db.prepare("UPDATE review_tickets SET state=?,updated_at=? WHERE ticket_id=? AND state=?")
+        .run(next,at,t.ticket_id,t.state).changes)continue;
+      expired++;
+      if(t.verdict!==null||t.github_review_id!==null||t.status_posted)continue;
+      const active=db.prepare('SELECT id,review_count,lifecycle FROM active_mission WHERE slot=1 AND id=?')
+        .get(t.mission_id);
+      if(active?.lifecycle!=='ACTIVE')continue;
+      const key='zana:expired-refunds:'+t.mission_id;
+      const raw=db.prepare('SELECT value FROM metadata WHERE key=?').get(key)?.value;
+      const count=raw===undefined?0:/^[0-5]$/.test(String(raw))?Number(raw):5;
+      if(count<5&&active.review_count>0){
+          const changed=db.prepare("UPDATE active_mission SET review_count=review_count-1,revision=revision+1,updated_at=? WHERE id=? AND lifecycle='ACTIVE' AND review_count>0")
+            .run(at,t.mission_id).changes;
+          if(changed){
+          db.prepare('INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+            .run(key,String(count+1));
+          if(!mission)db.prepare('INSERT INTO state_events(mission_id,revision,category,detail,created_at) VALUES(?,(SELECT revision FROM active_mission WHERE id=?),?,?,?)')
+            .run(t.mission_id,t.mission_id,'REVIEW_ROUND_REFUNDED',JSON.stringify({ticketId:t.ticket_id}),at);
+          if(mission?.id===t.mission_id){
+            mission.reviewCount=Math.max(0,(mission.reviewCount||0)-1);
+            mission.expiredRefunds=count+1;
+            mission.revision++;
+          }
+        }
+      }
+      if(notify&&events){
+        db.exec('SAVEPOINT review_expired_event');
+        try{
+          queued+=events.queue(db,{clientId:t.author_client,ticketId:t.ticket_id,
+            name:'zana.review.done',data:{ticketId:t.ticket_id,verdict:'EXPIRED'}});
+          db.exec('RELEASE review_expired_event');
+        }catch(error){
+          if(!db.isTransaction)throw error;
+          db.exec('ROLLBACK TO review_expired_event');db.exec('RELEASE review_expired_event');
+          console.error('REVIEW_EXPIRED_EVENT_QUEUE_FAILED',error?.code??'UNKNOWN',t.ticket_id);
+        }
+      }
+    }
+    return {expired,queued};
   }
   const missionLock=id=>'mission:'+id;
   // The authoritative publication check: still FINALIZING by this reviewer and
@@ -258,7 +297,11 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
     return {forTicket:prev.ticket_id,fromSha:prev.sha,lines,limit,outOfScope,...(unmeasured?{unmeasured}:{})};
   }
   return {
-    expire:()=>remoteWrite(db=>expire(db)),
+    async expire(){
+      const result=await remoteWrite(db=>expire(db));
+      if(result.queued&&events)void events.flush();
+      return result;
+    },
     async request(missionId,session){
       const ctx=await missionContext(missionId,session.sessionId,{write:true});
       const pull=await missionPull(github,ctx);
@@ -326,7 +369,7 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
         const codeUnits=remoteMission(db,missionId).codeUnits;
         const running=mission.units.filter(u=>codeUnits.includes(u.id)&&u.status==='RUNNING').map(u=>u.id);
         if(running.length)fail('UNIT_STILL_RUNNING','complete '+running.join(', ')+' with zana_complete_unit (green checks on the head) before asking for a ticket; if its lease expired: zana_recover_expired → zana_unit_retry → zana_start_batch');
-        expire(db);
+        expire(db,Date.now(),mission,false);
         if((correctionPrev(db,missionId)?.ticket_id??null)!==(prev?.ticket_id??null))
           fail('CORRECTION_UNMEASURED','la ronda de revisión cambió mientras se medía; vuelve a pedir el ticket');
         // Timestamps once the mission lock is held: tickets are ordered by creation.
@@ -570,7 +613,7 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
     // zana_merge runs under the same per-mission lock as request/finalize.
     withMissionLock:(missionId,fn)=>exclusive(missionLock(missionId),fn),
     latestIn,
-    expireIn:db=>expire(db),
+    expireIn:(db,mission)=>expire(db,Date.now(),mission),
     // Operator: list tickets and abandon one by id (audited by the caller).
     async list(missionId=null){
       return remoteWrite(db=>{

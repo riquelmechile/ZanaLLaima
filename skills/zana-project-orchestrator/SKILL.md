@@ -27,10 +27,11 @@ El servidor conserva la corrida, los hitos, las revisiones y su proyección de m
 
 ## Retomar tras zana.review.done
 
-1. Inicia una conversación nueva y contrasta `ticketId`, `verdict` y estado real. El webhook no autoriza el merge.
+1. Inicia una conversación nueva y contrasta `ticketId`, `verdict` y estado real. El webhook no autoriza el merge. Para EXPIRED, consulta `zana_delivery_status({missionId})` antes de adoptar: si `currentTicket!==ticketId`, ignora el aviso obsoleto.
 2. Llama a `zana_mission_adopt({missionId})` con el cliente OAuth creador. Ante `ADOPT_OTHER_CLIENT`, `REVIEWER_READ_ONLY`, `ADOPT_MISSION_BUSY` o `ADOPT_REVIEW_IN_PROGRESS`, detente.
 3. Si está APPROVE, exige delivery verde y autorización del paso 1; aplica **todos** los casos de `zana_merge` del paso 5 (attach solo con `AUDIT_UNAVAILABLE`). Solo tras registro o attach confirmado: close → archive → next.
 4. Si está REQUEST_CHANGES, lee la revisión, corrige lo autorizado, repite CI y pide un ticket nuevo.
-5. Nunca reclames ni revises un ticket de la misión adoptada. La revisora no adopta ni fusiona.
+5. Si está EXPIRED, tras adoptar vuelve a comprobar `currentTicket===ticketId` en `zana_delivery_status({missionId})` sobre SHA vigente (si cambió, ignora el aviso); solo entonces pide `zana_review_request({missionId})` de nuevo: se devuelve la ronda vencida sin veredicto (máximo cinco reembolsos). Si responde `REVIEW_ROUNDS_EXHAUSTED`, detente y avisa; con `CHANGES_REQUESTED_SAME_SHA`, sigue el flujo de corrección de `zana-odd` antes de un nuevo ticket. Nunca fusiones por el webhook.
+6. Nunca reclames ni revises un ticket de la misión adoptada. La revisora no adopta ni fusiona.
 
 GPT distribuye trabajo a subagentes **solo si el anfitrión los expone realmente**. Nunca delegar con Xanxito a otros hosts ni simular ejecución paralela.

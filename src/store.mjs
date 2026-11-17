@@ -215,6 +215,8 @@ function load(db) {
   const r = db.prepare('SELECT content FROM active_review WHERE mission_id=?').get(m.id);
   const state = { schema:1, id:m.id, status:m.lifecycle||'ACTIVE', objective:m.objective,
     authorization:parse(m.authorization), revision:m.revision, reviewCount:m.review_count||0, createdAt:m.created_at, budget:parse(m.budget),units };
+  const refunds=db.prepare('SELECT value FROM metadata WHERE key=?').get('zana:expired-refunds:'+m.id);
+  if(refunds)state.expiredRefunds=refundCount(refunds.value);
   if(m.closed_at)state.closedAt=m.closed_at;
   if (r) state.review = parse(r.content);
   return validate(state);
@@ -241,6 +243,8 @@ function persist(db, previous, next, kind = 'STATE_CHANGED') {
   if (previous && next.revision < previous.revision) fail('Mission revision went backwards');
   if(previous && json(previous.budget??null)!==json(next.budget??null))
     fail('Mission resource budget cannot be modified after creation');
+  if(next.expiredRefunds!==undefined&&(!Number.isSafeInteger(next.expiredRefunds)||
+    next.expiredRefunds<0||next.expiredRefunds>5))fail('Invalid expired review refunds');
   const activeWriters=next.units.filter(u=>u.effect==='WRITE'&&u.status==='RUNNING');
   const activeReaders=next.units.filter(u=>u.effect==='READ'&&u.status==='RUNNING');
   if(activeWriters.length>1||(activeWriters.length&&activeReaders.length))
@@ -261,6 +265,9 @@ function persist(db, previous, next, kind = 'STATE_CHANGED') {
       .run(next.objective,json(next.authorization),next.revision,now(),next.status||'ACTIVE',next.closedAt||null,next.reviewCount||0,json(next.budget??null));
   }
 
+  if(next.expiredRefunds!==undefined)
+    db.prepare('INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=MAX(CAST(value AS INTEGER),CAST(excluded.value AS INTEGER))')
+      .run('zana:expired-refunds:'+next.id,String(next.expiredRefunds));
   const prior = new Map((previous?.units || []).map(x => [x.id,x]));
   const ids = new Set(next.units.map(x => x.id));
   for (const old of prior.keys()) if (!ids.has(old)) fail('Deleting work units is not supported');
@@ -597,6 +604,13 @@ const FENCE_UNIT='*';
 // Consumed review rounds (reviewCount) of a mission, kept in the same ledger
 // under a key no unit id can take (createMission ids start with [a-z]).
 const REVIEW_ROUNDS_KEY='#review-rounds';
+function refundCount(raw){return typeof raw==='string'&&/^[0-5]$/.test(raw)?Number(raw):5;}
+function readRefunds(db){
+  const result=Object.create(null),prefix='zana:expired-refunds:';
+  for(const row of db.prepare('SELECT key,value FROM metadata WHERE key LIKE ?').all(prefix+'%'))
+    result[row.key.slice(prefix.length)]=refundCount(row.value);
+  return result;
+}
 const invalidLedger=()=>guardRestore('INVALID_LEDGER','Consumed-budget ledger is malformed; preserve the database and inspect it');
 const counter=v=>{
   if(v===undefined)return 0;
@@ -636,6 +650,7 @@ function readLedger(db){
 // database still proves; the caller reports ledgerRebuilt.
 function budgetFacts(db,{rebuild=false}={}){
   let ledger,rebuilt=false;
+  const refunds=readRefunds(db);
   const corruptArchive=[],damagedUnits=[];
   let damagedReview=false;
   try{ledger=readLedger(db);}
@@ -646,7 +661,9 @@ function budgetFacts(db,{rebuild=false}={}){
   const mission=load(db);
   const consume=m=>{
     for(const u of m?.units??[])raise(ledger,m.id,u.id,u.attempts||0,u.run?.leaseGeneration||0);
-    if(m?.reviewCount!==undefined&&m.reviewCount!==0)raise(ledger,m.id,REVIEW_ROUNDS_KEY,m.reviewCount,0);
+    if(m?.reviewCount!==undefined)
+      raise(ledger,m.id,REVIEW_ROUNDS_KEY,m.reviewCount+
+        Math.max(refunds[m.id]??0,m.expiredRefunds??0),0);
   };
   // Damaged counters on the active mission: under rebuild keep every unit
   // that is still valid and drop only the damaged ones, so recovery under
@@ -659,7 +676,8 @@ function budgetFacts(db,{rebuild=false}={}){
       if(!rebuild)invalidLedger();
       rebuilt=true;damagedReview=true;
       raise(ledger,mission.id,REVIEW_ROUNDS_KEY,reviewRoundCap(mission.budget),0);
-    }else if(rounds>0)raise(ledger,mission.id,REVIEW_ROUNDS_KEY,rounds,0);
+    }else if(rounds>0||(refunds[mission.id]??0)>0)
+      raise(ledger,mission.id,REVIEW_ROUNDS_KEY,rounds+(refunds[mission.id]??0),0);
   }
   if(mission)for(const u of mission.units){
     try{raise(ledger,mission.id,u.id,u.attempts||0,u.run?.leaseGeneration||0);}
@@ -686,7 +704,7 @@ function budgetFacts(db,{rebuild=false}={}){
     }
   }
   return {revision:mission?.revision??null,running:!!mission?.units.some(u=>u.status==='RUNNING'),
-    ledger,rebuilt,corruptArchive,damagedUnits,damagedReview};
+    ledger,refunds,rebuilt,corruptArchive,damagedUnits,damagedReview};
 }
 function refuseConsumedBudget(backupMission,liveBudget){
   if(liveBudget.running)
@@ -695,7 +713,9 @@ function refuseConsumedBudget(backupMission,liveBudget){
   if(!consumed)return;
   if(Object.hasOwn(consumed,FENCE_UNIT))
     guardRestore('CONSUMED_BUDGET','Consumption of mission '+backupMission.id+' is unknown (a corrupt archived snapshot was set aside); restore refused. With --force-data-loss the mission is restored exhausted');
-  if(Object.hasOwn(consumed,REVIEW_ROUNDS_KEY)&&consumed[REVIEW_ROUNDS_KEY].attempts>(backupMission.reviewCount||0))
+  const refunds=Math.max(liveBudget.refunds?.[backupMission.id]??0,backupMission.expiredRefunds??0);
+  if(Object.hasOwn(consumed,REVIEW_ROUNDS_KEY)&&
+    Math.max(0,consumed[REVIEW_ROUNDS_KEY].attempts-refunds)>(backupMission.reviewCount||0))
     guardRestore('CONSUMED_BUDGET','Mission '+backupMission.id+' consumed review rounds not present in the backup; restore refused. With --force-data-loss they are kept as max(live, backup)');
   for(const u of backupMission.units){
     const used=Object.hasOwn(consumed,u.id)?consumed[u.id]:null;
@@ -710,6 +730,14 @@ function refuseConsumedBudget(backupMission,liveBudget){
 function mergeBudgetFacts(db,facts,{ownLedger}={}){
   if(!facts)return;
   const ledger=mergeLedgers(ownLedger??readLedger(db),facts.ledger);
+  const refunds=readRefunds(db);
+  for(const [missionId,count] of Object.entries(facts.refunds??{})){
+    if(!ledgerKey(missionId))invalidLedger();
+    refunds[missionId]=Math.max(refunds[missionId]??0,refundCount(String(count)));
+  }
+  const saveRefund=db.prepare('INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value');
+  for(const [missionId,count] of Object.entries(refunds))
+    saveRefund.run('zana:expired-refunds:'+missionId,String(count));
   db.prepare('INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
     .run(CONSUMED_BUDGET_KEY,json(ledger));
   const m=db.prepare('SELECT id,revision FROM active_mission WHERE slot=1').get();
@@ -725,7 +753,8 @@ function mergeBudgetFacts(db,facts,{ownLedger}={}){
       .run(reviewRoundCap(parse(db.prepare('SELECT budget FROM active_mission WHERE slot=1').get()?.budget??'null')));
   }
   if(Object.hasOwn(own,REVIEW_ROUNDS_KEY))
-    db.prepare('UPDATE active_mission SET review_count=MAX(review_count,?) WHERE slot=1').run(own[REVIEW_ROUNDS_KEY].attempts);
+    db.prepare('UPDATE active_mission SET review_count=? WHERE slot=1').run(
+       Math.max(0,own[REVIEW_ROUNDS_KEY].attempts-(refunds[m.id]??0)));
   const read=db.prepare('SELECT status,attempts,run FROM units WHERE mission_id=? AND id=?');
   const write=db.prepare('UPDATE units SET attempts=?,run=? WHERE mission_id=? AND id=?');
   for(const [unitId,used] of Object.entries(own)){

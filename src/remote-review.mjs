@@ -162,6 +162,11 @@ export const correctionPrev=(db,missionId)=>{
 };
 export const latestIn=(db,missionId)=>db?.prepare('SELECT * FROM review_tickets WHERE mission_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(missionId)??null;
 // events (opcional): {queue(db,{clientId,ticketId}), flush()} para avisar al monitor suscrito.
+export function effectiveReviewRounds(reviewCount,tickets){
+  const refundable=tickets.filter(t=>['EXPIRED','ABANDONED'].includes(t.state)&&
+    t.verdict==null&&t.github_review_id==null&&!t.status_posted).length;
+  return Math.max(0,reviewCount-Math.min(5,refundable));
+}
 export function createReview({github,reviewerGithub,config,checks,remoteWrite,remoteRead,transact,missionContext,events=null}){
   const {exclusive}=makeExclusive();
   const pageCache=new Map();
@@ -181,14 +186,34 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
   const hasBlocking=(db,ticketId)=>lensRows(db,ticketId).some(l=>blocking(l.findings));
   const sameShaBlocker=(db,missionId,sha)=>db.prepare('SELECT * FROM review_tickets WHERE mission_id=? AND sha=? AND operator_released=0')
     .all(missionId,sha).find(t=>t.verdict==='REQUEST_CHANGES'||hasBlocking(db,t.ticket_id))?.ticket_id??null;
-  // Lazy expiry: OPEN past its deadline -> EXPIRED; CLAIMED/FINALIZING older
-  // than the claim TTL -> ABANDONED (terminal, never blocks a merge).
-  function expire(db,now=Date.now()){
-    const at=nowIso();
-    db.prepare("UPDATE review_tickets SET state='EXPIRED',updated_at=? WHERE state='OPEN' AND expires_at<=?")
-      .run(at,new Date(now).toISOString());
-    db.prepare("UPDATE review_tickets SET state='ABANDONED',updated_at=? WHERE state IN ('CLAIMED','FINALIZING') AND claimed_at<=?")
-      .run(at,new Date(now-config.claimTtlMinutes*60_000).toISOString());
+  const roundsUsedIn=(db,mission)=>effectiveReviewRounds(mission.reviewCount,
+    db.prepare('SELECT state,verdict,github_review_id,status_posted FROM review_tickets WHERE mission_id=?').all(mission.id));
+  // Una transición terminal se graba en SQLite; las rondas efectivas se derivan de tickets.
+  function expire(db,now=Date.now(),notify=false){
+    const at=new Date(now).toISOString(),cutoff=new Date(now-config.claimTtlMinutes*60_000).toISOString();
+    const due=db.prepare("SELECT * FROM review_tickets WHERE ((state='OPEN' AND expires_at<=?) OR (state IN ('CLAIMED','FINALIZING') AND claimed_at<=?))")
+      .all(at,cutoff);
+    let expired=0,queued=0;
+    for(const t of due){
+      const next=t.state==='OPEN'?'EXPIRED':'ABANDONED';
+      if(!db.prepare("UPDATE review_tickets SET state=?,updated_at=? WHERE ticket_id=? AND state=?")
+        .run(next,at,t.ticket_id,t.state).changes)continue;
+      expired++;
+      if(!notify||t.verdict!==null||t.github_review_id!==null||t.status_posted)continue;
+      const active=db.prepare('SELECT lifecycle FROM active_mission WHERE slot=1 AND id=?').get(t.mission_id);
+      if(active?.lifecycle!=='ACTIVE'||!events)continue;
+      db.exec('SAVEPOINT review_expired_event');
+      try{
+        queued+=events.queue(db,{clientId:t.author_client,ticketId:t.ticket_id,
+          name:'zana.review.done',data:{ticketId:t.ticket_id,verdict:'EXPIRED'}});
+        db.exec('RELEASE review_expired_event');
+      }catch(error){
+        if(!db.isTransaction)throw error;
+        db.exec('ROLLBACK TO review_expired_event');db.exec('RELEASE review_expired_event');
+        console.error('REVIEW_EXPIRED_EVENT_QUEUE_FAILED',error?.code??'UNKNOWN',t.ticket_id);
+      }
+    }
+    return {expired,queued};
   }
   const missionLock=id=>'mission:'+id;
   // The authoritative publication check: still FINALIZING by this reviewer and
@@ -258,7 +283,11 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
     return {forTicket:prev.ticket_id,fromSha:prev.sha,lines,limit,outOfScope,...(unmeasured?{unmeasured}:{})};
   }
   return {
-    expire:()=>remoteWrite(db=>expire(db)),
+    async expire(){
+      const result=await remoteWrite(db=>expire(db,Date.now(),true));
+      if(result.queued&&events)void events.flush();
+      return result;
+    },
     async request(missionId,session){
       const ctx=await missionContext(missionId,session.sessionId,{write:true});
       const pull=await missionPull(github,ctx);
@@ -339,7 +368,7 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
         const blocker=sameShaBlocker(db,missionId,sha);
         if(blocker)fail('CHANGES_REQUESTED_SAME_SHA','a review requested changes on '+sha+' (ticket '+blocker+'); push a change before asking for a new ticket');
         const cap=budgetOf(mission).maxReviewRounds;
-        if((mission.reviewCount||0)>=cap)fail('REVIEW_ROUNDS_EXHAUSTED','mission used its '+cap+' review rounds');
+        if(roundsUsedIn(db,mission)>=cap)fail('REVIEW_ROUNDS_EXHAUSTED','mission used its '+cap+' review rounds');
         // One live ticket per mission: older ones become STALE_SHA (other SHA) or ABANDONED (same SHA).
         superseded=db.prepare('SELECT ticket_id,sha FROM review_tickets WHERE mission_id=? AND '+LIVE).all(missionId);
         for(const old of superseded)
@@ -570,6 +599,7 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
     // zana_merge runs under the same per-mission lock as request/finalize.
     withMissionLock:(missionId,fn)=>exclusive(missionLock(missionId),fn),
     latestIn,
+    roundsUsedIn,
     expireIn:db=>expire(db),
     // Operator: list tickets and abandon one by id (audited by the caller).
     async list(missionId=null){

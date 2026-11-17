@@ -593,7 +593,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
           throw new Error('REVIEWER_READ_ONLY: una sesión revisora no puede adoptar');
         if(mission.units.some(u=>u.status==='RUNNING'&&u.run?.sessionId!==session.sessionId&&Date.parse(u.run?.expiresAt)>Date.now()))
           throw new Error('ADOPT_MISSION_BUSY: otra sesión tiene una unidad activa');
-        review.expireIn(db);
+        review.expireIn(db,mission);
         const latest=db.prepare('SELECT state FROM review_tickets WHERE mission_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1').get(id);
         if(latest&&!['FINALIZED','STALE_SHA','EXPIRED','ABANDONED'].includes(latest.state))
           throw new Error('ADOPT_REVIEW_IN_PROGRESS: existe una revisión en curso');
@@ -833,7 +833,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
             }catch(error){throw new Error('PR_ALREADY_MERGED: '+runErrorCode(error));}
           }else if(hito){
             const ticket=ctx.db.prepare('SELECT pr_number FROM review_tickets WHERE mission_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1').get(mission.id);
-            const motivo=(mission.reviewCount||0)>=budgetOf(mission).maxReviewRounds
+            const motivo=review.roundsUsedIn(ctx.db,mission)>=budgetOf(mission).maxReviewRounds
               ?'REVIEW_ROUNDS_EXHAUSTED: Misión cancelada por rondas de revisión agotadas':'Misión cancelada';
             const next=releaseMilestone(run,{missionId:mission.id,reason:motivo,prNumber:ticket?.pr_number??null,now:new Date().toISOString()});
             const saved=saveRun(ctx.db,run,next,{missionId:mission.id,secrets:secrets()});
@@ -932,7 +932,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         if((existing.status||'ACTIVE')!=='ACTIVE')throw new Error('MISSION_NOT_ACTIVE: mission '+id+' is '+existing.status);
         if(!remoteMission(txc.db,id).codeUnits.length)throw new Error('NO_CODE_UNITS: mission '+id+' has no code units to correct');
         if(existing.units.some(u=>u.id===unitId))throw new Error('CORRECTION_EXISTS: unit '+unitId+' already corrects that review');
-        if((existing.reviewCount||0)>=budgetOf(existing).maxReviewRounds)
+        if(review.roundsUsedIn(txc.db,existing)>=budgetOf(existing).maxReviewRounds)
           throw new Error('REVIEW_ROUNDS_EXHAUSTED: no review round left for a corrected candidate');
         if(remainingStarts(existing)<=0)throw new Error('Mission work-start budget exhausted');
         if(existing.units.length>=100)throw new Error('Mission already has 100 units');

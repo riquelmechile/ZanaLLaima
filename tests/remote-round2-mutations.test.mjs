@@ -154,6 +154,9 @@ test('M3/M4/M11: same-SHA live BLOCKER, claim TTL -> ABANDONED, openBlocking, su
     void t2;void t3;
     await transact(m=>{m.reviewCount=m.budget.maxReviewRounds;m.revision++;return m;});
     f.api.state.push(branch,sha('d'));f.api.state.green(sha('d'));
+    const credited=await f.call('zana_review_request',{missionId},author);
+    assert.equal(credited.error,undefined,credited.error); // dos tickets ABANDONED acreditan rondas efectivas
+    await transact(m=>{m.reviewCount=m.budget.maxReviewRounds+2;m.revision++;return m;});
     assert.match((await f.call('zana_review_request',{missionId},author)).error,/REVIEW_ROUNDS_EXHAUSTED/);
   }finally{await f.cleanup();}
 });

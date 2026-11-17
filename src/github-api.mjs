@@ -154,6 +154,13 @@ export class GitHubApi{
   }
   // Archivos cambiados entre dos commits (compare JSON; per_page=1 recorta los commits,
   // no los archivos). GitHub entrega a lo más 300: con 300 o más la lista queda truncated.
+  async containsCommit(repo,ancestor,head){
+    // SHA-only refs: one compare response without paginating commit history.
+    const from=sha(ancestor),to=sha(head);
+    if(from===to)return true;
+    const data=await this.request('GET',repoPath(repo)+'/compare/'+from+'...'+to+'?per_page=1');
+    return data?.status==='ahead'||data?.status==='identical';
+  }
   async compareFiles(repo,from,commit){
     const data=await this.request('GET',repoPath(repo)+'/compare/'+sha(from)+'...'+sha(commit)+'?per_page=1');
     if(!Array.isArray(data?.files))throw new GitHubApiError(502,'Unreadable compare file list');

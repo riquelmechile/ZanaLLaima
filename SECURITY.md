@@ -33,12 +33,12 @@ Estas decisiones son deliberadas para una instancia de un solo operador. Quien i
 - **Repos permitidos por cuenta.** `ZANA_GITHUB_REPOS` puede nombrar repos uno por uno o una cuenta completa con `owner/*`. Con el comodín, el modelo puede abrir una misión (una rama `zana/<missionId>` y un PR) en cualquier repo de esa cuenta que el token autor alcance, incluidos los privados y los que se creen después. Tres cosas a saber antes de usarlo:
   - **El CI que cuenta.** Con `ZANA_REQUIRED_CHECKS` vacío vale cualquier check exitoso sobre el SHA, también el CI propio del repo o un check de despliegue. Un repo sin el workflow de checks pero con otro CI en sus PR sí puede quedar en verde. Para exigir jobs concretos usa `ZANA_REQUIRED_CHECKS` o `ZANA_REPO_CHECKS_JSON`.
   - **La revisión.** Sin la cuenta revisora con acceso de escritura al repo, la revisión no se puede publicar y no hay merge.
-  - **La protección de rama.** Es una segunda llave que pone GitHub y el servidor **no la verifica**. En un repo sin protección, `zana_merge` mergea igual cuando sus propios gates pasan. Los repos nuevos nacen sin protección.
+  - **Protección de rama.** `zana_merge` valida sus gates (4R, CI y SHA), pero **no verifica si GitHub tiene la protección activada**. `zana_bootstrap_setup` la instala al configurar repos nuevos; en repos existentes el operador debe revisarla.
 
   Un repo sin ningún check exitoso o sin la cuenta revisora no llega al merge, pero sí recibe la rama y el PR. Si hay repos de la cuenta donde ni eso es aceptable, nómbralos uno por uno en vez de usar el comodín, o limita el token autor a los repos que correspondan.
 - **Merge activado.** `ZANA_MERGE_ENABLED=true` es el valor por defecto. `zana_merge` exige todo verde sobre el mismo head SHA. La protección de rama de `main` en GitHub es la segunda llave y debe estar activa. `zana_bootstrap_setup` sí comprueba y configura la protección para repositorios preparados; `zana_merge` no vuelve a verificarla en cada merge.
 
-**Recuperación de hitos trabados:** el operador consulta `zana_project_next`. Si GitHub ya fusionó el PR pero hubo `AUDIT_UNAVAILABLE` o `PR_ALREADY_MERGED`, usa `zana_project_reconcile` con `action:'attach'` y revisión vigente; si canceló una misión sin merge, cierra sus PR y usa `action:'release'`. El servidor verifica la evidencia. No se repite el merge ni se cancela toda la corrida como atajo; `zana_project_run_cancel` exige autorización explícita del usuario.
+**Recuperación de hitos trabados:** si `zana_merge` tuvo éxito (`merged:true`) pero `run.recorded:false` (`AUDIT_UNAVAILABLE`), usa `zana_project_reconcile` attach sin repetir merge. Con `PRIOR_PR_OPEN` o `PR_STILL_OPEN`, pide al usuario u operador cerrar el PR anterior SIN merge en GitHub; el modelo no puede cerrarlo. Solo libera un hito tras cancelar la misión y comprobar los PR cerrados sin merge.
 
 ## Memoria como dato no confiable
 

@@ -400,3 +400,53 @@ test('C2: attach acepta id MAYÚSCULO y conserva la identidad canónica',async()
     assert.equal(await remoteRead(db=>loadRun(db,m.memory.projectId).milestones[0].parts[0].missionId),m.id);
   }finally{await f.cleanup();}
 });
+
+
+test('C4: dispatcher propaga RUN_CORRUPT en cancel y reconcile sin marcar writer',async()=>{
+  const f=await remoteFixture();
+  try{
+    const started=await setup(f);
+    await remoteWrite(db=>db.prepare('UPDATE metadata SET value=? WHERE key=?')
+      .run('{"schema":"corrupta"}','zana:run:'+started.projectId));
+    const session=await f.session();
+    const c=await f.call('zana_project_run_cancel',
+      {repo:gh.repo,expectedRevision:started.run.revision,reason:'Cancelación expresamente autorizada'},session);
+    assert.match(c.error??'',/RUN_CORRUPT/);
+    const r=await f.call('zana_project_reconcile',
+      {repo:gh.repo,expectedRevision:0,milestoneId:'core',missionId:'old',final:true,action:'release'},session);
+    assert.match(r.error??'',/RUN_CORRUPT/);
+    assert.equal((await f.call('zana_session_status',{},session)).writerMarked,false);
+  }finally{await f.cleanup();}
+});
+
+test('C4: INVALID_ACTION con corrida existente tampoco marca writer',async()=>{
+  const f=await remoteFixture();
+  try{
+    await setup(f);const s=await f.session();
+    const out=await f.call('zana_project_reconcile',
+      {repo:gh.repo,expectedRevision:0,milestoneId:'core',missionId:'old',final:true,action:'mal'},s);
+    assert.match(out.error??'',/INVALID_ACTION/);
+    assert.equal((await f.call('zana_session_status',{},s)).writerMarked,false);
+  }finally{await f.cleanup();}
+});
+
+test('C4: release toma PR máximo con GitHub ascendente o desordenado',async()=>{
+  for(const order of [[5,6,7],[6,7,5]]){
+    const f=await remoteFixture();
+    try{
+      await setup(f);const m=await init(f),before=await run(f);
+      for(const number of [5,6,7])proof(f,m.id,number,{merged:false});
+      for(const p of f.api.state.pulls)if([5,6,7].includes(p.number))p.state='closed';
+      const original=f.runtime.github.openPullsFor.bind(f.runtime.github);
+      f.runtime.github.openPullsFor=async (...args)=>{
+        const pulls=await original(...args);
+        return [...pulls].sort((a,b)=>order.indexOf(a.number)-order.indexOf(b.number));
+      };
+      await transact(mission=>{cancelMission(mission);return mission;});
+      const result=await reconcile(f,before,m.id,{action:'release'});
+      assert.equal(result.released,true,result.error);
+      const attempt=await remoteRead(db=>loadRun(db,m.memory.projectId).milestones[0].attempts.at(-1));
+      assert.equal(attempt.prNumber,7,'order '+order.join(','));
+    }finally{await f.cleanup();}
+  }
+});

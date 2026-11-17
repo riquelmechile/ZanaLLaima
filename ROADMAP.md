@@ -32,13 +32,13 @@ Hecho en esta versión:
 - [x] **CI por repositorio** (`ZANA_REPO_CHECKS_JSON`), aplicado en checks, entrega, merge y dispatch.
 - [x] **Repos permitidos por cuenta** (`owner/*` en `ZANA_GITHUB_REPOS`).
 - [x] Lecturas de archivos como texto, sin el aviso de "materializar archivos" de ChatGPT.
-- [x] Orquestador de hitos conectado mediante tools MCP y memoria proyectada; otros contratos de delegación y entrega conservan sus propias tareas pendientes.
+- [ ] **0.8.0 histórica:** el orquestador de hitos aún no estaba conectado a tools MCP ni memoria proyectada; delegación y entrega continuaban pendientes.
 
 Lo que sigue:
 
 - [x] Aprobación autenticada del plan por su huella exacta: el modelo la pide (`zana_plan_approval_request`) y solo el operador la concede en `/operator/approve` con su contraseña. Hecho después de publicar esta versión; todavía ninguna tool consume la aprobación.
 - [ ] Conectar al backend el bootstrap (crear el repo, instalar el CI, invitar a la revisora y proteger la rama), con autorización del operador registrada. Hecho hasta ahora: la autorización del operador (`zana_bootstrap_request`, `zana_bootstrap_status`) y la creación del repositorio con reconciliación (`zana_bootstrap_execute`, `zana_bootstrap_reconcile`); falta instalar el CI, invitar a la revisora y proteger la rama.
-- [x] Conectar el orquestador: varias misiones por proyecto, estado persistido, conciliación tras merge y cancelación autorizada.
+- [x] Conectar el orquestador: varias misiones por proyecto, estado persistido, conciliación tras merge y cancelación autorizada (**hecho después de publicar esta versión**).
 - [ ] 4R con subagentes nativos. Primero hay que comprobar si un subagente llega al servidor con una identidad distinta de la conversación que lo lanzó.
 - [ ] Revisión que converge: el revisor recibe los hallazgos de las rondas anteriores y el operador puede aceptar un riesgo.
 - [ ] Gate de entrega con evidencia definida para merge squash.

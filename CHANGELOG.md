@@ -2,6 +2,8 @@
 
 ## [Sin publicar]
 
+- C4: orquestación de cierre/archivo de hitos, política de PR y merge, documentación y propagación RUN_CORRUPT; tests de herramientas y orden de PR.
+
 - C3: separa motivo de cancelación de memoria servidor, conserva revisiones entre corridas, elige el PR más nuevo en release y conecta la guía operativa del orquestador con conciliación y seguridad.
 
 - C2: reconcile elige PR fusionado único o valida todos los PR antes de liberar, usa la misión canónica y rechaza acciones desconocidas; cancelación explícita de corrida con control de dueño, revisión y memoria, más regresiones de seguridad.

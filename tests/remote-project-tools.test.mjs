@@ -29,7 +29,7 @@ test('discovery y plan MCP funcionan sin misión ni repositorio',async()=>{
     assert.equal(proposal.visibility,'private');
     assert.deepEqual(f.api.state.dispatches,[],'no CI or external write');
     assert.deepEqual(f.api.state.pulls,[],'no PR or repository created');
-    assert.equal(REMOTE_TOOL_NAMES.length,56,'el catálogo incluye zana_project_run_start y zana_project_next');
+    assert.equal(REMOTE_TOOL_NAMES.length,57,'el catálogo incluye zana_project_run_start y zana_project_next');
     assert.ok(REMOTE_TOOL_NAMES.includes('zana_bootstrap_setup'));
     assert.ok(REMOTE_TOOL_NAMES.includes('zana_project_run_start'));
     assert.ok(REMOTE_TOOL_NAMES.includes('zana_project_next'));

@@ -778,3 +778,36 @@ test('B2c: cancel rescata parte con auditoría completa aunque GitHub no respond
     assert.equal((await remoteRead(db=>loadRun(db,started.projectId).milestones[0].status)),'DONE');
   }finally{await f.cleanup();}
 });
+
+test('C1: prefix rejects variants, permits [hitos], strips Cc from server-prefixed summary',async()=>{
+  for(const [done,blocked] of [
+    ['[ hito core parte 1] simulado',true],['[hito:core] simulado',true],
+    ['[fueradelplan] simulado',true],['[híto core] simulado',true],
+    ['[hitos] texto legítimo',false]]){
+    const f=await remoteFixture();
+    try{
+      f.owner=await f.session();const m=await init(f);
+      assert.equal((await approvedMerge(f,m)).state,'MERGED');
+      const closed=await f.call('zana_mission_close',{summary:{...summary,done}},f.owner);
+      if(blocked)assert.match(closed.error??'',/RESERVED_PREFIX/);
+      else assert.equal(closed.error,undefined,closed.error);
+    }finally{await f.cleanup();}
+  }
+  const f=await remoteFixture();
+  try{
+    await setup(f);const m=await init(f,{milestone:{id:'core',final:true}});
+    assert.equal((await approvedMerge(f,m)).state,'MERGED');
+    await f.call('zana_mission_close',{summary:{...summary,done:'Texto limpio\x1cFS\x1eRS\x1bESC'}},f.owner);
+    const body=await remoteRead(db=>db.prepare("SELECT body FROM project_memory WHERE mission_id=? AND kind='summary' ORDER BY seq DESC LIMIT 1").get(m.id)?.body);
+    assert.ok(body.startsWith('[hito core parte 1] '));
+    assert.doesNotMatch(body.split('\n')[0],/[\x00-\x1f\x7f]/);
+  }finally{await f.cleanup();}
+});
+
+test('C1: cancelar sin misión conserva respuesta legada',async()=>{
+  const f=await remoteFixture();
+  try{
+    const author=await f.session();
+    assert.match((await f.call('zana_mission_cancel',{},author)).error??'',/No mission initialized/);
+  }finally{await f.cleanup();}
+});

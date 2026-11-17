@@ -19,7 +19,7 @@ import {createGitHubPolicy,CATALOG,liveProblems,missionBranch} from './github-po
 import {createChecks,UNTESTED_REASON} from './checks.mjs';
 import {createReview,correctionPrev,LENSES,SEVERITIES,EXECUTIONS,ORIGINS} from './remote-review.mjs';
 import {compactWrite,inlineResources} from './downstream-compact.mjs';
-import {deliveryStatus,mergeMission,ticketView} from './github-delivery.mjs';
+import {deliveryStatus,mergeMission,ticketView,independentReview} from './github-delivery.mjs';
 import {listSkills,loadSkill} from './skills.mjs';
 import {startDiscovery,answerDiscovery,nextDiscoveryQuestions,draftProjectPlan} from './project-discovery.mjs';
 import {prepareBootstrap} from './project-bootstrap.mjs';
@@ -41,7 +41,7 @@ import {clean,redactDeep,envSecrets} from './redact.mjs';
 import {githubAdminRequest,githubAdminAudit} from './github-admin.mjs';
 import {closeMission,cancelMission} from './lifecycle.mjs';
 import {readPointer,resolveProject,memoryContext,missionProject,setMissionProject,saveSummary,saveEntry,searchMemory,reservedTopic} from './project-memory.mjs';
-import {initializeProjectRun,readyMilestones,claimMilestone,recordOutsidePlan,completePart,releaseMilestone} from './project-orchestrator.mjs';
+import {initializeProjectRun,readyMilestones,claimMilestone,recordOutsidePlan,completePart,attachPart,releaseMilestone} from './project-orchestrator.mjs';
 import {runBoard} from './project-run-memory.mjs';
 import {loadRun,saveRun,repairRunMemory} from './project-run-store.mjs';
 
@@ -124,6 +124,10 @@ const NEW_TOOLS={
       name:z.string().min(1).max(100),visibility:z.enum(['private','public']).optional()}).strict()],
   zana_project_run_start:['Start the project milestone run once after its plan is approved and its repository exists',false,
     z.object({workspaceId:z.string().uuid(),repo:z.string().min(3).max(201),base:z.string().min(1).max(200)}).strict()],
+  zana_project_reconcile:['Reconcile a merged PR into the project run or release a cancelled inactive mission after server-side GitHub verification',false,
+    z.object({repo:z.string().min(3).max(201),expectedRevision:z.number().int().min(0),
+      milestoneId:z.string().min(1).max(48),missionId:missionId(),final:z.boolean(),
+      action:z.enum(['attach','release']).default('attach')}).strict()],
   zana_project_next:['Read the project run after each merge to learn which milestone is ready next',true,
     z.object({repo:z.string().min(3).max(201)}).strict()],
   zana_mission_init:['Create a mission: milestone {id, final} for an active project run, or outsidePlan (8-300 chars) for exceptional work; never both. Code units use code:true; read memory.context and .zanallaima.json before planning',false,
@@ -419,6 +423,85 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
           parts:m.parts.length,running:m.running&&{missionId:m.running.missionId,final:m.running.final},attempts:m.attempts.length})),
         ready:readyMilestones(run),memory:memoryContext(db,run.projectId,{maxBytes:4096})};
     }),
+    async zana_project_reconcile({repo,expectedRevision,milestoneId,missionId:id,final,action},session){
+      // El servidor, no el modelo, consulta GitHub. Ningún fallo acredita un hito.
+      const initial=await rr(db=>{
+        const row=db.prepare('SELECT project_id FROM projects WHERE repo=? COLLATE NOCASE ORDER BY created_at DESC LIMIT 1').get(repo);
+        const run=row&&loadRun(db,row.project_id);
+        if(!run)throw new Error('RUN_NOT_FOUND: no existe corrida');
+        if(run.ownerClient!==session.clientId)throw new Error('RUN_OTHER_CLIENT: otro cliente');
+        if(run.revision!==expectedRevision)throw new Error('STALE_REVISION: revisión distinta');
+        if(!run.milestones.some(x=>x.id===milestoneId))throw new Error('INVALID_ID: hito desconocido');
+        const already=run.milestones.find(x=>x.id===milestoneId).parts.some(x=>x.missionId.toLowerCase()===id.toLowerCase());
+        const rm=remoteMission(db,id);
+        if(rm&&(rm.repo.toLowerCase()!==repo.toLowerCase()||rm.base!==run.base))
+          throw new Error('RUN_REPO_MISMATCH: rama o repositorio distinto');
+        if(action==='release'&&run.milestones.find(x=>x.id===milestoneId)?.running?.missionId.toLowerCase()!==id.toLowerCase())
+          throw new Error('MILESTONE_NOT_RUNNING: misión no ocupa este hito');
+        return {run,already,branch:rm?.branch??missionBranch(id)};
+      });
+      if(action==='attach'&&initial.already)return {recorded:true,already:true,milestoneId};
+      if(action==='release'){
+        const active=await rr((db,m)=>m?.id.toLowerCase()===id.toLowerCase()&&(m.status||'ACTIVE')==='ACTIVE');
+        if(active)throw new Error('MISSION_ACTIVE: no se libera una misión activa');
+      }
+      let pulls,pull=null;
+      try{
+        pulls=(await github.openPullsFor(repo,initial.branch,'all')).filter(x=>
+          x.head?.ref===initial.branch&&x.base?.ref===initial.run.base);
+        if(pulls.length>1)throw new Error('AMBIGUOUS_PR');
+        if(pulls.length)pull=await github.pull(repo,pulls[0].number);
+      }catch{throw new Error('GITHUB_UNAVAILABLE: consulta de PR no disponible');}
+      const merged=pull?.merged===true&&pull?.state==='closed';
+      if(action==='attach'){
+        if(!merged||pull.head?.ref!==initial.branch||pull.base?.ref!==initial.run.base)
+          throw new Error('PR_NOT_MERGED: PR no fusionado en base de la corrida');
+        const head=pull.head?.sha,mergeCommitSha=pull.merge_commit_sha;
+        if(!/^[0-9a-f]{40}$/.test(head??'')||!/^[0-9a-f]{40}$/.test(mergeCommitSha??''))
+          throw new Error('PR_NOT_MERGED: SHA o merge desconocido');
+        if(!config.reviewerLogin)throw new Error('REVIEW_NOT_APPROVED: falta revisora');
+        const review=await independentReview(github,repo,pull.number,head,pull,config.reviewerLogin);
+        if(review.state==='UNAVAILABLE')throw new Error('GITHUB_UNAVAILABLE: revisión no disponible');
+        if(review.state!=='APPROVED_EXACT_SHA')throw new Error('REVIEW_NOT_APPROVED: revisión no aprobada en SHA exacto');
+        let ci;try{ci=await checks.verdict(repo,head);}
+        catch{throw new Error('GITHUB_UNAVAILABLE: CI no disponible');}
+        if(ci.state!=='SUCCESS')throw new Error('CI_NOT_GREEN: checks requeridos no están verdes');
+        const evidence={sha:head,ci:'SUCCESS',review:'APPROVED',merged:true,mergeCommitSha};
+        return rw(db=>{
+          const run=loadRun(db,initial.run.projectId);
+          if(!run||run.revision!==expectedRevision)throw new Error('STALE_REVISION: corrida cambió');
+          if(run.ownerClient!==session.clientId)throw new Error('RUN_OTHER_CLIENT: otro cliente');
+          const h=run.milestones.find(x=>x.id===milestoneId);
+          if(h.parts.some(x=>x.missionId.toLowerCase()===id.toLowerCase()))
+            return {recorded:true,already:true,milestoneId};
+          const now=new Date().toISOString();
+          const next=h.running?.missionId.toLowerCase()===id.toLowerCase()
+            ?completePart(run,{expectedRevision,missionId:id,prNumber:pull.number,headSha:head,mergeCommitSha,evidence,now})
+            :attachPart(run,{expectedRevision,milestoneId,missionId:id,final,prNumber:pull.number,headSha:head,mergeCommitSha,evidence,now});
+          const saved=saveRun(db,run,next,{missionId:id,secrets:secrets()});
+          const status=next.milestones.find(x=>x.id===milestoneId).status;
+          writeAudit(db,{caller:session,tool:'zana_project_reconcile.run',missionId:id,
+            category:'project_run',outcome:'SUCCESS',
+            detail:{projectId:run.projectId,milestoneId,missionId:id,transition:status}});
+          return {recorded:true,already:false,milestoneId,status,runStatus:next.status,revision:next.revision,
+            ...(saved.memoryError?{memoryError:saved.memoryError}:{})};
+        });
+      }
+      if(pull?.merged===true||pull?.merged_at)throw new Error('PR_ALREADY_MERGED: usa attach');
+      return rw(db=>{
+        const run=loadRun(db,initial.run.projectId);
+        if(!run||run.revision!==expectedRevision)throw new Error('STALE_REVISION: corrida cambió');
+        if(run.ownerClient!==session.clientId)throw new Error('RUN_OTHER_CLIENT: otro cliente');
+        const next=releaseMilestone(run,{expectedRevision,missionId:id,reason:'OPERATOR_RELEASE',
+          prNumber:pull?.number??null,now:new Date().toISOString()});
+        const saved=saveRun(db,run,next,{missionId:id,secrets:secrets()});
+        writeAudit(db,{caller:session,tool:'zana_project_reconcile.run',missionId:id,
+          category:'project_run',outcome:'SUCCESS',
+          detail:{projectId:run.projectId,milestoneId,missionId:id,transition:'RELEASE'}});
+        return {released:true,milestoneId,revision:next.revision,
+          ...(saved.memoryError?{memoryError:saved.memoryError}:{})};
+      });
+    },
     zana_profile:()=>operations.profile(),
     zana_capability_status:args=>capabilityContract(args.hostReport??{}),
     async zana_mission_adopt({missionId:id},session){
@@ -490,6 +573,19 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         if(previous.repo.toLowerCase()!==target.repo.toLowerCase()||previous.base!==target.base)
           throw new Error('RUN_REPO_MISMATCH: repositorio o base distintos de la corrida');
       }
+      let priorChecked=null;
+      if(milestone&&previous?.status==='ACTIVE'){
+        const h=previous.milestones.find(x=>x.id===milestone.id),last=h?.attempts.at(-1);
+        if(last){
+          const rm=await rr(db=>remoteMission(db,last.missionId));
+          const branch=rm?.branch??missionBranch(last.missionId);
+          let pulls;try{pulls=await github.openPullsFor(target.repo,branch,'all');}
+          catch{throw new Error('GITHUB_UNAVAILABLE: no se pudo comprobar el intento previo');}
+          if(pulls.some(p=>p.head?.ref===branch&&p.base?.ref===target.base&&p.state==='open'))
+            throw new Error('PRIOR_PR_OPEN: cierra el PR del intento anterior');
+          priorChecked={missionId:last.missionId,revision:previous.revision};
+        }
+      }
       let baseSha=null;
       if(milestone&&previous?.status==='ACTIVE')
         try{baseSha=await github.branchHead(target.repo,target.base);}
@@ -520,6 +616,9 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         if(milestone&&run?.status!=='ACTIVE')throw new Error((run?'RUN_NOT_ACTIVE':'RUN_NOT_FOUND')+': no hay corrida activa');
         if(outsidePlan!==undefined&&run?.status!=='ACTIVE')throw new Error((run?'RUN_NOT_ACTIVE':'RUN_NOT_FOUND')+': no hay corrida activa para outsidePlan');
         if(run?.status==='ACTIVE'){
+          if(priorChecked&&(run.revision!==priorChecked.revision||
+            run.milestones.find(x=>x.id===milestone.id)?.attempts.at(-1)?.missionId!==priorChecked.missionId))
+            throw new Error('STALE_REVISION: cambio el intento previo');
           if(run.ownerClient!==session.clientId)throw new Error('RUN_OTHER_CLIENT: la corrida pertenece a otro cliente');
           if(run.repo.toLowerCase()!==target.repo.toLowerCase()||run.base!==target.base)
             throw new Error('RUN_REPO_MISMATCH: repositorio o base distintos de la corrida');
@@ -594,6 +693,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     zana_unit_retry:(args,session)=>checked(session,'zana_unit_retry',()=>operations.retry(args)),
     async zana_mission_cancel(args,session){
       const lockedId=await rr((db,mission)=>mission?.id??null);
+      if(!lockedId)throw new Error('No mission initialized');
       const perform=async()=>{
       let status,runInfo=null;
       // Consultar GitHub antes de la transacción: cancelar jamás puede deshacer
@@ -639,6 +739,8 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         try{
           const run=pid&&loadRun(ctx.db,pid);
           const hito=run?.status==='ACTIVE'&&run.milestones.find(x=>x.running?.missionId.toLowerCase()===mission.id.toLowerCase());
+          if(!hito&&run?.milestones.some(x=>x.parts.some(p=>p.missionId.toLowerCase()===mission.id.toLowerCase())))
+            runInfo={released:false,reason:'PART_RECORDED'};
           if(hito&&mergedProof){
             try{
               const next=completePart(run,{missionId:mission.id,prNumber:mergedProof.prNumber,
@@ -716,10 +818,10 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         const normalized=summary.done.normalize('NFKD')
           .replace(/[\p{M}\p{Cf}\p{Default_Ignorable_Code_Point}]/gu,'')
           .replace(/[\p{Cc}\p{White_Space}]+/gu,' ').normalize('NFKC').trimStart().toLowerCase();
-        if(!prefix&&/^\[(?:hito(?:\s|\])|fuera\s+del\s+plan\])/.test(normalized))
+        if(!prefix&&/^\[\s*(?:hito(?=\s|:|\])|fuera\s*del\s*plan\])/.test(normalized))
           throw new Error('RESERVED_PREFIX: el prefijo del hito lo escribe el servidor');
         const serverSummary=prefix?{...summary,done:prefix+summary.done.replace(/\p{Cf}/gu,'')
-          .replace(/[\r\n\v\f\u0085\u2028\u2029]/g,' ')}:summary;
+          .replace(/[\p{Cc}\u0085\u2028\u2029]/gu,' ')}:summary;
         memory={...saveSummary(txc.db,{projectId,missionId:existing.id,summary:serverSummary,sha,sessionId:session.sessionId,secrets:secrets()}),
           ...(pointer?{pointer}:{})};
         return existing;
@@ -1006,7 +1108,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
   const REVIEW_TOOLS=new Set(['zana_review_claim','zana_review_diff','zana_review_lens_submit','zana_review_finalize']);
   const guardedWrites=new Set([...REUSED.filter(name=>!readOnlyTool(name)),
     'zana_mission_adopt','zana_checks_start','zana_review_request','zana_merge',
-    'zana_memory_save','zana_memory_resolve','zana_project_run_start','zana_github_request','zana_mission_init',
+    'zana_memory_save','zana_memory_resolve','zana_project_run_start','zana_project_reconcile','zana_github_request','zana_mission_init',
     'zana_mission_close','zana_mission_archive','zana_correction_start','zana_session_rebind','zana_budget_extend']);
   const missionWrites=new Set(['zana_mission_adopt','zana_start_batch','zana_complete_unit','zana_unit_heartbeat','zana_unit_retry',
     'zana_recover_expired','zana_mission_cancel','zana_mission_close','zana_mission_archive','zana_merge','zana_review_request',
@@ -1036,11 +1138,11 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
           throw new Error('GITHUB_FULL_ACCESS_DISABLED: habilítalo en el servidor');
         const protectedWrite=guardedWrites.has(name)||(name==='zana_ds_github'&&
           CATALOG.tools[args?.operation]?.zana==='write');
-        if(name==='zana_mission_init'||missionWrites.has(name)){
+        if(name==='zana_mission_init'||name==='zana_project_reconcile'||missionWrites.has(name)){
           const run=await rr((db,mission)=>{
             try{
-            if(name==='zana_mission_init'){
-              const row=db.prepare('SELECT project_id FROM projects WHERE repo=? COLLATE NOCASE ORDER BY created_at DESC LIMIT 1').get(args?.github?.repo);
+            if(name==='zana_project_reconcile'||name==='zana_mission_init'){
+              const row=db.prepare('SELECT project_id FROM projects WHERE repo=? COLLATE NOCASE ORDER BY created_at DESC LIMIT 1').get(name==='zana_project_reconcile'?args?.repo:args?.github?.repo);
               return row?loadRun(db,row.project_id):null;
             }
             const id=name==='zana_merge'?args?.missionId:mission?.id;
@@ -1048,7 +1150,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
             return pid?loadRun(db,pid):null;
             }catch(error){if(runErrorCode(error)==='RUN_CORRUPT')return null;throw error;}
           });
-          const belongs=name==='zana_mission_init'||!run||await rr((db,mission)=>{
+          const belongs=name==='zana_mission_init'||name==='zana_project_reconcile'||!run||await rr((db,mission)=>{
             const id=name==='zana_merge'?args?.missionId:args?.missionId??mission?.id;
             const same=x=>String(x).toLowerCase()===String(id).toLowerCase();
             return run.outsidePlan.some(x=>same(x.missionId))||run.milestones.some(m=>

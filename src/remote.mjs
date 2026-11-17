@@ -69,6 +69,10 @@ const CLOSE_SCHEMA=z.object({summary:z.object({done:z.string().min(20).max(1000)
   pending:note(),keyFiles:z.array(z.string().min(1).max(260)).max(30)}).strict()}).strict();
 const projectId=()=>z.string().regex(/^zp_[0-9a-f]{16}$/);
 const NOTE_KINDS=['decision','convention','issue','pending'];
+const runErrorCode=error=>{
+  const code=String(error?.message??error).split(':')[0];
+  return /^[A-Z][A-Z0-9_]{0,63}$/.test(code)?code:'INTERNAL_ERROR';
+};
 const NEW_TOOLS={
   zana_mission_adopt:['Adoptar una misión existente del mismo cliente OAuth, sin revisión ni escritor activo',false,z.object({missionId:missionId()}).strict()],
   zana_workspace_create:['Create a durable project brief scoped to the authenticated OAuth client, without a repository',false,
@@ -122,7 +126,7 @@ const NEW_TOOLS={
     z.object({workspaceId:z.string().uuid(),repo:z.string().min(3).max(201),base:z.string().min(1).max(200)}).strict()],
   zana_project_next:['Read the project run after each merge to learn which milestone is ready next',true,
     z.object({repo:z.string().min(3).max(201)}).strict()],
-  zana_mission_init:['Create a mission: milestone {id, final} for an active project run, or outsidePlan (8-300 chars) for exceptional work; never both. Code units use code:true; read memory.context before planning',false,
+  zana_mission_init:['Create a mission: milestone {id, final} for an active project run, or outsidePlan (8-300 chars) for exceptional work; never both. Code units use code:true; read memory.context and .zanallaima.json before planning',false,
     z.object({spec:z.record(z.string(),z.unknown()),github:z.object({repo:z.string().min(3).max(201),base:z.string().min(1).max(200)}).strict(),
       milestone:z.object({id:z.string().min(1).max(48).regex(/^[a-z][a-z0-9-]{0,47}$/),final:z.boolean()}).strict().optional(),
       outsidePlan:z.string().min(8).max(300).optional()}).strict()],
@@ -503,6 +507,8 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
           setMissionProject(ctx.db,m.id,resolved.projectId);
           ctx.db.exec('RELEASE memory');
         }catch(error){
+          // SQLite RAISE(ROLLBACK) cancela la transacción entera: no ejecutar
+          // ROLLBACK TO sobre un SAVEPOINT que ya no existe.
           if(!ctx.db.isTransaction)throw error;
           ctx.db.exec('ROLLBACK TO memory');ctx.db.exec('RELEASE memory');
           memory={error:'MEMORY_UNAVAILABLE: '+clean(error,secrets())};
@@ -512,7 +518,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         const run=projectId?loadRun(ctx.db,projectId):null;
         if(projectId&&!resolved&&run?.status==='ACTIVE')setMissionProject(ctx.db,m.id,projectId);
         if(milestone&&run?.status!=='ACTIVE')throw new Error((run?'RUN_NOT_ACTIVE':'RUN_NOT_FOUND')+': no hay corrida activa');
-        if(outsidePlan!==undefined&&run?.status!=='ACTIVE')throw new Error('RUN_NOT_FOUND: no hay corrida activa para outsidePlan');
+        if(outsidePlan!==undefined&&run?.status!=='ACTIVE')throw new Error((run?'RUN_NOT_ACTIVE':'RUN_NOT_FOUND')+': no hay corrida activa para outsidePlan');
         if(run?.status==='ACTIVE'){
           if(run.ownerClient!==session.clientId)throw new Error('RUN_OTHER_CLIENT: la corrida pertenece a otro cliente');
           if(run.repo.toLowerCase()!==target.repo.toLowerCase()||run.base!==target.base)
@@ -588,7 +594,29 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     zana_unit_retry:(args,session)=>checked(session,'zana_unit_retry',()=>operations.retry(args)),
     async zana_mission_cancel(args,session){
       let status,runInfo=null;
-      await transact((mission,ctx)=>{
+      // Consultar GitHub antes de la transacción: cancelar jamás puede deshacer
+      // un PR ya fusionado, incluso si el registro de completePart falló.
+      const proof=await rr((db,mission)=>{
+        if(!mission)return null;
+        const pid=missionProject(db,mission.id);
+        let run=null;try{run=pid&&loadRun(db,pid);}catch{return null;}
+        if(!run?.milestones.some(h=>h.running?.missionId.toLowerCase()===mission.id.toLowerCase()))return null;
+        const rm=remoteMission(db,mission.id);
+        const ticket=db.prepare('SELECT pr_number FROM review_tickets WHERE mission_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1').get(mission.id);
+        const audit=db.prepare("SELECT detail FROM remote_audit WHERE mission_id=? AND tool='zana_merge.result' AND outcome='MERGED' ORDER BY seq DESC LIMIT 1").get(mission.id);
+        return {repo:rm?.repo,projectId:pid,missionId:mission.id,prNumber:ticket?.pr_number??null,detail:audit?.detail?JSON.parse(audit.detail):null};
+      });
+      // Solo zana_merge.result MERGED acredita CI/4R; un PR externo requiere reconciliación.
+      const mergedProof=proof?.detail?.headSha&&proof?.detail?.mergeCommitSha&&proof.prNumber?
+        {prNumber:proof.prNumber,headSha:proof.detail.headSha,mergeCommitSha:proof.detail.mergeCommitSha}:null;
+      const reject=async code=>{await audit({caller:session,tool:'zana_mission_cancel.run',missionId:proof.missionId,
+        category:'project_run',outcome:'ERROR',detail:{projectId:proof.projectId,code}});
+        throw new Error(code+': requiere reconciliación PR C');};
+      if(proof?.prNumber&&!mergedProof){let pull;
+        try{pull=await github.pull(proof.repo,proof.prNumber);}catch{await reject('GITHUB_UNAVAILABLE');}
+        if(pull?.merged===true||pull?.merged_at)await reject('PR_ALREADY_MERGED');
+      }
+      try{await transact((mission,ctx)=>{
         guard(ctx.db,mission,session,'zana_mission_cancel');
         status=cancelMission(mission);
         const pid=missionProject(ctx.db,mission.id);
@@ -596,7 +624,22 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         try{
           const run=pid&&loadRun(ctx.db,pid);
           const hito=run?.status==='ACTIVE'&&run.milestones.find(x=>x.running?.missionId.toLowerCase()===mission.id.toLowerCase());
-          if(hito){
+          if(hito&&mergedProof){
+            try{
+              const next=completePart(run,{missionId:mission.id,prNumber:mergedProof.prNumber,
+                headSha:mergedProof.headSha,mergeCommitSha:mergedProof.mergeCommitSha,
+                evidence:{sha:mergedProof.headSha,ci:'SUCCESS',review:'APPROVED',
+                  merged:true,mergeCommitSha:mergedProof.mergeCommitSha},now:new Date().toISOString()});
+              const saved=saveRun(ctx.db,run,next,{missionId:mission.id,secrets:secrets()});
+              const state=next.milestones.find(x=>x.id===hito.id).status;
+              runInfo={released:false,recorded:true,milestoneId:hito.id,status:state,
+                ...(saved.memoryError?{memoryError:saved.memoryError}:{})};
+              writeAudit(ctx.db,{caller:session,tool:'zana_mission_cancel.run',missionId:mission.id,
+                category:'project_run',outcome:'SUCCESS',detail:{projectId:pid,milestoneId:hito.id,transition:state}});
+              if(saved.memoryError)writeAudit(ctx.db,{caller:session,tool:'zana_mission_cancel.run',missionId:mission.id,
+                category:'project_run',outcome:'ERROR',detail:{projectId:pid,milestoneId:hito.id,code:'MEMORY_UNAVAILABLE'}});
+            }catch(error){throw new Error('PR_ALREADY_MERGED: '+runErrorCode(error));}
+          }else if(hito){
             const ticket=ctx.db.prepare('SELECT pr_number FROM review_tickets WHERE mission_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1').get(mission.id);
             const motivo=(mission.reviewCount||0)>=budgetOf(mission).maxReviewRounds
               ?'REVIEW_ROUNDS_EXHAUSTED: Misión cancelada por rondas de revisión agotadas':'Misión cancelada';
@@ -613,13 +656,19 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         }catch(error){
             if(!ctx.db.isTransaction)throw error;
             ctx.db.exec('ROLLBACK TO release_run');ctx.db.exec('RELEASE release_run');
-            const code=String(error.message).split(':')[0];
+            const code=runErrorCode(error);
+            if(code==='PR_ALREADY_MERGED')throw error;
             runInfo={released:false,reason:code};
             writeAudit(ctx.db,{caller:session,tool:'zana_mission_cancel.run',missionId:mission.id,
               category:'project_run',outcome:'ERROR',detail:{projectId:pid,code}});
         }
         return mission;
-      });
+      });}catch(error){
+        if(runErrorCode(error)==='PR_ALREADY_MERGED')await audit({caller:session,tool:'zana_mission_cancel.run',
+          missionId:proof?.missionId,category:'project_run',outcome:'ERROR',
+          detail:{projectId:proof?.projectId,code:'PR_ALREADY_MERGED'}});
+        throw error;
+      }
       return {...status,...(runInfo?{run:runInfo}:{})};
     },
     // Summary first (dispatch does not validate schemas), then the project:
@@ -638,7 +687,18 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         const {projectId,pointer}=projectIn(txc.db,existing,pre);
         status=closeMission(existing);
         const sha=txc.db.prepare('SELECT sha FROM review_tickets WHERE mission_id=? ORDER BY created_at DESC LIMIT 1').get(existing.id)?.sha??null;
-        memory={...saveSummary(txc.db,{projectId,missionId:existing.id,summary,sha,sessionId:session.sessionId,secrets:secrets()}),
+        let run=null;try{run=loadRun(txc.db,projectId);}catch(error){if(runErrorCode(error)!=='RUN_CORRUPT')throw error;}
+        const same=x=>String(x).toLowerCase()===existing.id.toLowerCase();
+        const hito=run?.milestones.find(x=>(x.running&&same(x.running.missionId))||
+          x.parts.some(part=>same(part.missionId)));
+        const number=hito?.parts.findIndex(part=>same(part.missionId))??-1;
+        const provenance=run&&txc.db.prepare("SELECT detail FROM remote_audit WHERE mission_id=? AND tool='zana_mission_init.run' AND outcome='SUCCESS' ORDER BY seq DESC LIMIT 1").get(existing.id)?.detail;
+        const outside=run&&(run.outsidePlan.some(x=>same(x.missionId))||(()=>{try{const d=JSON.parse(provenance);return d.projectId===projectId&&d.transition==='OUTSIDE_PLAN';}catch{return false;}})());
+        const prefix=hito?'[hito '+hito.id+' parte '+(number>=0?number+1:hito.parts.length+1)+'] ':outside?'[fuera del plan] ':'';
+        if(!prefix&&/^\[(?:hito|fueradelplan)/.test(summary.done.normalize('NFKD').replace(/[\p{M}\p{Cf}\p{Cc}\p{White_Space}\p{Default_Ignorable_Code_Point}]/gu,'').toLowerCase()))
+          throw new Error('RESERVED_PREFIX: el prefijo del hito lo escribe el servidor');
+        const serverSummary=prefix?{...summary,done:prefix+summary.done.replace(/\p{Cf}/gu,'').replace(/[\r\n]+/g,' ')}:summary;
+        memory={...saveSummary(txc.db,{projectId,missionId:existing.id,summary:serverSummary,sha,sessionId:session.sessionId,secrets:secrets()}),
           ...(pointer?{pointer}:{})};
         return existing;
       });
@@ -800,7 +860,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       }
       try{await audit({caller:session,tool:'zana_merge.result',missionId:id,outcome:result.state,args:{missionId:id},
         detail:{headSha:result.headSha??null,mergeCommitSha:result.mergeCommitSha??null,method:result.method??null,
-          recovered:result.recovered??false},category:'merge'});}catch(error){if(result.state!=='MERGED')throw error;}
+          recovered:result.recovered??false},category:'merge'});}catch(error){throw error;}
       let pid=null,runInfo;
       try{
       pid=await rr(db=>missionProject(db,id));
@@ -833,7 +893,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       });
       if(runInfo.recorded===false)throw new Error(runInfo.reason);
       }catch(error){
-        const code=String(error.message).split(':')[0];
+        const code=runErrorCode(error);
         await audit({caller:session,tool:'zana_merge.run',missionId:id,category:'project_run',
           outcome:'ERROR',detail:{projectId:pid,code}}).catch(()=>{});
         runInfo={recorded:false,reason:code};
@@ -916,6 +976,9 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     'zana_mission_adopt','zana_checks_start','zana_review_request','zana_merge',
     'zana_memory_save','zana_memory_resolve','zana_project_run_start','zana_github_request','zana_mission_init',
     'zana_mission_close','zana_mission_archive','zana_correction_start','zana_session_rebind','zana_budget_extend']);
+  const missionWrites=new Set(['zana_mission_adopt','zana_start_batch','zana_complete_unit','zana_unit_heartbeat','zana_unit_retry',
+    'zana_recover_expired','zana_mission_cancel','zana_mission_close','zana_mission_archive','zana_merge','zana_review_request',
+    'zana_correction_start','zana_budget_extend','zana_memory_save','zana_memory_resolve','zana_checks_start']);
   // Toda tool declarada no-lectura (incluidas las reutilizadas y el router downstream)
   // marca ANTES del efecto. Excepciones: las cuatro tools revisoras y GitHub GET.
   // La validación MCP precede a dispatch; las guardas de sesión se comprueban antes.
@@ -940,12 +1003,28 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
           throw new Error('GITHUB_FULL_ACCESS_DISABLED: habilítalo en el servidor');
         const protectedWrite=guardedWrites.has(name)||(name==='zana_ds_github'&&
           CATALOG.tools[args?.operation]?.zana==='write');
-        if(name==='zana_mission_init'&&(args?.milestone||args?.outsidePlan!==undefined)){
-          const run=await rr(db=>{const row=db.prepare('SELECT project_id FROM projects WHERE repo=? COLLATE NOCASE ORDER BY created_at DESC LIMIT 1').get(args?.github?.repo);
-            return row&&loadRun(db,row.project_id);});
-          if(run?.status==='ACTIVE'&&run.ownerClient!==session.clientId)
+        if(name==='zana_mission_init'||missionWrites.has(name)){
+          const run=await rr((db,mission)=>{
+            try{
+            if(name==='zana_mission_init'){
+              const row=db.prepare('SELECT project_id FROM projects WHERE repo=? COLLATE NOCASE ORDER BY created_at DESC LIMIT 1').get(args?.github?.repo);
+              return row?loadRun(db,row.project_id):null;
+            }
+            const id=name==='zana_merge'?args?.missionId:mission?.id;
+            const pid=id&&missionProject(db,id);
+            return pid?loadRun(db,pid):null;
+            }catch(error){if(runErrorCode(error)==='RUN_CORRUPT')return null;throw error;}
+          });
+          const belongs=name==='zana_mission_init'||!run||await rr((db,mission)=>{
+            const id=name==='zana_merge'?args?.missionId:args?.missionId??mission?.id;
+            const same=x=>String(x).toLowerCase()===String(id).toLowerCase();
+            return run.outsidePlan.some(x=>same(x.missionId))||run.milestones.some(m=>
+              (m.running&&same(m.running.missionId))||m.parts.some(p=>same(p.missionId)));
+          });
+          if(run&&belongs&&(name!=='zana_mission_init'||run.status==='ACTIVE')&&run.ownerClient!==session.clientId)
             throw new Error('RUN_OTHER_CLIENT: la corrida pertenece a otro cliente');
-          if(run?.status!=='ACTIVE')throw new Error((run?'RUN_NOT_ACTIVE':'RUN_NOT_FOUND')+': no hay corrida activa');
+          if(name==='zana_mission_init'&&(args?.milestone||args?.outsidePlan!==undefined)&&run?.status!=='ACTIVE')
+            throw new Error((run?'RUN_NOT_ACTIVE':'RUN_NOT_FOUND')+': no hay corrida activa');
         }
         const id=args?.missionId??(await rr((db,mission)=>mission?.id??null));
         const rejected=protectedWrite&&await rr((db,mission)=>Boolean(db&&(

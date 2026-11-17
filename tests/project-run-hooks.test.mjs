@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {remoteFixture,readDiff,sha} from './helpers/remote-fixture.mjs';
+import {Client,InMemoryTransport} from '@modelcontextprotocol/client';
 import {makePlan} from './helpers/plan-fixture.mjs';
 import {remoteRead,remoteWrite,transact} from '../src/store.mjs';
 import {loadRun,saveRun} from '../src/project-run-store.mjs';
@@ -88,7 +89,8 @@ test('init: plan externo, proyecto sin corrida y fallback cuando falla el punter
     const ext=await init(f,{outsidePlan:'Corrección urgente fuera del plan'});
     assert.equal(ext.error,undefined,ext.error);
     assert.equal(ext.run.outsidePlan,true);
-    assert.ok((await f.runtime.readAudit({missionId:ext.id,limit:100})).some(x=>x.category==='project_run'&&JSON.stringify(x).includes('OUTSIDE_PLAN')));
+    assert.deepEqual((await f.runtime.readAudit({missionId:ext.id,limit:100})).find(x=>x.tool==='zana_mission_init.run'&&x.outcome==='SUCCESS')?.detail,
+      {projectId:ext.memory.projectId,milestoneId:null,transition:'OUTSIDE_PLAN'});
     const next=await run(f);
     assert.equal(next.milestones[0].status,'PENDING');
     assert.equal(await remoteRead(db=>loadRun(db,ext.memory.projectId).outsidePlan.length),1);
@@ -160,9 +162,8 @@ test('merge: SHA recuperable, ausencia de SHA y fallo de la máquina no invalida
       else {
         assert.equal(merged.run.recorded,false);
         assert.equal(merged.run.reason,scenario==='missing'?'MERGE_SHA_UNKNOWN':'DUPLICATE_PR');
-        if(scenario==='missing')assert.ok((await f.runtime.readAudit({missionId:m.id,limit:100})).some(x=>x.category==='project_run'&&JSON.stringify(x).includes('MERGE_SHA_UNKNOWN')));
-        if(scenario==='duplicate')assert.ok((await f.runtime.readAudit({missionId:m.id,limit:100}))
-          .some(x=>x.category==='project_run'&&JSON.stringify(x).includes('DUPLICATE_PR')));
+        if(scenario==='missing')assert.equal((await f.runtime.readAudit({missionId:m.id,limit:100})).find(x=>x.tool==='zana_merge.run'&&x.outcome==='ERROR')?.detail?.code,'MERGE_SHA_UNKNOWN');
+        if(scenario==='duplicate')assert.equal((await f.runtime.readAudit({missionId:m.id,limit:100})).find(x=>x.tool==='zana_merge.run'&&x.outcome==='ERROR')?.detail?.code,'DUPLICATE_PR');
       }
     }finally{await f.cleanup();}
   }
@@ -189,16 +190,16 @@ test('cancel: libera hito, registra intento/rondas; revisora no puede cancelar n
     assert.equal(cancel.run.released,true,cancel.error);
     const next=await run(f);
     assert.equal(next.milestones[0].status,'PENDING');
-    assert.match(JSON.stringify(next.memory),/Intento fallido/);
-    assert.match(JSON.stringify(await remoteRead(db=>loadRun(db,start.projectId).milestones[0].attempts)),/Misión cancelada/);
+    assert.match(next.memory.entries.find(x=>x.topic==='hito:core')?.body??'',/Intento fallido/);
+    assert.match((await remoteRead(db=>loadRun(db,start.projectId).milestones[0].attempts.at(-1)?.reason))??'',/Misión cancelada/);
     await f.call('zana_mission_archive',{},f.owner);
     const second=await init(f,{milestone:{id:'core',final:true}});
     await transact(mission=>{mission.reviewCount=mission.budget.maxReviewRounds;return mission;});
     const closed=await f.call('zana_mission_cancel',{},f.owner);
     assert.equal(closed.run.released,true,closed.error);
-    assert.match(JSON.stringify(await remoteRead(db=>loadRun(db,start.projectId).milestones[0].attempts)),/rondas de revisión agotadas/);
-    assert.match(JSON.stringify(await remoteRead(db=>loadRun(db,start.projectId).milestones[0].attempts)),/REVIEW_ROUNDS_EXHAUSTED/);
-    assert.equal(second.error,undefined,second.error);assert.equal(second.run.milestoneId,'core');assert.equal(second.run.final,true);assert.ok(reviewer.sessionId);
+    assert.match((await remoteRead(db=>loadRun(db,start.projectId).milestones[0].attempts.at(-1)?.reason))??'',/rondas de revisión agotadas/);
+    assert.match((await remoteRead(db=>loadRun(db,start.projectId).milestones[0].attempts.at(-1)?.reason))??'',/REVIEW_ROUNDS_EXHAUSTED/);
+    assert.equal(second.error,undefined,second.error);assert.equal(second.run.milestoneId,'core');assert.equal(second.run.final,true);
   }finally{await f.cleanup();}
 });
 
@@ -212,7 +213,7 @@ test('marca dirty: claim repara proyección, sin reescribir memoria de sesión',
     assert.equal(m.error,undefined,m.error);
     const next=await run(f);
     assert.equal(next.memoryStale,false);
-    assert.match(JSON.stringify(next.memory),/En curso/);
+    assert.match(next.memory.entries.find(x=>x.topic==='hito:core')?.body??'',/En curso/);
   }finally{await f.cleanup();}
 });
 
@@ -227,8 +228,7 @@ test('merge exitoso con RUN_CORRUPT conserva resultado y deja auditoría project
     const result=await approvedMerge(f,m);
     assert.equal(result.error,undefined);assert.equal(result.state,'MERGED');
     assert.equal(result.merged,true);assert.deepEqual(result.run,{recorded:false,reason:'RUN_CORRUPT'});
-    assert.ok((await f.runtime.readAudit({missionId:m.id,limit:100}))
-      .some(x=>x.category==='project_run'&&JSON.stringify(x).includes('RUN_CORRUPT')));
+    assert.equal((await f.runtime.readAudit({missionId:m.id,limit:100})).find(x=>x.tool==='zana_merge.run'&&x.outcome==='ERROR')?.detail?.code,'RUN_CORRUPT');
   }finally{await f.cleanup();}
 });
 
@@ -237,11 +237,10 @@ test('auditoría project_run en claim, outsidePlan, parte y liberación; memoria
   try{
     await setup(f);
     let m=await init(f,{milestone:{id:'core',final:false}});
-    assert.ok((await f.runtime.readAudit({missionId:m.id,limit:100}))
-      .some(x=>x.category==='project_run'&&JSON.stringify(x).includes('core')));
+    assert.equal((await f.runtime.readAudit({missionId:m.id,limit:100})).find(x=>x.tool==='zana_mission_init.run'&&x.outcome==='SUCCESS')?.detail?.milestoneId,'core');
     await approvedMerge(f,m);
-    assert.ok((await f.runtime.readAudit({missionId:m.id,limit:100}))
-      .some(x=>x.category==='project_run'&&JSON.stringify(x).includes('PARTIAL')));
+    assert.deepEqual((await f.runtime.readAudit({missionId:m.id,limit:100})).find(x=>x.tool==='zana_merge.run'&&x.outcome==='SUCCESS')?.detail,
+      {projectId:m.memory.projectId,milestoneId:'core',transition:'PARTIAL'});
     await f.call('zana_mission_close',{summary},f.owner);
     await f.call('zana_mission_archive',{},f.owner);
     m=await init(f,{milestone:{id:'core',final:true}});
@@ -250,8 +249,7 @@ test('auditoría project_run en claim, outsidePlan, parte y liberación; memoria
     const cancelled=await f.call('zana_mission_cancel',{},f.owner);
     assert.equal(cancelled.run.released,true,cancelled.error);
     assert.match(cancelled.run.memoryError,/MEMORY_UNAVAILABLE/);
-    assert.ok((await f.runtime.readAudit({missionId:m.id,limit:100}))
-      .some(x=>x.category==='project_run'&&JSON.stringify(x).includes('MEMORY_UNAVAILABLE')));
+    assert.equal((await f.runtime.readAudit({missionId:m.id,limit:100})).find(x=>x.tool==='zana_mission_cancel.run'&&x.outcome==='ERROR')?.detail?.code,'MEMORY_UNAVAILABLE');
   }finally{await f.cleanup();}
 });
 
@@ -311,7 +309,9 @@ test('no-merge no altera hito; falla branchHead no crea misión',async()=>{
     const m=await init(f,{milestone:{id:'core',final:true}});
     const before=await run(f);
     const rejected=await f.call('zana_merge',{missionId:m.id},f.owner);
-    assert.ok(rejected.error||rejected.state!=='MERGED');
+    assert.notEqual(rejected.state,'MERGED');
+    assert.equal(rejected.run,undefined);
+    assert.equal((await f.runtime.readAudit({missionId:m.id,limit:100})).filter(x=>x.tool==='zana_merge.run'&&x.outcome==='ERROR').length,0);
     const after=await run(f);
     assert.equal(after.revision,before.revision);
     assert.equal(after.milestones[0].status,'RUNNING');
@@ -328,8 +328,8 @@ test('cancel mantiene misión CANCELLED aun si falla releaseMilestone',async()=>
     assert.equal(result.error,undefined,result.error);
     assert.equal(result.status,'CANCELLED');
     assert.deepEqual(result.run,{released:false,reason:'INVALID_TIME'});
-    assert.ok((await f.runtime.readAudit({missionId:m.id,limit:100}))
-      .some(x=>x.category==='project_run'&&JSON.stringify(x).includes('INVALID_TIME')));
+    assert.deepEqual((await f.runtime.readAudit({missionId:m.id,limit:100})).find(x=>x.tool==='zana_mission_cancel.run'&&x.outcome==='ERROR')?.detail,
+      {projectId:started.projectId,code:'INVALID_TIME'});
   }finally{await f.cleanup();}
 });
 
@@ -345,8 +345,320 @@ test('corrida cancelada rechaza milestone; SHA obsoleto no registra parte',async
     await setup(g);const m=await init(g,{milestone:{id:'core',final:true}}),before=await run(g);
     g.runtime.github.merge=async()=>{const e=new Error('head SHA modified');e.status=409;throw e;};
     const merged=await approvedMerge(g,m);
-    assert.equal(merged.state,'STALE_SHA');assert.equal(merged.merged,false);
+    assert.equal(merged.state,'STALE_SHA');assert.equal(merged.merged,false);assert.equal(merged.run,undefined);
+    assert.equal((await g.runtime.readAudit({missionId:m.id,limit:100})).filter(x=>x.tool==='zana_merge.run'&&x.outcome==='ERROR').length,0);
     assert.equal((await run(g)).revision,before.revision);
     assert.equal((await run(g)).milestones[0].status,'RUNNING');
   }finally{await g.cleanup();}
+});
+
+
+test('B2b: el prefijo de cierre lo construye el servidor, incluso ante un prefijo fingido',async()=>{
+  const f=await remoteFixture();
+  try{
+    await setup(f);
+    const m=await init(f,{milestone:{id:'core',final:false}});
+    assert.equal((await approvedMerge(f,m)).state,'MERGED');
+    assert.equal((await f.call('zana_mission_close',{summary:{...summary,done:'[hito falso parte 9] '+summary.done+'\n[hito core parte 2] \u202eintento'}},f.owner)).error,undefined);
+    let body=await remoteRead(db=>db.prepare("SELECT body FROM project_memory WHERE mission_id=? AND kind='summary' ORDER BY seq DESC LIMIT 1").get(m.id)?.body);
+    assert.ok(body.startsWith('[hito core parte 1] [hito falso parte 9]'),body);
+    assert.doesNotMatch(body.split('\n')[0],/[\n\r\u202e]/u);
+    await f.call('zana_mission_archive',{},f.owner);
+    const nextPart=await init(f,{milestone:{id:'core',final:false}});
+    assert.equal((await approvedMerge(f,nextPart,10,'b')).state,'MERGED');
+    await f.call('zana_mission_close',{summary},f.owner);
+    body=await remoteRead(db=>db.prepare("SELECT body FROM project_memory WHERE mission_id=? AND kind='summary' ORDER BY seq DESC LIMIT 1").get(nextPart.id)?.body);
+    assert.ok(body.startsWith('[hito core parte 2] '),body);
+    await f.call('zana_mission_archive',{},f.owner);
+    const outside=await init(f,{outsidePlan:'Excepción de prueba documentada'});
+    assert.equal((await approvedMerge(f,outside,9,'c')).state,'MERGED');
+    await f.call('zana_mission_close',{summary},f.owner);
+    body=await remoteRead(db=>db.prepare("SELECT body FROM project_memory WHERE mission_id=? AND kind='summary' ORDER BY seq DESC LIMIT 1").get(outside.id)?.body);
+    assert.ok(body.startsWith('[fuera del plan] '),body);
+  }finally{await f.cleanup();}
+  const g=await remoteFixture();
+  try{
+    g.owner=await g.session();
+    const ordinary=await init(g);
+    assert.equal((await approvedMerge(g,ordinary)).state,'MERGED');
+    await g.call('zana_mission_close',{summary},g.owner);
+    const body=await remoteRead(db=>db.prepare("SELECT body FROM project_memory WHERE mission_id=? AND kind='summary' ORDER BY seq DESC LIMIT 1").get(ordinary.id)?.body);
+    assert.ok(body.startsWith(summary.done),body);
+  }finally{await g.cleanup();}
+});
+
+test('B2b: otro clientId no inicia lotes, cancela ni fusiona una misión del hito',async()=>{
+  for(const tool of ['zana_start_batch','zana_mission_cancel','zana_merge']){
+    const f=await remoteFixture();
+    try{
+      await setup(f);const m=await init(f,{milestone:{id:'core',final:true}});
+      const other=await f.session('zana-chatgpt','otro-client-id');
+      const response=await f.call(tool,tool==='zana_merge'?{missionId:m.id}:{},other);
+      assert.match(response.error??'',/RUN_OTHER_CLIENT/,tool+': '+JSON.stringify(response));
+      assert.equal((await f.call('zana_session_status',{},other)).writerMarked,false,tool);
+      assert.equal((await run(f)).milestones[0].status,'RUNNING',tool);
+      assert.equal((await remoteRead(db=>loadRun(db,m.memory.projectId).milestones[0].running.missionId)),m.id);
+    }finally{await f.cleanup();}
+  }
+});
+
+test('B2b: prechequeo init sin milestone no marca sesión ajena',async()=>{
+  const f=await remoteFixture();
+  try{
+    await setup(f);
+    const other=await f.session('zana-chatgpt','cliente-distinto');
+    const result=await init(f,{},other);
+    assert.match(result.error??'',/RUN_OTHER_CLIENT/);
+    assert.equal((await f.call('zana_session_status',{},other)).writerMarked,false);
+    assert.equal(await count(),0);
+  }finally{await f.cleanup();}
+});
+
+test('B2b: cancel tras PR fusionado no libera hito si falló completePart',async()=>{
+  const f=await remoteFixture();
+  try{
+    const started=await setup(f),m=await init(f,{milestone:{id:'core',final:true}});
+    const merge=f.runtime.github.merge.bind(f.runtime.github);
+    f.runtime.github.merge=async(...args)=>{
+      const result=await merge(...args);
+      await remoteWrite(db=>{const run=loadRun(db,started.projectId);
+        saveRun(db,run,recordOutsidePlan(run,{missionId:'fecha-futura',reason:'Simulación del fallo de completePart',now:'2099-01-01T00:00:00.000Z'}));});
+      return result;
+    };
+    const merged=await approvedMerge(f,m);
+    assert.equal(merged.state,'MERGED');
+    assert.equal(merged.run.recorded,false);
+    const cancelled=await f.call('zana_mission_cancel',{},f.owner);
+    assert.match(cancelled.error??'',/PR_ALREADY_MERGED/);
+    assert.equal((await f.call('zana_mission_status',{},f.owner)).state,'ACTIVE');
+    assert.notEqual((await run(f)).milestones[0].status,'PENDING');
+    assert.ok((await f.runtime.readAudit({missionId:m.id,limit:100})).some(x=>
+      x.tool==='zana_mission_cancel.run'&&x.detail?.code==='PR_ALREADY_MERGED'));
+  }finally{await f.cleanup();}
+});
+
+test('B2b: auditoría fallida tras merge obliga a reconciliar, no certifica el hito',async()=>{
+  const f=await remoteFixture();
+  try{
+    await setup(f);const m=await init(f,{milestone:{id:'core',final:true}});
+    await remoteWrite(db=>db.exec("CREATE TRIGGER deny_merge_result BEFORE INSERT ON remote_audit WHEN NEW.tool='zana_merge.result' BEGIN SELECT RAISE(ABORT,'AUDIT_DENIED'); END"));
+    const result=await approvedMerge(f,m);
+    assert.match(result.error??'',/AUDIT_DENIED/);
+    assert.equal((await run(f)).milestones[0].status,'RUNNING');
+  }finally{await f.cleanup();}
+});
+
+test('B2b: auditoría exacta de claim y outsidePlan sin texto del modelo',async()=>{
+  const f=await remoteFixture();
+  try{
+    const start=await setup(f),m=await init(f,{milestone:{id:'core',final:true}});
+    let audit=(await f.runtime.readAudit({missionId:m.id,limit:100})).find(x=>x.tool==='zana_mission_init.run'&&x.outcome==='SUCCESS');
+    assert.deepEqual(audit.detail,{projectId:start.projectId,milestoneId:'core',transition:'CLAIM'});
+    await f.call('zana_mission_cancel',{},f.owner);
+    audit=(await f.runtime.readAudit({missionId:m.id,limit:100})).find(x=>x.tool==='zana_mission_cancel.run'&&x.outcome==='SUCCESS');
+    assert.deepEqual(audit.detail,{projectId:start.projectId,milestoneId:'core',transition:'RELEASE'});
+    await f.call('zana_mission_archive',{},f.owner);
+    const ext=await init(f,{outsidePlan:'NO_INCLUIR_ESTE_TEXTO_EN_AUDITORIA'});
+    audit=(await f.runtime.readAudit({missionId:ext.id,limit:100})).find(x=>x.tool==='zana_mission_init.run'&&x.outcome==='SUCCESS');
+    assert.deepEqual(audit.detail,{projectId:start.projectId,milestoneId:null,transition:'OUTSIDE_PLAN'});
+  }finally{await f.cleanup();}
+});
+
+
+test('B2b: errores de memoria en init y merge quedan auditados y aislados',async()=>{
+  for(const stage of ['init','merge']){
+    const f=await remoteFixture();
+    try{
+      const started=await setup(f);
+      if(stage==='init')await remoteWrite(db=>db.exec("CREATE TRIGGER deny_memory BEFORE INSERT ON project_memory BEGIN SELECT RAISE(ABORT,'NO_MEMORY'); END"));
+      const m=await init(f,{milestone:{id:'core',final:true}});
+      assert.equal(m.error,undefined,m.error);
+      if(stage==='merge')await remoteWrite(db=>db.exec("CREATE TRIGGER deny_memory BEFORE INSERT ON project_memory BEGIN SELECT RAISE(ABORT,'NO_MEMORY'); END"));
+      const result=stage==='init'?m:await approvedMerge(f,m);
+      assert.match(result.run.memoryError??'',/MEMORY_UNAVAILABLE/);
+      const audits=await f.runtime.readAudit({missionId:m.id,limit:100});
+      assert.deepEqual(audits.find(x=>x.tool===('zana_'+(stage==='init'?'mission_init':'merge')+'.run')&&x.outcome==='ERROR')?.detail,
+        {projectId:started.projectId,milestoneId:'core',code:'MEMORY_UNAVAILABLE'});
+      if(stage==='init')assert.equal((await run(f)).milestones[0].status,'RUNNING');
+      else assert.equal(result.state,'MERGED');
+    }finally{await f.cleanup();}
+  }
+});
+
+test('B2b: un error de auditoría antes de fusionar no se silencia ni registra parte',async()=>{
+  const f=await remoteFixture();
+  try{
+    await setup(f);const m=await init(f,{milestone:{id:'core',final:true}});
+    await remoteWrite(db=>db.exec("CREATE TRIGGER deny_audit BEFORE INSERT ON remote_audit WHEN NEW.tool='zana_merge.result' BEGIN SELECT RAISE(ABORT,'AUDIT_DENIED'); END"));
+    const result=await f.call('zana_merge',{missionId:m.id},f.owner);
+    assert.match(result.error??'',/AUDIT_DENIED/);
+    assert.equal((await run(f)).milestones[0].status,'RUNNING');
+    assert.equal((await f.runtime.readAudit({missionId:m.id,limit:100})).filter(x=>x.tool==='zana_merge.run').length,0);
+  }finally{await f.cleanup();}
+});
+
+test('B2b: errores inesperados se normalizan en run.reason y en auditoría',async()=>{
+  const f=await remoteFixture();
+  try{
+    const started=await setup(f),m=await init(f,{milestone:{id:'core',final:true}});
+    await remoteWrite(db=>db.exec("CREATE TRIGGER bad_run BEFORE INSERT ON metadata WHEN NEW.key LIKE 'zana:run:%' BEGIN SELECT RAISE(ABORT,'bad reason with spaces'); END"));
+    const result=await f.call('zana_mission_cancel',{},f.owner);
+    assert.deepEqual(result.run,{released:false,reason:'INTERNAL_ERROR'});
+    assert.deepEqual((await f.runtime.readAudit({missionId:m.id,limit:100})).find(x=>x.tool==='zana_mission_cancel.run'&&x.outcome==='ERROR')?.detail,
+      {projectId:started.projectId,code:'INTERNAL_ERROR'});
+  }finally{await f.cleanup();}
+});
+
+test('B2b: MCP real rechaza milestone.id inválido por el esquema zod',async()=>{
+  const f=await remoteFixture();
+  let server,client;
+  try{
+    f.owner=await f.session();
+    server=f.runtime.createServer(async()=>f.owner);
+    client=new Client({name:'schema-b2b',version:'1.0.0'});
+    const [clientTransport,serverTransport]=InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverTransport),client.connect(clientTransport)]);
+    const response=await client.callTool({name:'zana_mission_init',arguments:{
+      spec:f.spec,github:gh,milestone:{id:'MAYUSCULA',final:true}}});
+    assert.equal(response.isError,true);
+    assert.match(JSON.stringify(response.content),/Input validation error: Invalid arguments for tool zana_mission_init: milestone\.id: Invalid string: must match pattern/);
+    assert.equal(await count(),0);
+  }finally{await client?.close();await server?.close();await f.cleanup();}
+});
+
+
+test('B2b: fallo de memory_context conserva el SAVEPOINT y la misión',async()=>{
+  const f=await remoteFixture();
+  try{
+    const started=await setup(f);
+    await remoteWrite(db=>db.exec('ALTER TABLE project_memory RENAME COLUMN kind TO corrupt_kind'));
+    const m=await init(f,{milestone:{id:'core',final:true}});
+    assert.equal(m.error,undefined,m.error);
+    assert.match(m.memory?.error??'',/MEMORY_UNAVAILABLE/,JSON.stringify(m.memory));
+    assert.equal((await remoteRead(db=>loadRun(db,started.projectId))).milestones[0].status,'RUNNING');
+    assert.equal(await count(),1);
+    assert.equal((await remoteRead(db=>loadRun(db,started.projectId))).milestones[0].running.missionId,m.id);
+  }finally{await f.cleanup();}
+});
+
+test('B2b: outsidePlan mantiene dueño OAuth; sin corrida conserva las reglas anteriores',async()=>{
+  const f=await remoteFixture();
+  try{
+    await setup(f);const m=await init(f,{outsidePlan:'Excepción con propietario distinto'});
+    const other=await f.session('zana-chatgpt','fuera-de-plan-ajeno');
+    for(const tool of ['zana_start_batch','zana_mission_cancel','zana_merge']){
+      const r=await f.call(tool,tool==='zana_merge'?{missionId:m.id}:{},other);
+      assert.match(r.error??'',/RUN_OTHER_CLIENT/);
+      assert.equal((await f.call('zana_session_status',{},other)).writerMarked,false);
+    }
+    assert.equal((await remoteRead(db=>loadRun(db,m.memory.projectId).outsidePlan[0].missionId)),m.id);
+  }finally{await f.cleanup();}
+});
+
+test('R2: una misión normal de B funciona aunque la corrida de A terminó',async()=>{
+  for(const state of ['READY_TO_DELIVER','CANCELLED']){
+    const f=await remoteFixture();
+    try{
+      const started=await setup(f);
+      if(state==='READY_TO_DELIVER'){const m=await init(f,{milestone:{id:'core',final:true}});
+        assert.equal((await approvedMerge(f,m)).state,'MERGED');
+        await f.call('zana_mission_close',{summary},f.owner);await f.call('zana_mission_archive',{},f.owner);
+      }else await remoteWrite(db=>{const r=loadRun(db,started.projectId);
+        saveRun(db,r,cancelProjectRun(r,{reason:'Corrida detenida por la prueba',now:new Date().toISOString()}));});
+      const other=await f.session('zana-chatgpt','cliente-b'),ordinary=await init(f,{},other);
+      assert.equal(ordinary.error,undefined,ordinary.error);
+      assert.equal((await f.call('zana_start_batch',{},other)).error,undefined,state);
+      assert.doesNotMatch((await f.call('zana_merge',{missionId:ordinary.id},other)).error??'',/RUN_OTHER_CLIENT/,state);
+      assert.equal((await f.call('zana_mission_cancel',{},other)).status,'CANCELLED');
+    }finally{await f.cleanup();}
+  }
+});
+test('R2: el dueño protege todas las escrituras antes de marcar writer',async()=>{
+  for(const name of ['zana_start_batch','zana_mission_cancel','zana_mission_close','zana_mission_archive',
+    'zana_memory_save','zana_memory_resolve','zana_unit_retry','zana_unit_heartbeat',
+    'zana_review_request','zana_correction_start','zana_budget_extend']){
+    const f=await remoteFixture();
+    try{
+      await setup(f);const m=await init(f,{milestone:{id:'core',final:true}});
+      if(['zana_mission_close','zana_mission_archive'].includes(name))await approvedMerge(f,m);
+      if(name==='zana_mission_archive')await f.call('zana_mission_close',{summary},f.owner);
+      const other=await f.session('zana-chatgpt','client-b');
+      const v=await f.call(name,name==='zana_mission_close'?{summary}:name==='zana_review_request'?{missionId:m.id}:{},other);
+      assert.match(v.error??'',/RUN_OTHER_CLIENT/,name+': '+JSON.stringify(v));
+      assert.equal((await f.call('zana_session_status',{},other)).writerMarked,false,name);
+    }finally{await f.cleanup();}
+  }
+});
+test('R2: RUN_CORRUPT mantiene el comportamiento del main',async()=>{
+  for(const name of ['zana_start_batch','zana_mission_close','zana_mission_cancel']){
+    const f=await remoteFixture();
+    try{
+      await setup(f);const m=await init(f,{milestone:{id:'core',final:true}});
+      if(name==='zana_mission_close')await approvedMerge(f,m);
+      await remoteWrite(db=>db.prepare('UPDATE metadata SET value=? WHERE key=?').run('{corrupt','zana:run:'+m.memory.projectId));
+      const v=await f.call(name,name==='zana_mission_close'?{summary}:{},f.owner);
+      assert.equal(v.error,undefined,name+': '+v.error);
+      if(name==='zana_mission_cancel'){assert.equal(v.status,'CANCELLED');assert.deepEqual(v.run,{released:false,reason:'RUN_CORRUPT'});}
+      if(name==='zana_mission_close')assert.equal(v.status,'CLOSED');
+    }finally{await f.cleanup();}
+  }
+});
+test('R2: cierre sin prefijo rechaza suplantación normalizada',async()=>{
+  for(const done of ['\u202e[hito core parte 1] Cierre fingido','  [fuera del plan] Cierre fingido']){
+    const f=await remoteFixture();
+    try{f.owner=await f.session();const m=await init(f);await approvedMerge(f,m);
+      assert.match((await f.call('zana_mission_close',{summary:{...summary,done}},f.owner)).error??'',/RESERVED_PREFIX/);
+    }finally{await f.cleanup();}
+  }
+});
+test('R2: merge exterior o GitHub caído no cancela sin auditoría',async()=>{
+  for(const unavailable of [false,true]){
+    const f=await remoteFixture();
+    try{
+      await setup(f);const m=await init(f,{milestone:{id:'core',final:true}});
+      await remoteWrite(db=>db.exec("CREATE TRIGGER deny_result BEFORE INSERT ON remote_audit WHEN NEW.tool='zana_merge.result' AND NEW.outcome='MERGED' BEGIN SELECT RAISE(ABORT,'NO_AUDIT'); END"));
+      await approvedMerge(f,m);await remoteWrite(db=>db.exec('DROP TRIGGER deny_result'));
+      if(unavailable)f.runtime.github.pull=async()=>{throw new Error('GitHub fuera de servicio');};
+      const v=await f.call('zana_mission_cancel',{},f.owner);
+      assert.match(v.error??'',unavailable?/GITHUB_UNAVAILABLE/:/PR_ALREADY_MERGED/);
+      const current=await f.call('zana_mission_status',{},f.owner);assert.equal(current.state,'ACTIVE',JSON.stringify(current));
+      assert.equal((await run(f)).milestones[0].status,'RUNNING');
+      assert.ok((await f.runtime.readAudit({missionId:m.id,limit:100})).some(x=>x.tool==='zana_mission_cancel.run'&&x.outcome==='ERROR'));
+    }finally{await f.cleanup();}
+  }
+});
+test('R2: MERGED auditado permite rescatar SHA exacto si completePart falla',async()=>{
+  const f=await remoteFixture();
+  try{
+    const started=await setup(f),m=await init(f,{milestone:{id:'core',final:true}});
+    await remoteWrite(db=>db.exec("CREATE TRIGGER deny_part BEFORE INSERT ON metadata WHEN NEW.key LIKE 'zana:run:%' BEGIN SELECT RAISE(ABORT,'PART_FAILED'); END"));
+    const merged=await approvedMerge(f,m);assert.equal(merged.run.recorded,false);
+    await remoteWrite(db=>db.exec('DROP TRIGGER deny_part'));
+    await remoteWrite(db=>db.exec("CREATE TRIGGER deny_cancel_memory BEFORE INSERT ON project_memory BEGIN SELECT RAISE(ABORT,'NO_MEMORY'); END"));
+    const v=await f.call('zana_mission_cancel',{},f.owner);
+    assert.equal(v.run.recorded,true,v.error);assert.equal(v.run.status,'DONE');
+    assert.match(v.run.memoryError,/MEMORY_UNAVAILABLE/);
+    const state=await remoteRead(db=>loadRun(db,started.projectId));
+    assert.equal(state.milestones[0].parts[0].headSha,sha('a'));
+    assert.deepEqual((await f.runtime.readAudit({missionId:m.id,limit:100})).find(x=>x.tool==='zana_mission_cancel.run'&&x.outcome==='ERROR')?.detail,{projectId:started.projectId,milestoneId:'core',code:'MEMORY_UNAVAILABLE'});
+    assert.deepEqual((await f.runtime.readAudit({missionId:m.id,limit:100})).find(x=>x.tool==='zana_mission_cancel.run'&&x.outcome==='SUCCESS')?.detail,
+      {projectId:started.projectId,milestoneId:'core',transition:'DONE'});
+  }finally{await f.cleanup();}
+});
+
+test('R2: outsidePlan retiene 50 entradas pero el origen auditado conserva el prefijo',async()=>{
+  const f=await remoteFixture();
+  try{
+    const started=await setup(f),m=await init(f,{outsidePlan:'Excepción persistente de prueba'});
+    await approvedMerge(f,m);
+    await remoteWrite(db=>{let s=loadRun(db,started.projectId);
+      for(let i=0;i<51;i++){const next=recordOutsidePlan(s,{missionId:'extra-'+i,reason:'Excepción adicional verificable',now:new Date(Date.parse(s.updatedAt)+1000).toISOString()});
+        saveRun(db,s,next);s=next;}
+    });
+    assert.equal((await remoteRead(db=>loadRun(db,started.projectId).outsidePlan.length)),50);
+    assert.equal((await remoteRead(db=>loadRun(db,started.projectId).outsidePlan.some(x=>x.missionId===m.id))),false);
+    assert.equal((await f.call('zana_mission_close',{summary},f.owner)).error,undefined);
+    const body=await remoteRead(db=>db.prepare("SELECT body FROM project_memory WHERE mission_id=? AND kind='summary' ORDER BY seq DESC LIMIT 1").get(m.id)?.body);
+    assert.match(body,/^\[fuera del plan\] /);
+  }finally{await f.cleanup();}
 });

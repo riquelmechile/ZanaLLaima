@@ -2,6 +2,11 @@
 
 ## [Sin publicar]
 
+- B2b R2: ownership por misión antes de marcar escritor, cancelación sin evidencia inventada, RUN_CORRUPT tolerado, prefijos reservados y recuperación de outsidePlan desde auditoría tras retención de 50; regresiones y gates.
+
+- B2b: resúmenes de cierre con prefijo de hito/parte o fuera del plan generado en el servidor; los escritores de una corrida requieren su clientId OAuth antes de marcar sesión; cancelación tras merge no vuelve el hito a PENDING.
+- B2b: preservación del resultado MERGED ante fallos de auditoría, errores de corrida acotados a códigos válidos y pruebas MCP/SQLite de regresiones. `INVALID_BASE:` es ahora prefijo explícito del error de base inválida y puede requerir adaptación de consumidores; RUN_CORRUPT continúa bloqueando el repo sin reconciliación y TOOL_DEADLINE puede preceder a un merge ya realizado, cuyo registro se reintenta idempotentemente.
+
 - Las misiones se enlazan a hitos o trabajos fuera del plan y actualizan la corrida al fusionarse o cancelarse, con memoria transaccional y evidencia de los gates.
 
 - La memoria de proyectos endurece `reservedTopic` frente a marcas Unicode e invisibles y conserva los registros posteriores al recorte estricto de 4 KB, con origen de sesión en contexto y búsqueda.

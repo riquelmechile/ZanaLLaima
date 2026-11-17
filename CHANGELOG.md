@@ -2,6 +2,7 @@
 
 ## [Sin publicar]
 
+- C6: aclara cierre de misiones fuera del plan sin campo run, sincroniza guías de merge y elimina redundancias; refuerza pruebas de códigos completos.
 - C5: cierre seguro tras merge/attach, autorización exclusiva de HITOS, release condicional y cierre externo de PR; ROADMAP histórico, herramientas MCP reales y códigos completos.
 
 - C4: orquestación de cierre/archivo de hitos, política de PR y merge, documentación y propagación RUN_CORRUPT; tests de herramientas y orden de PR.

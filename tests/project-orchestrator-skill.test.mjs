@@ -40,6 +40,10 @@ test('C5: códigos completos de la skill existen como literales en src/',()=>{
   for(const code of codes){
     const word=new RegExp('\\b'+code+'\\b');
     assert.ok(stringLiterals.some(s=>word.test(s)),'Código inexistente: '+code);
-    assert.ok(!word.test('PREFIX_'+code+'_SUFFIX'),'No aceptar código truncado: '+code);
   }
+  assert.equal(stringLiterals.some(s=>/\bPR_STILL\b/.test(s)),false);
+});
+
+test('C6: la skill explica cierre sin campo run',()=>{
+  assert.ok(skill.includes('sin campo `run`'));
 });

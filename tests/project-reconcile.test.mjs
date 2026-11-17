@@ -172,3 +172,41 @@ test('C1: AUDIT_UNAVAILABLE after successful merge can reconcile without re-merg
     assert.equal(fixed.status,'DONE');
   }finally{await f.cleanup();}
 });
+
+test('C1 5d: cancel auditado exige PR fusionado con SHA idéntico',async()=>{
+  for(const bad of ['merged','sha']){
+    const f=await remoteFixture();
+    try{
+      await setup(f);const m=await init(f);const pull=proof(f,m.id);
+      const at=new Date().toISOString();
+      await remoteWrite(db=>{
+        db.prepare('INSERT INTO review_tickets(ticket_id,code_hash,mission_id,repo,pr_number,sha,author_session,created_at,expires_at,state,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
+          .run('ticket-'+bad,'hash-'+bad,m.id,gh.repo,7,sha('a'),'owner',at,at,'FINALIZED',at);
+        db.prepare('INSERT INTO remote_audit(at,tool,mission_id,outcome,detail) VALUES(?,?,?,?,?)')
+          .run(at,'zana_merge.result',m.id,'MERGED',JSON.stringify({headSha:sha('a'),mergeCommitSha:sha('9')}));
+      });
+      if(bad==='merged'){pull.merged=false;pull.merged_at=null;}
+      else pull.head.sha=sha('b');
+      assert.match((await f.call('zana_mission_cancel',{},f.owner)).error??'',/MERGE_EVIDENCE_MISMATCH/,bad);
+      assert.equal((await run(f)).milestones[0].status,'RUNNING');
+    }finally{await f.cleanup();}
+  }
+});
+test('C1 5f: cancel exige PR fusionado en rama exacta y lock',async()=>{
+  const f=await remoteFixture();
+  try{
+    await setup(f);const m=await init(f);
+    f.api.state.push(m.github.branch,sha('a'));f.api.state.openPull(m.github.branch,16);
+    f.api.state.push('otra/rama',sha('b'));f.api.state.openPull('otra/rama',17);
+    Object.assign(f.api.state.pulls.at(-1),{state:'closed',merged:true,merged_at:'2026-11-17T00:00:00Z'});
+    f.api.state.openPull(m.github.branch,18);
+    Object.assign(f.api.state.pulls.at(-1),{state:'closed',merged:true,merged_at:'2026-11-17T00:00:00Z'});
+    const seen=[];let locked=0;
+    const pull=f.runtime.github.pull.bind(f.runtime.github);
+    f.runtime.github.pull=async(repo,n)=>{seen.push(n);return pull(repo,n);};
+    const lock=f.runtime.review.withMissionLock.bind(f.runtime.review);
+    f.runtime.review.withMissionLock=async(...a)=>{locked++;return lock(...a);};
+    assert.match((await f.call('zana_mission_cancel',{},f.owner)).error??'',/PR_ALREADY_MERGED/);
+    assert.deepEqual(seen,[18]);assert.equal(locked,1);
+  }finally{await f.cleanup();}
+});

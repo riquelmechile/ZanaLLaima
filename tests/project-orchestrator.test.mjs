@@ -99,10 +99,10 @@ test('revision opcional y corridas terminales son inmutables',()=>{
   assert.equal(cancelled.reason,'Proyecto cancelado');assert.equal(cancelled.milestones[0].status,'PENDING');
   assert.equal(cancelled.milestones[0].running,null);assert.equal(cancelled.milestones[0].attempts[0].missionId,'one');
   for(const f of [()=>take(cancelled,'code','new'),()=>complete(cancelled,'one'),()=>release(cancelled,'one'),()=>attach(cancelled,'code','new'),()=>api.recordOutsidePlan(cancelled,{missionId:'extra',reason:'Fuera del plan',now})])bad('RUN_NOT_ACTIVE',f);
-  bad('INVALID_STATE',()=>api.cancelProjectRun(cancelled,{reason:'Cancelar de nuevo',now}));
+  bad('RUN_NOT_ACTIVE',()=>api.cancelProjectRun(cancelled,{reason:'Cancelar de nuevo',now}));
   let done=complete(started,'one');done=attach(done,'code','two');done=attach(done,'delivery','three');
   for(const f of [()=>take(done,'discovery','new'),()=>attach(done,'code','new'),()=>complete(done,'one'),()=>release(done,'one'),()=>api.recordOutsidePlan(done,{missionId:'extra',reason:'Fuera del plan',now})])bad('RUN_NOT_ACTIVE',f);
-  bad('INVALID_STATE',()=>api.cancelProjectRun(done,{reason:'Cancelar de nuevo',now}));
+  bad('RUN_NOT_ACTIVE',()=>api.cancelProjectRun(done,{reason:'Cancelar de nuevo',now}));
 });
 test('validateRun rechaza invariantes estructurales uno por uno',()=>{
   const s=init(), running=take(s,'discovery','mission-one',false), partial=complete(running,'mission-one'), done=complete(take(s,'discovery','mission-one'),'mission-one'),delivered=attach(attach(done,'code','second'),'delivery','third');

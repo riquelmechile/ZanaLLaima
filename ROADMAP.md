@@ -12,7 +12,7 @@ Hecho en esta versión:
 
 Lo que sigue:
 
-- [ ] Conectar el orquestador de hitos en el servidor; hoy la continuidad la ejecuta la skill `zana-project-orchestrator` con tools de misión.
+- [x] Conectar el orquestador de hitos al servidor: corrida, revisión optimista, siguiente hito y reconciliación MCP; la skill guía el flujo real.
 - [ ] Invitar a la revisora e instalar protección de rama desde el bootstrap, en vez de configurarlas después con `zana_github_request`.
 - [ ] Observar en vivo `zana.review.done` y los casos negativos de separación.
 - [ ] Adoptar el protocolo MCP `2026-07-28`.
@@ -32,13 +32,13 @@ Hecho en esta versión:
 - [x] **CI por repositorio** (`ZANA_REPO_CHECKS_JSON`), aplicado en checks, entrega, merge y dispatch.
 - [x] **Repos permitidos por cuenta** (`owner/*` en `ZANA_GITHUB_REPOS`).
 - [x] Lecturas de archivos como texto, sin el aviso de "materializar archivos" de ChatGPT.
-- [x] Contratos con tests, **sin tool que los ejecute**: creación de repositorios (del bootstrap solo está conectada la propuesta, `zana_bootstrap_prepare`), orquestador de hitos con recuperación, paquetes 4R para subagentes, gate de entrega de proyecto y eventos firmados.
+- [x] Orquestador de hitos conectado mediante tools MCP y memoria proyectada; otros contratos de delegación y entrega conservan sus propias tareas pendientes.
 
 Lo que sigue:
 
 - [x] Aprobación autenticada del plan por su huella exacta: el modelo la pide (`zana_plan_approval_request`) y solo el operador la concede en `/operator/approve` con su contraseña. Hecho después de publicar esta versión; todavía ninguna tool consume la aprobación.
 - [ ] Conectar al backend el bootstrap (crear el repo, instalar el CI, invitar a la revisora y proteger la rama), con autorización del operador registrada. Hecho hasta ahora: la autorización del operador (`zana_bootstrap_request`, `zana_bootstrap_status`) y la creación del repositorio con reconciliación (`zana_bootstrap_execute`, `zana_bootstrap_reconcile`); falta instalar el CI, invitar a la revisora y proteger la rama.
-- [ ] Conectar el orquestador: varias misiones por proyecto, estado guardado en el servidor.
+- [x] Conectar el orquestador: varias misiones por proyecto, estado persistido, conciliación tras merge y cancelación autorizada.
 - [ ] 4R con subagentes nativos. Primero hay que comprobar si un subagente llega al servidor con una identidad distinta de la conversación que lo lanzó.
 - [ ] Revisión que converge: el revisor recibe los hallazgos de las rondas anteriores y el operador puede aceptar un riesgo.
 - [ ] Gate de entrega con evidencia definida para merge squash.

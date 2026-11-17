@@ -203,6 +203,10 @@ test('cancel: libera hito, registra intento/rondas; revisora no puede cancelar n
     assert.match(next.memory.entries.find(x=>x.topic==='hito:core')?.body??'',/Intento fallido/);
     assert.match((await remoteRead(db=>loadRun(db,start.projectId).milestones[0].attempts.at(-1)?.reason))??'',/Misión cancelada/);
     await f.call('zana_mission_archive',{},f.owner);
+    const beforeRetry=await count();
+    assert.match((await init(f,{milestone:{id:'core',final:true}})).error,/PRIOR_PR_OPEN/);
+    assert.equal(await count(),beforeRetry);
+    Object.assign(f.api.state.pulls.at(-1),{state:'closed',merged:false});
     const second=await init(f,{milestone:{id:'core',final:true}});
     await transact(mission=>{mission.reviewCount=mission.budget.maxReviewRounds;return mission;});
     const closed=await f.call('zana_mission_cancel',{},f.owner);
@@ -776,5 +780,81 @@ test('B2c: cancel rescata parte con auditoría completa aunque GitHub no respond
     assert.equal(v.error,undefined,v.error);
     assert.equal(v.run.recorded,true);
     assert.equal((await remoteRead(db=>loadRun(db,started.projectId).milestones[0].status)),'DONE');
+  }finally{await f.cleanup();}
+});
+
+test('C1: prefix rejects variants, permits [hitos], strips Cc from server-prefixed summary',async()=>{
+  for(const [done,blocked] of [
+    ['[ hito core parte 1] simulado',true],['[hito:core] simulado',true],
+    ['[fueradelplan] simulado',true],['[híto core] simulado',true],
+    ['[hitos] texto legítimo',false]]){
+    const f=await remoteFixture();
+    try{
+      f.owner=await f.session();const m=await init(f);
+      assert.equal((await approvedMerge(f,m)).state,'MERGED');
+      const closed=await f.call('zana_mission_close',{summary:{...summary,done}},f.owner);
+      if(blocked)assert.match(closed.error??'',/RESERVED_PREFIX/);
+      else assert.equal(closed.error,undefined,closed.error);
+    }finally{await f.cleanup();}
+  }
+  const f=await remoteFixture();
+  try{
+    await setup(f);const m=await init(f,{milestone:{id:'core',final:true}});
+    assert.equal((await approvedMerge(f,m)).state,'MERGED');
+    await f.call('zana_mission_close',{summary:{...summary,done:'Texto limpio\x1cFS\x1eRS\x1bESC'}},f.owner);
+    const body=await remoteRead(db=>db.prepare("SELECT body FROM project_memory WHERE mission_id=? AND kind='summary' ORDER BY seq DESC LIMIT 1").get(m.id)?.body);
+    assert.ok(body.startsWith('[hito core parte 1] '));
+    assert.doesNotMatch(body.split('\n')[0],/[\x00-\x1f\x7f]/);
+  }finally{await f.cleanup();}
+});
+
+test('C1: cancelar sin misión conserva respuesta legada',async()=>{
+  const f=await remoteFixture();
+  try{
+    const author=await f.session();
+    assert.match((await f.call('zana_mission_cancel',{},author)).error??'',/No mission initialized/);
+  }finally{await f.cleanup();}
+});
+test('C1: cancel solo recupera merge SHA de un pull fusionado en el head auditado',async()=>{
+  for(const [tamper,blocked] of [[p=>{p.merged=false;p.merged_at=null;},false],[(p,f)=>{f.api.state.branches[p.head.ref]=sha('b');},true]]){
+    const f=await remoteFixture();
+    try{
+      const started=await setup(f),m=await init(f,{milestone:{id:'core',final:true}});
+      await remoteWrite(db=>db.exec("CREATE TRIGGER deny_part_c1 BEFORE INSERT ON metadata WHEN NEW.key LIKE 'zana:run:%' BEGIN SELECT RAISE(ABORT,'PART_FAILED'); END"));
+      assert.equal((await approvedMerge(f,m)).run.recorded,false);
+      await remoteWrite(db=>{
+        db.exec('DROP TRIGGER deny_part_c1');
+        const row=db.prepare("SELECT seq,detail FROM remote_audit WHERE mission_id=? AND tool='zana_merge.result' AND outcome='MERGED' ORDER BY seq DESC LIMIT 1").get(m.id);
+        db.prepare('UPDATE remote_audit SET detail=? WHERE seq=?').run(JSON.stringify({...JSON.parse(row.detail),mergeCommitSha:null}),row.seq);
+      });
+      tamper(f.api.state.pulls.at(-1),f);
+      const v=await f.call('zana_mission_cancel',{},f.owner);
+      if(blocked)assert.match(v.error??'',/PR_ALREADY_MERGED/);
+      else assert.equal(v.run.released,true,v.error);
+      assert.equal((await remoteRead(db=>loadRun(db,started.projectId).milestones[0].status)),blocked?'RUNNING':'PENDING');
+    }finally{await f.cleanup();}
+  }
+});
+test('C1: cancel conserva identidad de misión y usa withMissionLock',async()=>{
+  const f=await remoteFixture();
+  try{
+    await setup(f);const m=await init(f,{milestone:{id:'core',final:true}});
+    const original=f.runtime.review.withMissionLock;let locked='';
+    f.runtime.review.withMissionLock=async(id,fn)=>{locked=id;await remoteWrite(db=>db.prepare('UPDATE active_mission SET id=? WHERE slot=1').run('00000000-0000-4000-8000-000000000001'));return original(id,fn);};
+    assert.match((await f.call('zana_mission_cancel',{},f.owner)).error??'',/MISSION_CHANGED/);
+    assert.equal(locked,m.id);
+  }finally{await f.cleanup();}
+});
+
+test('C1: búsqueda por rama omite pulls no fusionados o de otro head.ref',async()=>{
+  const f=await remoteFixture();
+  try{
+    const started=await setup(f),m=await init(f,{milestone:{id:'core',final:true}});
+    await remoteWrite(db=>db.exec("CREATE TRIGGER deny_part_search BEFORE INSERT ON metadata WHEN NEW.key LIKE 'zana:run:%' BEGIN SELECT RAISE(ABORT,'PART_FAILED'); END"));
+    assert.equal((await approvedMerge(f,m)).run.recorded,false);const real=f.api.state.pulls.at(-1);
+    await remoteWrite(db=>{db.exec('DROP TRIGGER deny_part_search');db.prepare('DELETE FROM review_tickets WHERE mission_id=?').run(m.id);const row=db.prepare("SELECT seq,detail FROM remote_audit WHERE mission_id=? AND tool='zana_merge.result' AND outcome='MERGED' ORDER BY seq DESC LIMIT 1").get(m.id);db.prepare('UPDATE remote_audit SET detail=? WHERE seq=?').run(JSON.stringify({...JSON.parse(row.detail),mergeCommitSha:null}),row.seq);});
+    f.api.state.pulls.unshift({...structuredClone(real),number:88,head:{...real.head,ref:'otra'}},{...structuredClone(real),number:89,merged:false,merged_at:null});
+    const v=await f.call('zana_mission_cancel',{},f.owner);assert.equal(v.run.recorded,true,v.error);
+    assert.equal((await remoteRead(db=>loadRun(db,started.projectId).milestones[0].parts[0].prNumber)),real.number);
   }finally{await f.cleanup();}
 });

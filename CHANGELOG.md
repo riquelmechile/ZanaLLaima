@@ -228,3 +228,5 @@ Versión candidata en PR #1. Sin tag, release ni despliegue.
 - Llaves reales de operador y CI, environment protegido y atestación CI emitida por GitHub.
 - Verificación de aislamiento del sistema operativo y E2E Codex por el operador.
 - Revisión independiente, aprobación de PR sobre SHA exacto y decisión humana de merge.
+
+- PR C1: `zana_project_reconcile` certifica en servidor CI, revisión por SHA y merge para adjuntar partes; libera intentos inactivos sin PR fusionado. `zana_mission_init` rechaza PRIOR_PR_OPEN. El CLI no reconcilia la corrida.

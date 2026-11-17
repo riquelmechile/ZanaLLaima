@@ -324,3 +324,13 @@ test('makeExclusive serializa por clave y no retiene entradas (issue #3, punto 6
   assert.equal(await exclusive('m',async()=>'after'),'after');
   assert.equal(pending(),0);
 });
+
+test('GitHubApi: búsqueda de PR por rama exige state válido y codifica head',async()=>{
+  let requested='';
+  const api=new GitHubApi({baseUrl:'https://api.github.test',token:'stub',
+    fetcher:async url=>{requested=url;return new Response('[]',{status:200});}});
+  assert.deepEqual(await api.openPullsFor('o/r','zana/x+y','all'),[]);
+  assert.match(requested,/state=all/);
+  assert.match(requested,/head=o%3Azana%2Fx%2By/);
+  await assert.rejects(api.openPullsFor('o/r','zana/x+y','invalid'),/Invalid pull state/);
+});

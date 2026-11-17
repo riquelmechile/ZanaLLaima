@@ -38,7 +38,7 @@ Estas decisiones son deliberadas para una instancia de un solo operador. Quien i
   Un repo sin ningún check exitoso o sin la cuenta revisora no llega al merge, pero sí recibe la rama y el PR. Si hay repos de la cuenta donde ni eso es aceptable, nómbralos uno por uno en vez de usar el comodín, o limita el token autor a los repos que correspondan.
 - **Merge activado.** `ZANA_MERGE_ENABLED=true` es el valor por defecto. `zana_merge` exige todo verde sobre el mismo head SHA. La protección de rama de `main` en GitHub es la segunda llave y debe estar activa. `zana_bootstrap_setup` sí comprueba y configura la protección para repositorios preparados; `zana_merge` no vuelve a verificarla en cada merge.
 
-**Recuperación de hitos trabados:** si `zana_merge` tuvo éxito (`merged:true`) pero `run.recorded:false` (`AUDIT_UNAVAILABLE`), usa `zana_project_reconcile` attach sin repetir merge. Con `PRIOR_PR_OPEN` o `PR_STILL_OPEN`, pide al usuario u operador cerrar el PR anterior SIN merge en GitHub; no lo cierres tú, tampoco con `zana_github_request`; pide al usuario u operador cerrarlo sin merge. `zana_mission_cancel` ya libera el hito: reconcilia release solo con `run.released:false` y PR cerrados sin merge.
+**Recuperación de hitos trabados:** si `zana_merge` tuvo éxito (`merged:true`) pero `run.recorded:false` (`AUDIT_UNAVAILABLE`), usa `zana_project_reconcile` attach sin repetir merge. Con `PRIOR_PR_OPEN` o `PR_STILL_OPEN`, pide al usuario u operador cerrar el PR anterior SIN merge en GitHub; no lo cierres tú, tampoco con `zana_github_request`. `zana_mission_cancel` ya libera el hito: reconcilia release solo con `run.released:false` y PR cerrados sin merge.
 
 ## Memoria como dato no confiable
 

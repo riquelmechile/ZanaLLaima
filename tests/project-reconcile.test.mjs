@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {remoteFixture,sha,REVIEWER_LOGIN} from './helpers/remote-fixture.mjs';
+import {remoteFixture,sha,REVIEWER_LOGIN,readDiff} from './helpers/remote-fixture.mjs';
 import {makePlan} from './helpers/plan-fixture.mjs';
-import {remoteRead,transact} from '../src/store.mjs';
+import {remoteRead,remoteWrite,transact} from '../src/store.mjs';
 import {loadRun} from '../src/project-run-store.mjs';
 import {cancelMission} from '../src/lifecycle.mjs';
 
@@ -105,7 +105,7 @@ test('C1: release only inactive unmerged missions, never merged/active',async()=
       milestoneId:'core',missionId:m.id,final:true,action:'release'};
     assert.match((await f.call('zana_project_reconcile',args,f.owner)).error??'',/MISSION_ACTIVE/);
     const pull=proof(f,m.id,7,{merged:false});
-    await transact(mission=>cancelMission(mission));
+    await transact(mission=>{cancelMission(mission);return mission;});
     pull.state='closed';pull.merged=true;pull.merged_at='2026-11-17T00:00:00Z';
     assert.match((await f.call('zana_project_reconcile',args,f.owner)).error??'',/PR_ALREADY_MERGED/);
     pull.state='open';pull.merged=false;pull.merged_at=null;
@@ -133,5 +133,42 @@ test('C1: mission init rejects open PR of earlier attempt, permits closed and fa
     pull.state='closed';
     const next=await init(f);
     assert.equal(next.error,undefined,next.error);
+  }finally{await f.cleanup();}
+});
+
+test('C1: AUDIT_UNAVAILABLE after successful merge can reconcile without re-merging',async()=>{
+  const f=await remoteFixture();
+  try{
+    await setup(f);const m=await init(f);
+    const batch=(await f.call('zana_start_batch',{},f.owner)).packets[0];
+    f.api.state.push(m.github.branch,sha('a'));
+    f.api.state.green(sha('a'));f.api.state.openPull(m.github.branch);
+    assert.equal((await f.call('zana_complete_unit',{unitId:batch.unitId,token:batch.token,
+      leaseGeneration:batch.leaseGeneration,outcome:{success:true,summary:'código',evidence:['CI verde']}},f.owner)).error,undefined);
+    const request=await f.call('zana_review_request',{missionId:m.id},f.owner);
+    assert.equal(request.error,undefined,request.error);
+    const reviewer=await f.session();
+    assert.equal((await f.call('zana_review_claim',{ticket:request.ticket},reviewer)).error,undefined);
+    await readDiff(f.call,request.ticket,reviewer);
+    for(const lens of ['risk','readability','reliability','resilience'])
+      assert.equal((await f.call('zana_review_lens_submit',{ticket:request.ticket,lens,findings:[],
+        evidence:['Diff íntegro revisado']},reviewer)).error,undefined);
+    assert.equal((await f.call('zana_review_finalize',{ticket:request.ticket,
+      execution:'SEQUENTIAL_SAME_CONVERSATION'},reviewer)).state,'FINALIZED');
+    const notes=(await f.call('zana_start_batch',{},f.owner)).packets[0];
+    await f.call('zana_complete_unit',{unitId:notes.unitId,token:notes.token,
+      leaseGeneration:notes.leaseGeneration,outcome:{success:true,summary:'notas',evidence:['ok']}},f.owner);
+    await remoteWrite(db=>db.exec("CREATE TRIGGER deny_merge_result BEFORE INSERT ON remote_audit WHEN NEW.tool='zana_merge.result' BEGIN SELECT RAISE(ABORT,'AUDIT_DENIED'); END"));
+    const merged=await f.call('zana_merge',{missionId:m.id},f.owner);
+    assert.equal(merged.state,'MERGED',merged.error);
+    assert.equal(merged.run.reason,'AUDIT_UNAVAILABLE');
+    const before=await run(f);
+    const denied=await f.call('zana_project_reconcile',{repo:gh.repo,expectedRevision:before.revision,
+      milestoneId:'core',missionId:m.id,final:true},reviewer);
+    assert.match(denied.error??'',/REVIEWER_READ_ONLY/);
+    assert.equal((await f.call('zana_session_status',{},reviewer)).writerMarked,false);
+    const fixed=await reconcile(f,before,m.id);
+    assert.equal(fixed.recorded,true,fixed.error);
+    assert.equal(fixed.status,'DONE');
   }finally{await f.cleanup();}
 });

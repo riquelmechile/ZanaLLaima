@@ -4,7 +4,8 @@ import {createHash,randomBytes} from 'node:crypto';
 import {join} from 'node:path';
 import {request as httpRequest} from 'node:http';
 import {Client,StreamableHTTPClientTransport} from '@modelcontextprotocol/client';
-import {remoteFixture,AUTHOR_TOKEN,REVIEWER_TOKEN} from './helpers/remote-fixture.mjs';
+import {remoteFixture,AUTHOR_TOKEN,REVIEWER_TOKEN,readDiff,sha} from './helpers/remote-fixture.mjs';
+import {makePlan} from './helpers/plan-fixture.mjs';
 import {EmbeddedOAuth,setEnrollment,listClients,revokeClient,clientIdentity} from '../src/oauth.mjs';
 import {createHttpServer,httpSettings} from '../src/http.mjs';
 import {REMOTE_TOOL_NAMES} from '../src/remote.mjs';
@@ -142,7 +143,7 @@ test('Streamable HTTP sessions: two conversations get two sessions; the reviewer
       accept:'application/json, text/event-stream','mcp-session-id':a.transport.sessionId,'mcp-protocol-version':sa.client.protocolVersion},
       body:JSON.stringify({jsonrpc:'2.0',id:91,method:'events/list',params:{}})});
     const listedText=await listed.text(),listedJson=JSON.parse(listedText.split('\n').filter(l=>l.startsWith('data:')).map(l=>l.slice(5)).pop()??listedText);
-    assert.deepEqual(listedJson.result.events.map(e=>[e.name,e.inputSchema.properties.host.enum]),[['zana.review.ready',['zana-chatgpt']],['zana.review.done',['zana-chatgpt']]]);
+    assert.deepEqual(listedJson.result.events.map(e=>[e.name,e.inputSchema.properties.host.enum]),[['zana.review.ready',['zana-chatgpt']],['zana.review.done',['zana-chatgpt']],['zana.project.milestone_done',['zana-chatgpt']],['zana.project.ready_to_deliver',['zana-chatgpt']]]);
     const badSub=await fetch(s.base+'/mcp',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json',
       accept:'application/json, text/event-stream','mcp-session-id':a.transport.sessionId,'mcp-protocol-version':sa.client.protocolVersion},
       body:JSON.stringify({jsonrpc:'2.0',id:92,method:'events/subscribe',params:{name:'zana.review.ready',arguments:{host:'zana-chatgpt'},
@@ -560,4 +561,64 @@ test('los intentos del protocolo 2026-07-28 se rechazan, pero quedan contados en
       body:JSON.stringify({jsonrpc:'2.0',id:1,method:'x',params:{_meta:{'io.modelcontextprotocol/protocolVersion':'2026-07-28'}}})});
     assert.equal((await health()).protocol.modernRejected.count,15);
   }finally{await s.close();await f.cleanup();}
+});
+
+
+test('E1 r4: suscribir y cancelar eventos de proyecto por HTTP JSON-RPC real',async()=>{
+  const posts=[];
+  const f=await remoteFixture({runtimeOptions:{eventPost:async(url,headers,body)=>{
+    const x=JSON.parse(body);posts.push({url,headers,data:x});
+    return {status:200,body:JSON.stringify({challenge:x.challenge})};
+  }}});
+  const s=await server(f);let client;
+  try{
+    setEnrollment(s.settings.oauthDb,5);
+    const loginResult=await login(s.base);
+    assert.equal(loginResult.status,200);
+    const token=loginResult.access_token;
+    client=await connect(s.base,token);
+    const session=await client.call('zana_session_status');
+    const version=session.client.protocolVersion,sessionId=client.transport.sessionId;
+    const subscribed=[];
+    for(const name of ['zana.project.milestone_done','zana.project.ready_to_deliver']){
+      const url='https://hooks.example.com/'+name;
+      const filter={name,arguments:{host:'zana-chatgpt'}};
+      const sub=await rpc(s.base,token,{jsonrpc:'2.0',id:10,method:'events/subscribe',
+        params:{...filter,delivery:{mode:'webhook',url,secret:'whsec_'+Buffer.alloc(32,3).toString('base64')}}},sessionId,version);
+      assert.ok(sub.json?.result?.id,JSON.stringify(sub.json));
+      subscribed.push({filter,url});
+    }
+    const owner=await f.session('zana-chatgpt',loginResult.client_id);
+    let w=await f.call('zana_workspace_create',{idea:'Corrida HTTP E1'},owner);
+    const answers={goal:'Gestionar hitos',users:'Equipos',platform:'Web',features:'Planes',data:'Sin secretos'};
+    w=await f.call('zana_workspace_update',{workspaceId:w.workspaceId,expectedVersion:0,answers},owner);
+    w=await f.call('zana_workspace_update',{workspaceId:w.workspaceId,expectedVersion:1,plan:makePlan(w.brief)},owner);
+    const approval=await f.call('zana_plan_approval_request',{workspaceId:w.workspaceId,expectedVersion:w.version},owner);
+    f.runtime.planApproval.decide({approvalId:approval.approvalId,decision:'allow',passwordOk:true});
+    assert.equal((await f.call('zana_project_run_start',{workspaceId:w.workspaceId,repo:'o/r',base:'main'},owner)).created,true);
+    const m=await f.call('zana_mission_init',{spec:f.spec,github:{repo:'o/r',base:'main'},milestone:{id:'core',final:true}},owner);
+    const packet=(await f.call('zana_start_batch',{},owner)).packets[0];
+    f.api.state.push(m.github.branch,sha('a'));f.api.state.green(sha('a'));f.api.state.openPull(m.github.branch,7);
+    assert.equal((await f.call('zana_complete_unit',{unitId:packet.unitId,token:packet.token,leaseGeneration:packet.leaseGeneration,
+      outcome:{success:true,summary:'CI verde',evidence:['CI verde']}},owner)).error,undefined);
+    const req=await f.call('zana_review_request',{missionId:m.id},owner),reviewer=await f.session();
+    assert.equal((await f.call('zana_review_claim',{ticket:req.ticket},reviewer)).error,undefined);
+    await readDiff(f.call,req.ticket,reviewer);
+    for(const lens of ['risk','readability','reliability','resilience'])
+      assert.equal((await f.call('zana_review_lens_submit',{ticket:req.ticket,lens,findings:[],evidence:['Diff completo']},reviewer)).error,undefined);
+    assert.equal((await f.call('zana_review_finalize',{ticket:req.ticket,execution:'SEQUENTIAL_SAME_CONVERSATION'},reviewer)).state,'FINALIZED');
+    const notes=(await f.call('zana_start_batch',{},owner)).packets[0];
+    await f.call('zana_complete_unit',{unitId:notes.unitId,token:notes.token,leaseGeneration:notes.leaseGeneration,
+      outcome:{success:true,summary:'notas',evidence:['ok']}},owner);
+    const merged=await f.call('zana_merge',{missionId:m.id},owner);
+    assert.equal(merged.run.runStatus,'READY_TO_DELIVER',merged.run.reason);
+    const sent=posts.filter(x=>x.data.eventId);
+    assert.deepEqual(sent.map(x=>x.data.name).sort(),['zana.project.milestone_done','zana.project.ready_to_deliver']);
+    assert.ok(sent.every(x=>x.headers['webhook-signature']?.startsWith('v1,')&&x.data.data.projectId),'firmas y punteros');
+    for(const {filter,url} of subscribed){
+      const off=await rpc(s.base,token,{jsonrpc:'2.0',id:11,method:'events/unsubscribe',
+        params:{...filter,delivery:{mode:'webhook',url}}},sessionId,version);
+      assert.deepEqual(off.json?.result,{},JSON.stringify(off.json));
+    }
+  }finally{if(client)await client.client.close();await s.close();await f.cleanup();}
 });

@@ -10,6 +10,7 @@ import {EmbeddedOAuth,setEnrollment,listClients,revokeClient,clientIdentity} fro
 import {createHttpServer,httpSettings} from '../src/http.mjs';
 import {REMOTE_TOOL_NAMES} from '../src/remote.mjs';
 import {runCli,parseCliCommand} from '../src/cli.mjs';
+import {remoteRead} from '../src/store.mjs';
 
 const PASSWORD='p'.repeat(40);
 const REDIRECT='https://chatgpt.com/connector_platform_oauth_redirect';
@@ -612,13 +613,18 @@ test('E1 r4: suscribir y cancelar eventos de proyecto por HTTP JSON-RPC real',as
       outcome:{success:true,summary:'notas',evidence:['ok']}},owner);
     const merged=await f.call('zana_merge',{missionId:m.id},owner);
     assert.equal(merged.run.runStatus,'READY_TO_DELIVER',merged.run.reason);
+    for(let i=0;i<300&&posts.filter(x=>x.data.eventId).length<2;i++)
+      await new Promise(resolve=>setTimeout(resolve,10));
     const sent=posts.filter(x=>x.data.eventId);
     assert.deepEqual(sent.map(x=>x.data.name).sort(),['zana.project.milestone_done','zana.project.ready_to_deliver']);
     assert.ok(sent.every(x=>x.headers['webhook-signature']?.startsWith('v1,')&&x.data.data.projectId),'firmas y punteros');
+    const active=()=>remoteRead(db=>db.prepare("SELECT COUNT(*) n FROM metadata WHERE key LIKE 'zana:evsub:%'").get().n);
+    assert.equal(await active(),2,'suscripciones HTTP registradas');
     for(const {filter,url} of subscribed){
       const off=await rpc(s.base,token,{jsonrpc:'2.0',id:11,method:'events/unsubscribe',
         params:{...filter,delivery:{mode:'webhook',url}}},sessionId,version);
       assert.deepEqual(off.json?.result,{},JSON.stringify(off.json));
     }
+    assert.equal(await active(),0,'unsubscribe HTTP debe borrar las suscripciones, no solo responder {}');
   }finally{if(client)await client.client.close();await s.close();await f.cleanup();}
 });

@@ -189,7 +189,7 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
   const roundsUsedIn=(db,mission)=>effectiveReviewRounds(mission.reviewCount,
     db.prepare('SELECT state,verdict,github_review_id,status_posted FROM review_tickets WHERE mission_id=?').all(mission.id));
   // Una transición terminal se graba en SQLite; las rondas efectivas se derivan de tickets.
-  function expire(db,now=Date.now(),notify=false){
+  function expire(db,now=Date.now(),notify=true){
     const at=new Date(now).toISOString(),cutoff=new Date(now-config.claimTtlMinutes*60_000).toISOString();
     const due=db.prepare("SELECT * FROM review_tickets WHERE ((state='OPEN' AND expires_at<=?) OR (state IN ('CLAIMED','FINALIZING') AND claimed_at<=?))")
       .all(at,cutoff);
@@ -213,6 +213,8 @@ export function createReview({github,reviewerGithub,config,checks,remoteWrite,re
         console.error('REVIEW_EXPIRED_EVENT_QUEUE_FAILED',error?.code??'UNKNOWN',t.ticket_id);
       }
     }
+    // Encolar en la transacción actual; entregar al salir de ella, sin bloquear la tool.
+    if(queued&&events)queueMicrotask(()=>{void events.flush().catch(error=>console.error('REVIEW_EXPIRED_EVENT_FLUSH_FAILED',error?.code??'UNKNOWN'));});
     return {expired,queued};
   }
   const missionLock=id=>'mission:'+id;

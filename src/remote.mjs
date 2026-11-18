@@ -593,7 +593,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
           return {recorded:true,already:false,milestoneId,status,runStatus:next.status,revision:next.revision,
             ...(saved.memoryError?{memoryError:saved.memoryError}:{})};
         });
-        if(reconciled.recorded&&!reconciled.already)await events.flush();
+        if(reconciled.recorded&&!reconciled.already)void events.flush();
         return reconciled;
       }
       if(pull?.merged===true||pull?.merged_at)throw new Error('PR_ALREADY_MERGED: usa attach');
@@ -898,7 +898,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
           detail:{projectId:proof?.projectId,code:'PR_ALREADY_MERGED'}});
         throw error;
       }
-      if(runInfo?.recorded)await events.flush();
+      if(runInfo?.recorded)void events.flush();
       return {...status,...(runInfo?{run:runInfo}:{})};
       };
       return lockedId&&review.withMissionLock
@@ -1146,7 +1146,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
           outcome:'ERROR',detail:{projectId:pid,code}}).catch(()=>{});
         runInfo={recorded:false,reason:code};
       }
-      if(runInfo?.recorded)await events.flush();
+      if(runInfo?.recorded)void events.flush();
       return {...result,run:runInfo};
     },
     zana_memory_context:({projectId:pid,missionId:id},session)=>rr((db,mission)=>{

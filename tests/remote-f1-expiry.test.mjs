@@ -125,7 +125,7 @@ test('F1: barrido periódico sin consultas vence CLAIMED y reduce /health staleT
     await f.cleanup();
   }
 });
-test('F1: solicitud perezosa consume ronda efectiva sin EXPIRED en webhook',async()=>{
+test('F2: solicitud perezosa consume ronda efectiva y entrega EXPIRED en webhook',async()=>{
   const {posts,options}=donePosts(),f=await remoteFixture(options);
   try{
     const ready=await f.authorReady();
@@ -139,7 +139,7 @@ test('F1: solicitud perezosa consume ronda efectiva sin EXPIRED en webhook',asyn
     assert.equal(await used(),5);
     assert.deepEqual((await rows()).map(x=>x.state),['EXPIRED','OPEN']);
     await f.runtime.events.flush();
-    assert.equal(posts.filter(p=>p.msg.name===REVIEW_DONE_EVENT).length,0);
+    assert.equal(posts.filter(p=>p.msg.name===REVIEW_DONE_EVENT).length,1);
   }finally{await f.cleanup();}
 });
 test('F1: dos barridos y vencimiento perezoso no duplican reembolsos con reviewCount >=2',async()=>{
@@ -161,7 +161,7 @@ test('F1: dos barridos y vencimiento perezoso no duplican reembolsos con reviewC
     assert.equal(await used(),1);
   }finally{await f.cleanup();}
 });
-test('F1: zana_mission_adopt vence ticket sin EXPIRED en webhook',async()=>{
+test('F2: zana_mission_adopt entrega EXPIRED por expiración perezosa',async()=>{
   const {posts,options}=donePosts(),f=await remoteFixture(options);
   try{
     const ready=await f.authorReady(),id=await newTicket(f,ready);
@@ -173,7 +173,7 @@ test('F1: zana_mission_adopt vence ticket sin EXPIRED en webhook',async()=>{
     assert.equal((await state()).reviewCount,1);
     assert.equal(await used(),0);
     await f.runtime.events.flush();
-    assert.equal(posts.filter(p=>p.msg.name===REVIEW_DONE_EVENT).length,0);
+    assert.equal(posts.filter(p=>p.msg.name===REVIEW_DONE_EVENT).length,1);
   }finally{await f.cleanup();}
 });
 test('F1/R11: restaurar tickets OPEN/EXPIRED cambia crédito sin alterar el contador bruto',async()=>{
@@ -300,4 +300,72 @@ test('F1: cancelar hito usa rondas efectivas y distingue sin vencimiento',async(
       assert.equal(reason.includes('REVIEW_ROUNDS_EXHAUSTED'),!expired,reason);
     }finally{await f.cleanup();}
   }
+});
+
+
+test('F2: llamada perezosa encola EXPIRED una sola vez solo para el OAuth autor',async()=>{
+  const posts=[];
+  const f=await remoteFixture({runtimeOptions:{eventPost:async(url,headers,body)=>{
+    const msg=JSON.parse(body);posts.push({url,msg});
+    return {status:200,body:JSON.stringify(msg.type==='verification'?{challenge:msg.challenge}:{})};
+  }}});
+  try{
+    const ready=await f.authorReady();
+    for(const [clientId,url] of [[ready.author.clientId,'author'],['zc_reviewer','reviewer'],['zc_other','other']]){
+      await f.runtime.events.subscribe({clientId,host:'zana-chatgpt'},
+        {name:REVIEW_DONE_EVENT,arguments:{host:'zana-chatgpt'},
+          delivery:{mode:'webhook',url:'https://hooks.chatgpt.test.openai.com/'+url,secret:SECRET}});
+    }
+    const ticket=await f.call('zana_review_request',{missionId:ready.missionId},ready.author);
+    const id=(await rows()).at(-1).ticket_id;
+    await remoteWrite(db=>db.prepare('UPDATE review_tickets SET expires_at=? WHERE ticket_id=?').run(old,id));
+    const reviewer=await f.session('zana-chatgpt','zc_reviewer');
+    assert.match((await f.call('zana_review_claim',{ticket:ticket.ticket},reviewer)).error,/TICKET_EXPIRED/);
+    await f.runtime.events.flush();
+    const notifications=posts.filter(p=>p.msg.name===REVIEW_DONE_EVENT);
+    assert.deepEqual(notifications.map(p=>p.url),['https://hooks.chatgpt.test.openai.com/author']);
+    assert.deepEqual(notifications[0].msg.data,{ticketId:id,verdict:'EXPIRED'});
+    await f.runtime.review.expire();
+    await f.runtime.events.flush();
+    assert.equal(posts.filter(p=>p.msg.name===REVIEW_DONE_EVENT).length,1);
+  }finally{await f.cleanup();}
+});
+test('F2: expiración perezosa omite tickets publicados o misión inactiva',async()=>{
+  for(const flag of ["verdict='APPROVE'","github_review_id=42","status_posted=1","lifecycle"]){
+    const {posts,options}=donePosts(),f=await remoteFixture(options);
+    try{
+      const ready=await f.authorReady();
+      await subscribeDone(f,ready.author.clientId);
+      const req=await f.call('zana_review_request',{missionId:ready.missionId},ready.author);
+      const id=(await rows()).at(-1).ticket_id;
+      await remoteWrite(db=>{
+        db.prepare('UPDATE review_tickets SET expires_at=? WHERE ticket_id=?').run(old,id);
+        if(flag==='lifecycle')db.prepare("UPDATE active_mission SET lifecycle='CANCELLED' WHERE slot=1").run();
+        else db.prepare('UPDATE review_tickets SET '+flag+' WHERE ticket_id=?').run(id);
+      });
+      assert.match((await f.call('zana_review_claim',{ticket:req.ticket},await f.session())).error,/TICKET_EXPIRED/,flag);
+      await f.runtime.events.flush();
+      assert.equal(posts.filter(p=>p.msg.name===REVIEW_DONE_EVENT).length,0,flag);
+    }finally{await f.cleanup();}
+  }
+});
+
+
+test('F2: roundsUsedIn descuenta solo tickets de la misión consultada',async()=>{
+  const f=await remoteFixture();
+  try{
+    const ready=await f.authorReady();
+    await newTicket(f,ready);
+    await newTicket(f,ready);
+    const tickets=await rows();
+    assert.equal(tickets.length,2);
+    await remoteWrite(db=>{
+      db.prepare("UPDATE review_tickets SET mission_id=?,state='EXPIRED' WHERE ticket_id=?")
+        .run('00000000-0000-4000-8000-000000000099',tickets[0].ticket_id);
+      db.prepare("UPDATE review_tickets SET state='EXPIRED' WHERE ticket_id=?").run(tickets[1].ticket_id);
+    });
+    const mission=await state();
+    assert.equal(mission.reviewCount,2);
+    assert.equal(await remoteRead(db=>f.runtime.review.roundsUsedIn(db,mission)),1);
+  }finally{await f.cleanup();}
 });

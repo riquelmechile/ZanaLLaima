@@ -6,7 +6,7 @@ import {makePlan,alternatives} from './helpers/plan-fixture.mjs';
 import {draftProjectPlan} from '../src/project-discovery.mjs';
 import {remoteRead,remoteWrite,transact} from '../src/store.mjs';
 import {loadRun,saveRun} from '../src/project-run-store.mjs';
-import {claimMilestone,recordOutsidePlan,cancelProjectRun} from '../src/project-orchestrator.mjs';
+import {claimMilestone,recordOutsidePlan,cancelProjectRun,releaseMilestone} from '../src/project-orchestrator.mjs';
 
 const gh={repo:'o/r',base:'main'};
 const lenses=['risk','readability','reliability','resilience'];
@@ -23,6 +23,12 @@ function fakeAllPulls(f){
   return states;
 }
 const run=f=>f.call('zana_project_next',{repo:'o/r'},f.owner);
+// Espera la entrega iniciada por la tool (nunca fuerza flush ni depende del timer de 30 s).
+async function waitEvents(posts,n){
+  for(let i=0;i<300&&posts.filter(x=>x.eventId||x.data?.eventId).length<n;i++)
+    await new Promise(resolve=>setTimeout(resolve,10));
+  assert.equal(posts.filter(x=>x.eventId||x.data?.eventId).length,n,'faltó flush tras commit');
+}
 async function setup(f,two=false){
   f.owner=await f.session();
   let w=await f.call('zana_workspace_create',{idea:'Crear un sistema de hitos extensible'},f.owner);
@@ -854,7 +860,13 @@ test('C1: cancel conserva identidad de misión y usa withMissionLock',async()=>{
 });
 
 test('C1: búsqueda por rama omite pulls no fusionados o de otro head.ref',async()=>{
-  const posts=[];const f=await remoteFixture({runtimeOptions:{eventPost:async(u,h,b)=>{const x=JSON.parse(b);posts.push(x);return {status:200,body:JSON.stringify({challenge:x.challenge})};}}});
+  const posts=[];let release;
+  const gate=new Promise(done=>{release=done;});
+  const f=await remoteFixture({runtimeOptions:{eventPost:async(u,h,b)=>{
+    const x=JSON.parse(b);
+    if(x.eventId)await gate;
+    posts.push(x);return {status:200,body:JSON.stringify({challenge:x.challenge})};
+  }}});
   try{
     const started=await setup(f),m=await init(f,{milestone:{id:'core',final:true}});
     const identity={clientId:f.owner.clientId,host:'zana-chatgpt'};
@@ -864,10 +876,17 @@ test('C1: búsqueda por rama omite pulls no fusionados o de otro head.ref',async
     assert.equal((await approvedMerge(f,m)).run.recorded,false);const real=f.api.state.pulls.at(-1);
     await remoteWrite(db=>{db.exec('DROP TRIGGER deny_part_search');db.prepare('DELETE FROM review_tickets WHERE mission_id=?').run(m.id);const row=db.prepare("SELECT seq,detail FROM remote_audit WHERE mission_id=? AND tool='zana_merge.result' AND outcome='MERGED' ORDER BY seq DESC LIMIT 1").get(m.id);db.prepare('UPDATE remote_audit SET detail=? WHERE seq=?').run(JSON.stringify({...JSON.parse(row.detail),mergeCommitSha:null}),row.seq);});
     f.api.state.pulls.unshift({...structuredClone(real),number:88,head:{...real.head,ref:'otra'}},{...structuredClone(real),number:89,merged:false,merged_at:null});
-    const v=await f.call('zana_mission_cancel',{},f.owner);assert.equal(v.run.recorded,true,v.error);
+    const pending=f.call('zana_mission_cancel',{},f.owner);
+    const fast=await Promise.race([pending.then(()=>true),new Promise(done=>setTimeout(()=>done(false),2200))]);
+    release();
+    const v=await pending;assert.equal(v.run.recorded,true,v.error);
+    assert.equal(fast,true,'cancel debe responder sin esperar webhook bloqueado');
     assert.equal((await remoteRead(db=>loadRun(db,started.projectId).milestones[0].parts[0].prNumber)),real.number);
+    await waitEvents(posts,2);
     assert.deepEqual(posts.filter(x=>x.eventId).map(x=>x.name).sort(),['zana.project.milestone_done','zana.project.ready_to_deliver']);
-    await f.call('zana_mission_cancel',{},f.owner);
+    const replay=await f.call('zana_mission_cancel',{},f.owner);
+    assert.match(replay.error??'',/Mission not active/);
+    await waitEvents(posts,2);
     assert.equal(posts.filter(x=>x.eventId).length,2,'cancel repetido no duplica eventos');
   }finally{await f.cleanup();}
 });
@@ -955,9 +974,12 @@ test('E1: caída de cola no revierte el merge y registra el error',async()=>{
 });
 
 test('E1: reconcile attach acreditado emite una sola vez ambos eventos',async()=>{
-  const posts=[];
+  const posts=[];let release;
+  const gate=new Promise(done=>{release=done;});
   const eventPost=async(url,headers,body)=>{
-    const data=JSON.parse(body);posts.push({url,data});
+    const data=JSON.parse(body);
+    if(data.eventId)await gate;
+    posts.push({url,data});
     return {status:200,body:JSON.stringify(data.type==='verification'?{challenge:data.challenge}:{})};
   };
   const f=await remoteFixture({runtimeOptions:{eventPost}});
@@ -978,16 +1000,20 @@ test('E1: reconcile attach acreditado emite una sola vez ambos eventos',async()=
     fakeAllPulls(f);
     const params={repo:'o/r',expectedRevision:(await run(f)).revision,milestoneId:'core',missionId:m.id,
       final:true,action:'attach'};
-    const attached=await f.call('zana_project_reconcile',params,f.owner);
+    const pending=f.call('zana_project_reconcile',params,f.owner);
+    const fast=await Promise.race([pending.then(()=>true),new Promise(done=>setTimeout(()=>done(false),2200))]);
+    release();
+    const attached=await pending;
     assert.equal(attached.recorded,true,attached.error);
+    assert.equal(fast,true,'reconcile debe responder sin esperar webhook bloqueado');
     assert.equal(attached.runStatus,'READY_TO_DELIVER');
-    await f.runtime.events.flush();
+    await waitEvents(posts,2);
     assert.deepEqual(posts.filter(x=>x.data.eventId).map(x=>x.data.name).sort(),
       ['zana.project.milestone_done','zana.project.ready_to_deliver']);
     const replay=await f.call('zana_project_reconcile',
       {...params,expectedRevision:(await run(f)).revision},f.owner);
     assert.equal(replay.already,true,replay.error);
-    await f.runtime.events.flush();
+    await waitEvents(posts,2);
     assert.equal(posts.filter(x=>x.data.eventId).length,2);
   }finally{await f.cleanup();}
 });
@@ -1024,6 +1050,7 @@ test('E1 r4: dos hitos usan ids distintos y solo último anuncia entrega',async(
       delivery:{mode:'webhook',url:'https://hooks.example.com/'+name,secret:'whsec_'+Buffer.alloc(32,8).toString('base64')}});
     let m=await init(f,{milestone:{id:'core',final:true}});
     assert.equal((await approvedMerge(f,m,7,'a')).run.status,'DONE');
+    await waitEvents(posts,1);
     let sent=posts.filter(x=>x.eventId);
     assert.deepEqual(sent.map(x=>x.name),[done],'primer hito no anuncia entrega');
     assert.equal(sent[0].data.milestoneId,'core');
@@ -1034,6 +1061,7 @@ test('E1 r4: dos hitos usan ids distintos y solo último anuncia entrega',async(
     f.runtime.github.merge=async(...args)=>({...await originalMerge(...args),sha:sha('8')});
     const merged=await approvedMerge(f,m,8,'b');
     assert.equal(merged.run.runStatus,'READY_TO_DELIVER',merged.run.reason);
+    await waitEvents(posts,3);
     sent=posts.filter(x=>x.eventId);
     assert.deepEqual(sent.map(x=>x.name).sort(),[done,done,ready].sort());
     assert.deepEqual(sent.filter(x=>x.name===done).map(x=>x.data.milestoneId),['core','ship']);
@@ -1056,5 +1084,72 @@ test('E1 r4: fallo en segundo queueEvent revierte ambos y conserva DONE con audi
     assert.equal(await remoteRead(db=>db.prepare("SELECT COUNT(*) n FROM metadata WHERE key LIKE 'zana:evout:%'").get().n),0,'SAVEPOINT deshace el primero');
     const audit=await f.runtime.readAudit({missionId:m.id,limit:100});
     assert.ok(audit.some(x=>x.detail?.code==='PROJECT_EVENT_QUEUE_FAILED'));
+  }finally{await f.cleanup();}
+});
+
+
+test('F2: merge no espera webhook lento y entrega evento tras responder',async()=>{
+  const sent=[];let release;
+  const gate=new Promise(resolve=>{release=resolve;});
+  const f=await remoteFixture({runtimeOptions:{eventPost:async(url,headers,body)=>{
+    const data=JSON.parse(body);
+    if(data.type==='verification')return {status:200,body:JSON.stringify({challenge:data.challenge})};
+    await gate;sent.push(data);
+    return {status:200,body:'{}'};
+  }}});
+  try{
+    await setup(f);
+    const owner={clientId:f.owner.clientId,host:'zana-chatgpt'};
+    for(const name of ['zana.project.milestone_done','zana.project.ready_to_deliver'])
+      await f.runtime.events.subscribe(owner,{name,arguments:{host:owner.host},
+        delivery:{mode:'webhook',url:'https://hooks.example.com/f2-'+name,
+          secret:'whsec_'+Buffer.alloc(32,6).toString('base64')}});
+    const m=await init(f,{milestone:{id:'core',final:true}});
+    const pending=approvedMerge(f,m);
+    const early=await Promise.race([pending.then(()=>true),new Promise(resolve=>setTimeout(()=>resolve(false),2400))]);
+    release();
+    const merged=await pending;
+    assert.equal(merged.run?.recorded,true,merged.error);
+    assert.equal(early,true,'merge esperó webhook lento luego del commit');
+    for(let i=0;i<100&&sent.filter(x=>x.eventId).length<2;i++)
+      await new Promise(resolve=>setTimeout(resolve,10));
+    assert.deepEqual(sent.filter(x=>x.eventId).map(x=>x.name).sort(),
+      ['zana.project.milestone_done','zana.project.ready_to_deliver']);
+  }finally{release();await f.cleanup();}
+});
+
+
+test('F2: reconcile attachPart sin hito RUNNING emite DONE y READY sin flush manual',async()=>{
+  const posts=[];
+  const f=await remoteFixture({runtimeOptions:{eventPost:async(url,headers,body)=>{
+    const data=JSON.parse(body);posts.push(data);
+    return {status:200,body:JSON.stringify({challenge:data.challenge})};
+  }}});
+  try{
+    const started=await setup(f);
+    const identity={clientId:f.owner.clientId,host:'zana-chatgpt'};
+    for(const name of ['zana.project.milestone_done','zana.project.ready_to_deliver'])
+      await f.runtime.events.subscribe(identity,{name,arguments:{host:identity.host},
+        delivery:{mode:'webhook',url:'https://hooks.example.com/f2-'+name,
+          secret:'whsec_'+Buffer.alloc(32,7).toString('base64')}});
+    const m=await init(f,{milestone:{id:'core',final:true}});
+    await remoteWrite(db=>db.exec("CREATE TRIGGER f2_fail_part BEFORE INSERT ON metadata WHEN NEW.key LIKE 'zana:run:%' BEGIN SELECT RAISE(ABORT,'PART_FAILED'); END"));
+    assert.equal((await approvedMerge(f,m)).run.recorded,false);
+    await remoteWrite(db=>{
+      db.exec('DROP TRIGGER f2_fail_part');
+      const prior=loadRun(db,started.projectId);
+      const released=releaseMilestone(prior,{expectedRevision:prior.revision,missionId:m.id,
+        reason:'OPERATOR_RELEASE',now:new Date().toISOString()});
+      saveRun(db,prior,released,{missionId:m.id});
+    });
+    fakeAllPulls(f);
+    const attached=await f.call('zana_project_reconcile',
+      {repo:'o/r',expectedRevision:(await run(f)).revision,milestoneId:'core',
+        missionId:m.id,final:true,action:'attach'},f.owner);
+    assert.equal(attached.recorded,true,attached.error);
+    assert.equal(attached.runStatus,'READY_TO_DELIVER');
+    await waitEvents(posts,2);
+    assert.deepEqual(posts.filter(x=>x.eventId).map(x=>x.name).sort(),
+      ['zana.project.milestone_done','zana.project.ready_to_deliver']);
   }finally{await f.cleanup();}
 });

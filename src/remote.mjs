@@ -12,7 +12,7 @@ import {schemas,TOOL_DESCRIPTIONS} from './mcp.mjs';
 import {capabilityContract} from './capabilities.mjs';
 import {createMission,startBatch,completeUnit,publicStatus} from './core.mjs';
 import {transact,readState,remoteRead,remoteWrite} from './store.mjs';
-import {GitHubApi,validRefName} from './github-api.mjs';
+import {GitHubApi,GitHubApiError,validRefName} from './github-api.mjs';
 import {remoteConfig,repoAllowed} from './remote-config.mjs';
 import {DownstreamGateway,classify} from './downstream.mjs';
 import {createGitHubPolicy,CATALOG,liveProblems,missionBranch} from './github-policy.mjs';
@@ -459,34 +459,44 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       return {cancelled:true,status:next.status,revision:next.revision,projectId:run.projectId,
         ...(saved.memoryError?{memoryError:saved.memoryError}:{})};
     }),
-    async zana_project_delivery_status({repo}){
-      // No ownerClient restriction: a reviewer or a second OAuth client may inspect.
+    async zana_project_delivery_status({repo},session){
       const run=await rr(db=>{
         const row=db.prepare('SELECT project_id FROM projects WHERE repo=? COLLATE NOCASE ORDER BY created_at DESC LIMIT 1').get(repo);
         return row&&loadRun(db,row.project_id);
       });
       if(!run)return {ready:false,code:'RUN_NOT_FOUND'};
+      if(run.ownerClient!==session.clientId)throw new Error('RUN_OTHER_CLIENT: la corrida pertenece a otro cliente');
       if(run.status!=='READY_TO_DELIVER')
         return {ready:false,code:'PROJECT_INCOMPLETE',pending:run.milestones.filter(m=>m.status!=='DONE').map(m=>m.id)};
       try{
         const sha=await github.branchHead(run.repo,run.base);
         const milestones=run.milestones.map(m=>({id:m.id,parts:m.parts.map(p=>({
           prNumber:p.prNumber,mergeCommitSha:p.mergeCommitSha}))}));
-        for(const m of milestones)for(const p of m.parts)
-          if(!await github.containsCommit(run.repo,p.mergeCommitSha,sha))
+        for(const m of milestones)for(const p of m.parts){
+          let integrated;
+          try{integrated=await github.containsCommit(run.repo,p.mergeCommitSha,sha);}
+          catch(error){
+            if(error instanceof GitHubApiError&&error.status===404)
+              return {ready:false,code:'MILESTONE_COMMIT_MISSING',milestoneId:m.id,
+                prNumber:p.prNumber,mergeCommitSha:p.mergeCommitSha};
+            throw error;
+          }
+          if(!integrated)
             return {ready:false,code:'MILESTONE_NOT_INTEGRATED',milestoneId:m.id,
               prNumber:p.prNumber,mergeCommitSha:p.mergeCommitSha,sha};
+        }
         const checks=evaluateRuns(await github.checkRuns(run.repo,sha),sha,
           checksForRepo(config,run.repo).requiredChecks);
         if(checks.state!=='SUCCESS')return {ready:false,code:'CI_NOT_GREEN',sha,checks};
         // The base may advance during network calls; never certify a stale head.
-        if(await github.branchHead(run.repo,run.base)!==sha)
-          return {ready:false,code:'GITHUB_UNAVAILABLE'};
+        const currentSha=await github.branchHead(run.repo,run.base);
+        if(currentSha!==sha)return {ready:false,code:'BASE_MOVED',sha,currentSha};
         await assessProjectDelivery(run,{repo:run.repo,expectedSha:sha},
           async()=>({sha,ci:checks.state,integrationVerified:true}));
         const latest=await rr(db=>loadRun(db,run.projectId));
-        if(latest?.revision!==run.revision||latest.status!=='READY_TO_DELIVER')
+        if(latest?.status!=='READY_TO_DELIVER')
           return {ready:false,code:'PROJECT_INCOMPLETE',pending:latest?.milestones.filter(m=>m.status!=='DONE').map(m=>m.id)??[]};
+        if(latest.revision!==run.revision)return {ready:false,code:'RUN_CHANGED',revision:latest.revision};
         return {ready:true,sha,repo:run.repo,base:run.base,milestones,checks};
       }catch{return {ready:false,code:'GITHUB_UNAVAILABLE'};}
     },

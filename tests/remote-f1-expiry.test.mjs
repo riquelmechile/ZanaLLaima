@@ -66,16 +66,19 @@ test('F1 OPEN: reembolsa una vez, emite EXPIRED solo al cliente autor y permite 
     assert.equal((await state()).reviewCount,2);
   }finally{await f.cleanup();}
 });
-test('F1 CLAIMED sin veredicto: ABANDONED devuelve ronda, pero ticket con veredicto no devuelve ni avisa',async()=>{
-  const f=await remoteFixture();
+test('F1 CLAIMED sin veredicto: ABANDONED devuelve ronda y avisa, con veredicto no avisa',async()=>{
+  const {posts,options}=donePosts(),f=await remoteFixture(options);
   try{
     const ready=await f.authorReady();
+    await subscribeDone(f,ready.author.clientId);
     const r=await f.call('zana_review_request',{missionId:ready.missionId},ready.author);
     const id=(await rows())[0].ticket_id;
     const reviewer=await f.session();
     assert.equal((await f.call('zana_review_claim',{ticket:r.ticket},reviewer)).state,'CLAIMED');
     await expireTicket(f,id,'CLAIMED');
     assert.equal((await rows())[0].state,'ABANDONED');
+    await f.runtime.events.flush();
+    assert.deepEqual(posts.filter(x=>x.msg.name===REVIEW_DONE_EVENT).map(x=>x.msg.data),[{ticketId:id,verdict:'EXPIRED'}]);
     assert.equal((await state()).reviewCount,1);
     assert.equal(await used(),0);
     const id2=await newTicket(f,ready);
@@ -84,6 +87,8 @@ test('F1 CLAIMED sin veredicto: ABANDONED devuelve ronda, pero ticket con veredi
     assert.equal((await rows()).at(-1).state,'ABANDONED');
     assert.equal((await state()).reviewCount,2);
     assert.equal(await used(),1);
+    await f.runtime.events.flush();
+    assert.equal(posts.filter(x=>x.msg.name===REVIEW_DONE_EVENT).length,1);
   }finally{await f.cleanup();}
 });
 test('F1: máximo cinco tickets terminales descontados sin modificar reviewCount',async()=>{
@@ -367,5 +372,48 @@ test('F2: roundsUsedIn descuenta solo tickets de la misión consultada',async()=
     const mission=await state();
     assert.equal(mission.reviewCount,2);
     assert.equal(await remoteRead(db=>f.runtime.review.roundsUsedIn(db,mission)),1);
+  }finally{await f.cleanup();}
+});
+
+test('F2: un evento perezoso sale por microtask sin flush manual ni temporizador de barrido',async()=>{
+  const {posts,options}=donePosts(),f=await remoteFixture(options);
+  try{
+    const ready=await f.authorReady(),id=await newTicket(f,ready);
+    await subscribeDone(f,ready.author.clientId);
+    await remoteWrite(db=>db.prepare('UPDATE review_tickets SET expires_at=? WHERE ticket_id=?').run(old,id));
+    const next=await f.call('zana_review_request',{missionId:ready.missionId},ready.author);
+    assert.equal(next.error,undefined,next.error);
+    for(let n=0;n<20&&!posts.some(p=>p.msg.name===REVIEW_DONE_EVENT);n++)await sleep(20);
+    assert.deepEqual(posts.filter(p=>p.msg.name===REVIEW_DONE_EVENT).map(p=>p.msg.data),
+      [{ticketId:id,verdict:'EXPIRED'}]);
+  }finally{await f.cleanup();}
+});
+
+test('F1: ausencia de transacción relanza error original antes de ROLLBACK TO savepoint',async()=>{
+  const f=await remoteFixture(),original=f.runtime.events.queue;
+  try{
+    const ready=await f.authorReady(),id=await newTicket(f,ready);
+    await remoteWrite(db=>db.prepare('UPDATE review_tickets SET expires_at=? WHERE ticket_id=?').run(old,id));
+    f.runtime.events.queue=(db,args)=>{
+      if(args.name!==REVIEW_DONE_EVENT)return original(db,args);
+      db.exec('ROLLBACK');throw Error('QUEUE_TX_ABORTED');
+    };
+    await assert.rejects(f.runtime.review.expire(),/QUEUE_TX_ABORTED/);
+  }finally{f.runtime.events.queue=original;await f.cleanup();}
+});
+
+test('F1: zana_correction_start usa rondas efectivas y acredita EXPIRED sin veredicto',async()=>{
+  const f=await remoteFixture();
+  try{
+    const ready=await f.authorReady();
+    const expiredId=await newTicket(f,ready);
+    await expireTicket(f,expiredId);
+    const reviewed=await newTicket(f,ready);
+    await remoteWrite(db=>db.prepare("UPDATE review_tickets SET state='FINALIZED',verdict='REQUEST_CHANGES',status_posted=1 WHERE ticket_id=?").run(reviewed));
+    await transact(m=>{m.reviewCount=m.budget.maxReviewRounds;m.revision++;return m;});
+    assert.equal(await used(),4);
+    const correction=await f.call('zana_correction_start',{missionId:ready.missionId},ready.author);
+    assert.equal(correction.error,undefined,correction.error);
+    assert.match(correction.unitId,/^fix-/);
   }finally{await f.cleanup();}
 });

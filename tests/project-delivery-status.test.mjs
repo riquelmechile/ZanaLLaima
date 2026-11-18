@@ -101,7 +101,7 @@ test('GitHub caído se informa sin elevar prueba; revisora sigue sin ser escrito
   }finally{await f.cleanup();}
 });
 
-test('revisora con ticket reclamado puede leer sin quedar escritora',async()=>{
+test('revisora con ticket reclamado recibe RUN_NOT_FOUND sin quedar escritora',async()=>{
   const f=await remoteFixture();
   try{
     const {author,missionId}=await f.authorReady();
@@ -250,4 +250,17 @@ test('compare 503 sigue informando GITHUB_UNAVAILABLE',async()=>{
     const r=await f.call('zana_project_delivery_status',{repo},owner);
     assert.deepEqual(r,{ready:false,code:'GITHUB_UNAVAILABLE'});
   }finally{await f.cleanup();}
+});
+
+test('404 de branchHead o checkRuns informa GITHUB_UNAVAILABLE, no commit perdido',async()=>{
+  for(const stage of ['branchHead','checkRuns']){
+    const {f,owner,run}=await setup();
+    try{
+      await complete(f,run);
+      if(stage==='branchHead')f.api.state.failNext={status:404,message:'Branch not found'};
+      else f.api.state.onCompareFiles=()=>{f.api.state.failNext={status:404,message:'check runs missing'};};
+      const r=await f.call('zana_project_delivery_status',{repo},owner);
+      assert.deepEqual(r,{ready:false,code:'GITHUB_UNAVAILABLE'},stage);
+    }finally{await f.cleanup();}
+  }
 });

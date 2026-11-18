@@ -1,3 +1,12 @@
+## 0.10.0: orquestador de hitos y continuidad (18 nov 2026)
+
+**Implementado, probado y desplegado en Oracle:** orquestador de hitos B1–C6, `zana_project_run_start`, `zana_project_next`, `zana_project_reconcile`, `zana_project_run_cancel`, y gate de entrega `zana_project_delivery_status` (D1, D2).
+**Eventos implementados y probados, aún sin observar en vivo:** `zana.project.milestone_done` y `zana.project.ready_to_deliver` (E1). Tickets vencidos sin veredicto `EXPIRED`/`ABANDONED` no gastan ronda; F1 y F2 cubren barridos y notificación perezosa.
+**Observación real anterior:** circuito ticket → review.ready → 4R → review.done → adopción → merge (content-engine-harness PR #1, 13 nov); monitor revisor (PR #3, 14 nov).
+**Pendiente de observar:** una corrida de hitos completa, la emisión de eventos de proyecto y la entrega en un proyecto real. No equiparar tests locales con ejecución en vivo.
+
+<!-- HISTORICAL_VERSIONS_START -->
+
 ## 0.9.0: del plan al repositorio revisado (12 nov 2026)
 
 **Objetivo.** Que GPT lleve un proyecto desde la idea hasta un repositorio creado, configurado y revisado, manteniendo decisiones explícitas del operador y separación de sesiones.
@@ -18,7 +27,7 @@ Lo que sigue:
 - [ ] Adoptar el protocolo MCP `2026-07-28`.
 - [ ] Ordenar la generación de adopción por `seq` en vez de `created_at` para resistir retrocesos del reloj.
 
-<!-- HISTORICAL_VERSIONS_START -->
+
 
 
 ## 0.8.0: de una misión a un proyecto, primera parte (11 nov 2026)

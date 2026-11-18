@@ -73,7 +73,7 @@ Your real values (domain, accounts, tokens and operator password) live **only** 
 
 ## Project status
 
-**Version 0.9.0, alpha.** This is experimental software for **one instance per operator**. Remote mode has been in real use since November 9, 2026; the project capabilities marked as observed were used live on November 12, 2026.
+**Version 0.10.0, alpha.** Experimental software for **one instance per operator**. Remote mode has been live since November 9, 2026; the ticket → 4R → `zana.review.done` → adoption → merge loop was observed in content-engine-harness PR #1 (Nov 13), and the reviewer monitor in PR #3 (Nov 14).
 
 | Component | Status |
 | --- | --- |
@@ -87,9 +87,11 @@ Your real values (domain, accounts, tokens and operator password) live **only** 
 | Operator plan approval (`zana_plan_approval_request`, `zana_plan_approval_status`, `/operator/approve` page) | Fallback when the client does not display panels: the decision is made on the server page with operator authentication |
 | Repository creation (`zana_bootstrap_execute`) | Observed in real use since November 12, 2026: the first repository created this way was a real operator project |
 | Optional full GitHub access for the orchestrator (`zana_github_request`, `ZANA_GITHUB_FULL_ACCESS`) | Observed in real use: GPT configured CI and branch protection on the new repository |
-| Automatic 4R through `zana.review.ready` | Observed in real use: the host monitor woke a new run, claimed the ticket without a `ZR-` code, and published a review that requested changes, without manually opening a conversation |
-| `zana.review.done` and `zana_mission_adopt` | Implemented, tested and deployed with 0.9.0; not yet observed live. The lease lasts `claimTtlMinutes` (240 min by default) and belongs only to the latest adoption |
-| `project-orchestrator` milestone run | Connected to the server and locally tested, **not deployed or observed live**; `src/project-review-delegation.mjs`, `src/project-delivery.mjs` and `src/project-events.mjs` remain unimported auxiliary contracts |
+| Automatic 4R through `zana.review.ready` | **Observed live** with the reviewer monitor for content-engine-harness PR #3 on November 14, 2026; an HTTP 2xx is not proof of host wake-up |
+| `zana.review.done` and `zana_mission_adopt` | **Observed live** in the ticket → review.ready → 4R → review.done → adoption → merge loop for content-engine-harness PR #1 on November 13, 2026. The latest adoption lease lasts `claimTtlMinutes` (240 minutes by default) |
+| Milestone orchestrator (`zana_project_run_start`, `zana_project_next`, `zana_project_reconcile`, `zana_project_run_cancel`, `zana_project_delivery_status`) | **Complete, implemented, tested and deployed** on Oracle on November 18, 2026 (59 tools, schemaVersion 8); a full real-project milestone run and delivery have **not been observed live** |
+| Project events `zana.project.milestone_done` and `zana.project.ready_to_deliver` | Implemented and tested, **not yet observed live**. `project-delivery.mjs` is imported by `remote.mjs`; `project-events.mjs` and `project-review-delegation.mjs` are not imported (effective events live in `mcp-events.mjs`) |
+| Expired review tickets without a verdict | `EXPIRED`/`ABANDONED` do not consume an effective review round (up to five credits); F2 also queues lazy-expiration notifications without waiting for a scheduled sweep |
 | Per-repository CI (`ZANA_REPO_CHECKS_JSON`) and account-wide allowed repositories (`owner/*`) | Implemented and tested |
 | One Actions run per SHA | Observed: a mission with one CI fix and one review correction round used 3 runs, one per SHA |
 | Live negative cases (the reviewer tries to write, the author claims its own ticket, a push after the ticket) | Tested against fake servers; **not observed live** |

@@ -73,7 +73,7 @@ Tus valores reales (dominio, cuentas, tokens y clave del operador) viven **solo*
 
 ## Estado del proyecto
 
-**Versión 0.9.0, alfa.** Es software experimental para **una instancia por operador**. El modo remoto está en uso real desde el 9 de noviembre de 2026; las capacidades de proyecto indicadas como observadas se usaron en vivo el 12 de noviembre de 2026.
+**Versión 0.10.0, alfa.** Software experimental para **una instancia por operador**. El modo remoto se utiliza desde el 9 de noviembre de 2026; el circuito ticket → revisión 4R → `zana.review.done` → adopción → merge se observó en el PR #1 de content-engine-harness (13 nov) y el monitor revisor en su PR #3 (14 nov).
 
 | Componente | Estado |
 | --- | --- |
@@ -87,10 +87,11 @@ Tus valores reales (dominio, cuentas, tokens y clave del operador) viven **solo*
 | Aprobación del plan por el operador (`zana_plan_approval_request`, `zana_plan_approval_status`, página `/operator/approve`) | Respaldo disponible cuando el cliente no muestra paneles: la decisión se toma en la página del servidor con autenticación del operador |
 | Creación del repositorio (`zana_bootstrap_execute`) | Observada en uso real desde el 12 de noviembre de 2026: el primer repositorio creado así fue un proyecto real del operador |
 | Acceso GitHub completo opcional del orquestador (`zana_github_request`, `ZANA_GITHUB_FULL_ACCESS`) | Observado en uso real: GPT configuró CI y protección del repositorio nuevo |
-| 4R automática por evento `zana.review.ready` | Observada en uso real: el monitor del anfitrión despertó una ejecución nueva, reclamó el ticket sin código `ZR-` y publicó una revisión que pidió cambios, sin abrir una conversación manual |
-| Evento `zana.review.done` y `zana_mission_adopt` | Implementados, probados y desplegados con 0.9.0; todavía no observados en vivo. El lease dura `claimTtlMinutes` (240 min por defecto) y solo vale para la adopción más reciente |
-| `project-orchestrator` y corrida de hitos (`zana_project_run_start`, `zana_project_next`, `zana_project_reconcile`, `zana_project_run_cancel`) | **Conectados al servidor, sin desplegar ni observar en vivo**; probados localmente, con revisiones optimistas y memoria proyectada |
-| `project-review-delegation`, `project-delivery` y `project-events` | Contratos auxiliares; siguen **sin importarse** `src/project-review-delegation.mjs`, `src/project-delivery.mjs` y `src/project-events.mjs`. Los gates efectivos operan por otras tools/rutas remotas |
+| 4R automática por evento `zana.review.ready` | **Observada en vivo** en el monitor revisor con el PR #3 de content-engine-harness, 14 nov 2026. La recepción HTTP por sí sola no demuestra el despertar del anfitrión |
+| Evento `zana.review.done` y `zana_mission_adopt` | **Observados en vivo** durante el circuito ticket → review.ready → 4R → review.done → adopción → merge del PR #1 de content-engine-harness, 13 nov 2026; la adopción vigente conserva su lease de `claimTtlMinutes` (240 min por defecto) |
+| Orquestador de hitos (`zana_project_run_start`, `zana_project_next`, `zana_project_reconcile`, `zana_project_run_cancel`, `zana_project_delivery_status`) | **Completo, implementado, probado y desplegado** en Oracle el 18 nov 2026 (59 tools, schemaVersion 8). La corrida de hitos completa de un proyecto real y la entrega **no están observadas en vivo** |
+| Eventos de proyecto (`zana.project.milestone_done`, `zana.project.ready_to_deliver`) y contratos auxiliares | Eventos implementados y probados, **sin observación en vivo**. `src/project-delivery.mjs` está importado en `src/remote.mjs`; `src/project-events.mjs` y `src/project-review-delegation.mjs` no están importados. Los eventos efectivos están en `src/mcp-events.mjs` |
+| Tickets vencidos sin veredicto | `EXPIRED`/`ABANDONED` no consumen ronda efectiva (máximo cinco créditos); F2 también encola el aviso EXPIRED en vencimientos perezosos sin depender del barrido periódico |
 | CI por repositorio (`ZANA_REPO_CHECKS_JSON`) y repos permitidos por cuenta (`owner/*`) | Implementado y probado |
 | Una corrida de Actions por SHA | Observado: una misión con una corrección de CI y una ronda de corrección de la revisión gastó 3 corridas, una por SHA |
 | Casos negativos en vivo (la revisora intenta escribir, la autora reclama su ticket, push después del ticket) | Probados contra servidores falsos; **sin observar en vivo** |

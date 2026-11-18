@@ -2,37 +2,29 @@
 
 ## [Sin publicar]
 
-- D1: incorpora verificación de entrega de hitos v2 mediante ascendencia GitHub y checks requeridos sobre la cabeza de la base; tool MCP solo lectura, sin despliegue.
-- F1 R4: calcula rondas efectivas desde tickets EXPIRED/ABANDONED sin veredicto (hasta 5), mantiene reviewCount y restore R11 intactos; notifica EXPIRED solo en barridos y filtra avisos obsoletos.
-
-- C6: aclara cierre de misiones fuera del plan sin campo run, sincroniza guías de merge y elimina redundancias; refuerza pruebas de códigos completos.
-- C5: cierre seguro tras merge/attach, autorización exclusiva de HITOS, release condicional y cierre externo de PR; ROADMAP histórico, herramientas MCP reales y códigos completos.
-
-- C4: orquestación de cierre/archivo de hitos, política de PR y merge, documentación y propagación RUN_CORRUPT; tests de herramientas y orden de PR.
-
-- C3: separa motivo de cancelación de memoria servidor, conserva revisiones entre corridas, elige el PR más nuevo en release y conecta la guía operativa del orquestador con conciliación y seguridad.
-
-- C2: reconcile elige PR fusionado único o valida todos los PR antes de liberar, usa la misión canónica y rechaza acciones desconocidas; cancelación explícita de corrida con control de dueño, revisión y memoria, más regresiones de seguridad.
-
-- B2b R2: ownership por misión antes de marcar escritor, cancelación sin evidencia inventada, RUN_CORRUPT tolerado, prefijos reservados y recuperación de outsidePlan desde auditoría tras retención de 50; regresiones y gates.
-
-- B2b: resúmenes de cierre con prefijo de hito/parte o fuera del plan generado en el servidor; los escritores de una corrida requieren su clientId OAuth antes de marcar sesión; cancelación tras merge no vuelve el hito a PENDING.
-- B2c: zana_merge preserva MERGED, headSha y mergeCommitSha ante fallos de auditoría y expone AUDIT_UNAVAILABLE, dejando la parte pendiente de reconciliación y reteniendo la evidencia de gates de la misma llamada. Cancel detecta PR fusionados aun sin ticket, consulta GitHub con estado all, recupera mergeCommitSha faltante cuando existe auditoría MERGED, serializa con merge y revalida la identidad de misión en la transacción. Session rebind respeta al dueño del hito y el prefijo del servidor normaliza Cf, U+2028, U+2029, U+0085, VT y FF; RESERVED_PREFIX no rechaza [hitos]. RUN_CORRUPT ya no bloquea close/cancel/start_batch. Un merge humano sin auditoría requiere reconciliación de operador usando cancel/archive del CLI. INVALID_BASE mantiene su prefijo explícito; TOOL_DEADLINE puede preceder un merge ya realizado.
-
-- Las misiones se enlazan a hitos o trabajos fuera del plan y actualizan la corrida al fusionarse o cancelarse, con memoria transaccional y evidencia de los gates.
-
-- La memoria de proyectos endurece `reservedTopic` frente a marcas Unicode e invisibles y conserva los registros posteriores al recorte estricto de 4 KB, con origen de sesión en contexto y búsqueda.
-
-- La memoria distingue `origin: server|session` y `zana_project_next` informa `memoryStale` mientras una proyección esté pendiente.
+## [0.10.0] - 2026-11-18
 
 - La corrida aprobada de hitos ya se persiste, proyecta a memoria y expone el siguiente hito; `RESERVED_TOPIC` protege `hito:`/`proyecto:` y el primer inicio retira entradas previas de esos espacios.
-
+- La memoria distingue `origin: server|session` y `zana_project_next` informa `memoryStale` mientras una proyección esté pendiente.
+- La memoria de proyectos endurece `reservedTopic` frente a marcas Unicode e invisibles y conserva los registros posteriores al recorte estricto de 4 KB, con origen de sesión en contexto y búsqueda.
+- Las misiones se enlazan a hitos o trabajos fuera del plan y actualizan la corrida al fusionarse o cancelarse, con memoria transaccional y evidencia de los gates.
+- B2b: resúmenes de cierre con prefijo de hito/parte o fuera del plan generado en el servidor; los escritores de una corrida requieren su clientId OAuth antes de marcar sesión; cancelación tras merge no vuelve el hito a PENDING.
+- B2b R2: ownership por misión antes de marcar escritor, cancelación sin evidencia inventada, RUN_CORRUPT tolerado, prefijos reservados y recuperación de outsidePlan desde auditoría tras retención de 50; regresiones y gates.
+- B2c: zana_merge preserva MERGED, headSha y mergeCommitSha ante fallos de auditoría y expone AUDIT_UNAVAILABLE, dejando la parte pendiente de reconciliación y reteniendo la evidencia de gates de la misma llamada. Cancel detecta PR fusionados aun sin ticket, consulta GitHub con estado all, recupera mergeCommitSha faltante cuando existe auditoría MERGED, serializa con merge y revalida la identidad de misión en la transacción. Session rebind respeta al dueño del hito y el prefijo del servidor normaliza Cf, U+2028, U+2029, U+0085, VT y FF; RESERVED_PREFIX no rechaza [hitos]. RUN_CORRUPT ya no bloquea close/cancel/start_batch. Un merge humano sin auditoría requiere reconciliación de operador usando cancel/archive del CLI. INVALID_BASE mantiene su prefijo explícito; TOOL_DEADLINE puede preceder un merge ya realizado.
+- C1: `zana_project_reconcile` certifica en servidor CI, revisión por SHA y merge para adjuntar partes; libera intentos inactivos sin PR fusionado. `zana_mission_init` rechaza PRIOR_PR_OPEN. El CLI no reconcilia la corrida.
+- C2: reconcile elige PR fusionado único o valida todos los PR antes de liberar, usa la misión canónica y rechaza acciones desconocidas; cancelación explícita de corrida con control de dueño, revisión y memoria, más regresiones de seguridad.
+- C3: separa motivo de cancelación de memoria servidor, conserva revisiones entre corridas, elige el PR más nuevo en release y conecta la guía operativa del orquestador con conciliación y seguridad.
+- C4: orquestación de cierre/archivo de hitos, política de PR y merge, documentación y propagación RUN_CORRUPT; tests de herramientas y orden de PR.
+- C5: cierre seguro tras merge/attach, autorización exclusiva de HITOS, release condicional y cierre externo de PR; ROADMAP histórico, herramientas MCP reales y códigos completos.
+- C6: aclara cierre de misiones fuera del plan sin campo run, sincroniza guías de merge y elimina redundancias; refuerza pruebas de códigos completos.
+- D1: incorpora verificación de entrega de hitos v2 mediante ascendencia GitHub y checks requeridos sobre la cabeza de la base; tool MCP solo lectura, sin despliegue.
+- D2 (#110): entrega de hitos con validación de ascensos GitHub y checks sobre el HEAD de base; pruebas y guía sin autorizar despliegue.
+- E1 (#109): eventos MCP de hito DONE y corrida READY_TO_DELIVER, solo al OAuth dueño, punteros sin texto del modelo y cola idempotente dentro de la transacción; un error de cola se registra sin revertir la parte fusionada. Documentados los monitores y sus pruebas.
+- F1 R4: calcula rondas efectivas desde tickets EXPIRED/ABANDONED sin veredicto (hasta 5), mantiene reviewCount y restore R11 intactos; notifica EXPIRED en barridos y, desde F2, también en vencimientos perezosos y filtra avisos obsoletos.
+- F2 (#111): notificación EXPIRED también en expiraciones perezosas, sin esperar al barrido periódico, con deduplicación y envío en microtask.
 - Seguimiento 4R #77: restore y adopción invalidan la excepción del monitor (época monótona), `SESSION_WROTE_ELSEWHERE` bloquea toda sesión escritora, diagnóstico de sesión, clasificación correcta de auditoría y regresiones sin skips.
-
 - El monitor revisor anterior al ticket solo reutiliza una sesión nacida después de la época de marca, con reclamo previo de esa misma encarnación y sin escrituras ni autoría. `zana_ds_github` `index`/`read` no marca; `write` o desconocida sí. Las marcas y la época sobreviven a restore/cuarentena (se conserva la época máxima), se auditan rechazos downstream `REFUSED` y no se marca a una revisora cuyo write se rechaza previamente. Las sesiones previas al despliegue y las de un rollback sin marca requieren recrear el monitor; el servidor no ve conversaciones ni conectores externos.
-
 - `zana_bootstrap_setup` conecta el setup de repositorios nuevos al servidor MCP y al panel: revisora Write, protección `zana/4r`, checks por repositorio y auditoría sin secretos; corrige timestamps, errores y visibilidad de `runSeq`.
-
 - Núcleo idempotente para preparar repositorios recién creados: revisora con Write, protección de la rama default y detección del workflow configurado.
 - La protección de rama de repositorios administrados exige `zana/4r`, no el job lanzado por `workflow_dispatch`; es una segunda llave que no autentica al publicador ni sustituye la verificación de CI e identidad de `zana_merge`. La adopción vigente se elige por `seq` (orden de inserción) en vez de `created_at`; el corte respecto del último ticket finalizado y el vencimiento del lease siguen usando la hora del servidor (limitación conocida ante retrocesos del reloj).
 
@@ -240,7 +232,3 @@ Versión candidata en PR #1. Sin tag, release ni despliegue.
 - Llaves reales de operador y CI, environment protegido y atestación CI emitida por GitHub.
 - Verificación de aislamiento del sistema operativo y E2E Codex por el operador.
 - Revisión independiente, aprobación de PR sobre SHA exacto y decisión humana de merge.
-
-- PR C1: `zana_project_reconcile` certifica en servidor CI, revisión por SHA y merge para adjuntar partes; libera intentos inactivos sin PR fusionado. `zana_mission_init` rechaza PRIOR_PR_OPEN. El CLI no reconcilia la corrida.
-
-- PR E1: eventos MCP de hito DONE y corrida READY_TO_DELIVER, solo al OAuth dueño, punteros sin texto del modelo y cola idempotente dentro de la transacción; un error de cola se registra sin revertir la parte fusionada. Documentados los monitores y sus pruebas.

@@ -1,10 +1,10 @@
 # Fase 5: auditoría de CI, seguridad del repositorio y release
 
-**Versión del proyecto: ZanaLLaima 0.9.0.** Firma CI por `workflow_run` en `ci-attestation.yml`, política **main-only** y reviewer humano requerido en el environment `ci-attestation`.
+**Versión del proyecto: ZanaLLaima 0.10.0 (alfa).** Firma CI por `workflow_run` en `ci-attestation.yml`, política **main-only** y reviewer humano requerido en el environment `ci-attestation`.
 
-## Qué es la release 0.9.0 y qué no
+## Qué es la release 0.10.0 y qué no
 
-ZanaLLaima 0.9.0 sigue siendo una versión alfa para una instancia por operador. En uso real se observaron el panel MCP Apps de aprobación, la creación de un repositorio, el acceso GitHub completo opcional del orquestador y el monitor `zana.review.ready` que despertó una revisión 4R automática. `zana.review.done` y la reanudación mediante `zana_mission_adopt` están implementados, probados y desplegados, pero todavía no se han observado en vivo.
+ZanaLLaima 0.10.0 es una alfa para una instancia por operador. Incluye orquestador de hitos B1–C6, gate de entrega D1/D2, eventos de proyecto E1 y tickets expirados F1/F2; el servidor con 59 tools y schemaVersion 8 está desplegado en Oracle desde el 18 nov 2026. Se observó en vivo ticket → review.ready → 4R → review.done → adopción → merge en content-engine-harness PR #1 (13 nov), y el monitor revisor en PR #3 (14 nov). **No se han observado en vivo** una corrida completa de hitos de un proyecto real, los eventos de proyecto ni la entrega. El tag/release 0.10.0 no se crea en este PR: requieren CI, revisión y acción posterior del operador.
 
 No es una auditoría independiente ni un servicio multiusuario. El panel confía en que el anfitrión respete la visibilidad app-only y no entregue `_meta` al modelo: un host que filtrara `_meta` y expusiera la tool app-only rompería esa garantía. La revisión sigue separando sesiones y credenciales bajo un mismo dueño; no demuestra independencia organizacional.
 

@@ -389,6 +389,49 @@ test('F2: un evento perezoso sale por microtask sin flush manual ni temporizador
   }finally{await f.cleanup();}
 });
 
+test('F1: SAVEPOINT revierte fila parcial del outbox aunque la cola relance error',async()=>{
+  const {posts,options}=donePosts(),f=await remoteFixture(options),original=f.runtime.events.queue;
+  try{
+    const ready=await f.authorReady(),id=await newTicket(f,ready);
+    await subscribeDone(f,ready.author.clientId);
+    await remoteWrite(db=>db.prepare('UPDATE review_tickets SET expires_at=? WHERE ticket_id=?').run(old,id));
+    f.runtime.events.queue=(db,args)=>{
+      const queued=original(db,args);
+      if(args.name===REVIEW_DONE_EVENT){assert.equal(queued,1);throw Error('QUEUE_AFTER_WRITE');}
+      return queued;
+    };
+    const result=await f.runtime.review.expire();
+    assert.equal(result.expired,1);
+    assert.equal((await rows())[0].state,'EXPIRED');
+    f.runtime.events.queue=original;
+    await f.runtime.events.flush();
+    assert.equal(await remoteRead(db=>db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE 'zana:evout:%'").get().n),0);
+    assert.equal(posts.filter(p=>p.msg.name===REVIEW_DONE_EVENT).length,0);
+  }finally{f.runtime.events.queue=original;await f.cleanup();}
+});
+
+test('F2: zana_review_request vence CLAIMED perezoso y avisa EXPIRED una vez',async()=>{
+  const {posts,options}=donePosts(),f=await remoteFixture(options);
+  try{
+    const ready=await f.authorReady();
+    await subscribeDone(f,ready.author.clientId);
+    const ticket=await f.call('zana_review_request',{missionId:ready.missionId},ready.author);
+    assert.equal(ticket.error,undefined,ticket.error);
+    const id=(await rows())[0].ticket_id;
+    assert.equal((await f.call('zana_review_claim',{ticket:ticket.ticket},await f.session())).state,'CLAIMED');
+    await remoteWrite(db=>db.prepare('UPDATE review_tickets SET claimed_at=? WHERE ticket_id=?').run(old,id));
+    const next=await f.call('zana_review_request',{missionId:ready.missionId},ready.author);
+    assert.equal(next.error,undefined,next.error);
+    assert.deepEqual((await rows()).map(t=>t.state),['ABANDONED','OPEN']);
+    await f.runtime.events.flush();
+    assert.deepEqual(posts.filter(p=>p.msg.name===REVIEW_DONE_EVENT).map(p=>p.msg.data),
+      [{ticketId:id,verdict:'EXPIRED'}]);
+    await f.runtime.review.expire();
+    await f.runtime.events.flush();
+    assert.equal(posts.filter(p=>p.msg.name===REVIEW_DONE_EVENT).length,1);
+  }finally{await f.cleanup();}
+});
+
 test('F1: ausencia de transacción relanza error original antes de ROLLBACK TO savepoint',async()=>{
   const f=await remoteFixture(),original=f.runtime.events.queue;
   try{

@@ -5,6 +5,13 @@
 **Observación real anterior:** circuito ticket → review.ready → 4R → review.done → adopción → merge (content-engine-harness PR #1, 13 nov); monitor revisor (PR #3, 14 nov).
 **Pendiente de observar:** una corrida de hitos completa, la emisión de eventos de proyecto y la entrega en un proyecto real. No equiparar tests locales con ejecución en vivo.
 
+Pendientes abiertos de 0.10.0:
+
+- [ ] Adoptar el protocolo MCP `2026-07-28`.
+- [ ] Probar en vivo los casos negativos de separación de sesiones y permisos.
+- [ ] Observar una corrida de hitos completa en un proyecto real, sus eventos y la entrega.
+- [ ] Observar `zana_bootstrap_setup` con un repositorio nuevo.
+
 <!-- HISTORICAL_VERSIONS_START -->
 
 ## 0.9.0: del plan al repositorio revisado (12 nov 2026)
@@ -23,12 +30,9 @@ Lo que sigue:
 
 - [x] Conectar el orquestador de hitos al servidor: corrida, revisión optimista, siguiente hito y reconciliación MCP; la skill guía el flujo real.
 - [ ] Invitar a la revisora e instalar protección de rama desde el bootstrap, en vez de configurarlas después con `zana_github_request`.
-- [ ] Observar en vivo `zana.review.done` y los casos negativos de separación.
-- [ ] Adoptar el protocolo MCP `2026-07-28`.
-- [ ] Ordenar la generación de adopción por `seq` en vez de `created_at` para resistir retrocesos del reloj.
-
-
-
+- [x] Observar en vivo `zana.review.done` (13 nov 2026); los casos negativos de separación siguen pendientes en 0.10.0.
+- [ ] Adoptar el protocolo MCP `2026-07-28` (pendiente en 0.10.0).
+- [x] Ordenar la generación de adopción por `seq` en vez de `created_at` para resistir retrocesos del reloj (PR #70).
 
 ## 0.8.0: de una misión a un proyecto, primera parte (11 nov 2026)
 
@@ -137,7 +141,6 @@ El código queda y sigue probado en stdio, pero **no se toca más**:
 - **W6:** conservar `BEGIN IMMEDIATE` durante efecto para impedir revocación concurrente; timeout cooperativo de 5 s antes del `rename`. El kernel puede bloquear `fsync` más tiempo; sigue pendiente una solución con I/O aislado si se exige un deadline duro.
 - **Gate:** CI y Codex sobre SHA final, y nueva revisión independiente de la cuenta revisora; `releaseAuthorized:false` hasta atestación firmada, aislamiento del host y aprobación humana. Sin merge ni deploy.
 
-
 <!-- HISTORICAL_VERSIONS_END -->
 
 ## Principios que no deben perderse
@@ -215,7 +218,6 @@ El código queda y sigue probado en stdio, pero **no se toca más**:
 
 **Implementación local de fase 4:** se reponen cupos READ mientras continúan otros trabajos; se prioriza el drenaje de lecturas ante un WRITE firmado; SQLite impide transiciones que solapen escritores; los límites de misión, intentos, leases, resultados y rondas RDD son inmutables y persistentes (`user_version=4`). `scripts/benchmark-phase4.mjs` registra latencia p50/p95 de SQLite, tamaño, historial, contención y recuperación, y compara tiempos lógicos deterministas. **No se midió throughput de agentes GPT reales ni se habilitaron escritores paralelos**. Ver `docs/phase4-performance.md`.
 
-
 - [x] **ZL-021. Planificación incremental.** Admitir nuevos trabajos independientes cuando quede capacidad libre, sin esperar a que termine toda la tanda anterior.
 - [x] **ZL-022. Aislamiento de escrituras.** Mantener un único escritor; ampliar a escritores paralelos solo con worktrees realmente aislados, permisos diferenciados y tests de conflicto.
 - [x] **ZL-023. Rendimiento de almacén.** Medir latencia de lectura/escritura, tamaño de historial, concurrencia y recuperación. Optimizar con datos, no por intuición.
@@ -230,7 +232,6 @@ El código queda y sigue probado en stdio, pero **no se toca más**:
 **ZL-026 resuelto y verificado:** el token de la integración de archivos no administra reglas, pero una sesión GitHub CLI autorizada del dueño del repo con `permissions.admin=true` aplicó protección a `main`. Se comprobó por GET administrativo que están activos tres checks obligatorios, revisión independiente, invalidación de aprobaciones obsoletas, aprobación posterior al último push, resolución de conversaciones, reglas para administradores y prohibición de force-push/eliminación. Una segunda lectura de GitHub confirmó `main.protected=true`. Se utilizó **branch protection**, no un ruleset; el listado de rulesets puede seguir vacío sin invalidar la protección.
 
 **Bloqueo de release ZL-029:** frontera WRITE del MCP implementada; faltan aislamiento del host por SO (ZL-004 operacional), prueba real de Codex (ZL-018), rendimiento nativo, atestación CI firmada por emisor real y revisión de GitHub independiente. Esto impide producción.
-
 
 - [x] **ZL-025. CI robusto.** Tests de integración, estrés, fallos de proceso, cobertura e incompatibilidades MCP; fijar versiones de acciones por SHA, permisos mínimos y timeout.
 - [x] **ZL-026. Seguridad del repositorio.** Proteger `main` y exigir CI del SHA exacto y revisión independiente antes de merge. Auditar rulesets/branch protection con una credencial administrativa autorizada.
@@ -258,7 +259,6 @@ ZL-001 a ZL-003 y ZL-005 a ZL-009 tienen implementación local y pruebas; ZL-004
 
 **Criterio de versión lista:** una única cuenta GPT puede iniciar más de una misión en momentos distintos, completar trabajo, recuperarse de interrupciones, ejecutar las cuatro perspectivas con procedencia honesta y presentar una decisión verificable sobre un candidato Git sin declarar aprobaciones o capacidades inexistentes.
 
-
 ### Cierre de ZL-004, frontera local de efectos
 
 Se incorporó `zana_apply_write` como herramienta MCP 24, con intentos durables, validación de grants Ed25519 y lease, anclaje Linux de directorios, rechazo de symlink/hardlink, recibos SHA y tests de caída real tras el efecto. El preflight puede reportar `MCP_EFFECT_BOUNDARY_ENFORCED`, **no `VERIFIED`**, porque un modelo con otras herramientas del SO podría saltarse el MCP. El gate real sigue abierto hasta probar la separación de permisos del host.
@@ -270,7 +270,6 @@ Se incorporó `zana_apply_write` como herramienta MCP 24, con intentos durables,
 - **Cobertura:** global 92/85/90 y bloqueo automático si cualquier módulo de `src/` cae bajo 80 % de ramas.
 - **ZL-018 permanece abierto:** guías `docs/host-codex.md` / `docs/host-e2e.md` y plantilla `examples/host-e2e-report.json`; sin ejecución con Codex real ni informe verificado.
 - **Revisión independiente abierta:** el ciclo 4R solo puede etiquetarse como self-check; se requiere otra cuenta Github y evaluación humana sobre SHA exacto.
-
 
 ### Ronda 2: cuatro hallazgos corregidos, candidata versión histórica (ver CHANGELOG)
 

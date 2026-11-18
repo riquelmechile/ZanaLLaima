@@ -4,6 +4,8 @@
 
 ## [0.10.0] - 2026-11-18
 
+### Orquestador de hitos (B1–C6)
+
 - La corrida aprobada de hitos ya se persiste, proyecta a memoria y expone el siguiente hito; `RESERVED_TOPIC` protege `hito:`/`proyecto:` y el primer inicio retira entradas previas de esos espacios.
 - La memoria distingue `origin: server|session` y `zana_project_next` informa `memoryStale` mientras una proyección esté pendiente.
 - La memoria de proyectos endurece `reservedTopic` frente a marcas Unicode e invisibles y conserva los registros posteriores al recorte estricto de 4 KB, con origen de sesión en contexto y búsqueda.
@@ -17,11 +19,21 @@
 - C4: orquestación de cierre/archivo de hitos, política de PR y merge, documentación y propagación RUN_CORRUPT; tests de herramientas y orden de PR.
 - C5: cierre seguro tras merge/attach, autorización exclusiva de HITOS, release condicional y cierre externo de PR; ROADMAP histórico, herramientas MCP reales y códigos completos.
 - C6: aclara cierre de misiones fuera del plan sin campo run, sincroniza guías de merge y elimina redundancias; refuerza pruebas de códigos completos.
-- D1: incorpora verificación de entrega de hitos v2 mediante ascendencia GitHub y checks requeridos sobre la cabeza de la base; tool MCP solo lectura, sin despliegue.
-- D2 (#110): entrega de hitos con validación de ascensos GitHub y checks sobre el HEAD de base; pruebas y guía sin autorizar despliegue.
-- E1 (#109): eventos MCP de hito DONE y corrida READY_TO_DELIVER, solo al OAuth dueño, punteros sin texto del modelo y cola idempotente dentro de la transacción; un error de cola se registra sin revertir la parte fusionada. Documentados los monitores y sus pruebas.
+### Entrega (D1, D2)
+
+- D1: incorpora verificación de entrega de hitos v2 mediante ascendencia en GitHub y checks requeridos sobre el HEAD de la rama base; tool MCP de solo lectura, sin despliegue.
+- D2 (#110): **Cambio de acceso:** `zana_project_delivery_status` queda restringida al dueño OAuth de la corrida; la revisora y cualquier otro cliente reciben `RUN_OTHER_CLIENT`. Errores precisos `MILESTONE_COMMIT_MISSING` (compare 404), `BASE_MOVED` y `RUN_CHANGED` sustituyen respuestas genéricas `GITHUB_UNAVAILABLE` o `PROJECT_INCOMPLETE`.
+
+### Eventos (E1)
+
+- E1 (#109): eventos MCP de hito DONE y corrida READY_TO_DELIVER, solo al OAuth dueño, punteros sin texto del modelo y cola idempotente dentro de la transacción; un error de cola se registra sin revertir la parte fusionada. La revisión r4 añade suscripción HTTP/JSON-RPC a eventos de proyecto, propagación del error si se abortó la transacción y flush después del commit. Documentados los monitores y sus pruebas.
+
+### Tickets vencidos (F1, F2)
+
 - F1 R4: calcula rondas efectivas desde tickets EXPIRED/ABANDONED sin veredicto (hasta 5), mantiene reviewCount y restore R11 intactos; notifica EXPIRED en barridos y, desde F2, también en vencimientos perezosos y filtra avisos obsoletos.
 - F2 (#111): notificación EXPIRED también en expiraciones perezosas, sin esperar al barrido periódico, con deduplicación y envío en microtask.
+### Otros
+
 - Seguimiento 4R #77: restore y adopción invalidan la excepción del monitor (época monótona), `SESSION_WROTE_ELSEWHERE` bloquea toda sesión escritora, diagnóstico de sesión, clasificación correcta de auditoría y regresiones sin skips.
 - El monitor revisor anterior al ticket solo reutiliza una sesión nacida después de la época de marca, con reclamo previo de esa misma encarnación y sin escrituras ni autoría. `zana_ds_github` `index`/`read` no marca; `write` o desconocida sí. Las marcas y la época sobreviven a restore/cuarentena (se conserva la época máxima), se auditan rechazos downstream `REFUSED` y no se marca a una revisora cuyo write se rechaza previamente. Las sesiones previas al despliegue y las de un rollback sin marca requieren recrear el monitor; el servidor no ve conversaciones ni conectores externos.
 - `zana_bootstrap_setup` conecta el setup de repositorios nuevos al servidor MCP y al panel: revisora Write, protección `zana/4r`, checks por repositorio y auditoría sin secretos; corrige timestamps, errores y visibilidad de `runSeq`.

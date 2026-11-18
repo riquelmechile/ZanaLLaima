@@ -44,7 +44,7 @@ test('solo acepta callbacks HTTPS públicos y firma como Standard Webhooks',()=>
 test('suscribirse exige el desafío firmado, el host propio y queda ligado al cliente OAuth',async()=>{
   const t=setup();
   try{
-    assert.deepEqual(listEvents(me).events.map(e=>[e.name,e.delivery]),[[REVIEW_EVENT,['webhook']],[REVIEW_DONE_EVENT,['webhook']]]);
+    assert.deepEqual(listEvents(me).events.map(e=>[e.name,e.delivery]),[[REVIEW_EVENT,['webhook']],[REVIEW_DONE_EVENT,['webhook']],['zana.project.milestone_done',['webhook']],['zana.project.ready_to_deliver',['webhook']]]);
     await assert.rejects(t.subscribe(me,{name:'otro.evento'}),/Unknown event/);
     await assert.rejects(t.subscribe(me,{arguments:{host:'otro-host'}}),/filter/);
     await assert.rejects(t.subscribe(me,{delivery:{mode:'webhook',url:'http://x.example.org/',secret:SECRET}}),/callback/i);
@@ -144,5 +144,35 @@ test('los dos eventos coexisten y se entregan por nombre, sin filtrar datos de l
     assert.deepEqual(delivered.find(p=>p.body.name===REVIEW_EVENT).body.data,{ticketId:TICKET});
     unsubscribeEvent(t.db,{identity:me,input:t.input({name:REVIEW_DONE_EVENT})});
     assert.equal(eventStatus(t.db,{now:T0}).subscriptions,1);
+  }finally{t.db.close();}
+});
+
+test('E1: catálogo suscribible y punteros de proyecto estrictos, independientes y sin reenvío',async()=>{
+  const t=setup();
+  const milestone='zana.project.milestone_done',delivery='zana.project.ready_to_deliver';
+  try{
+    const names=listEvents(me).events.map(e=>e.name);
+    assert.ok(names.includes(milestone)&&names.includes(delivery));
+    const rule=listEvents(me).events.find(e=>e.name===milestone);
+    assert.deepEqual(rule.payloadSchema.required,['projectId','repo','milestoneId','revision']);
+    assert.match(rule.description,/zana_project_next/);
+    assert.match(listEvents(me).events.find(e=>e.name===delivery).description,/zana_project_delivery_status/);
+    await assert.rejects(t.subscribe(me,{name:'zana.project.unknown'}),/UNKNOWN_EVENT/);
+    await t.subscribe(me,{name:milestone});
+    await t.subscribe(me,{name:delivery,delivery:{mode:'webhook',url:'https://hooks.chatgpt.test.openai.com/cb/deliver',secret:SECRET}});
+    await t.subscribe(other,{name:milestone,delivery:{mode:'webhook',url:'https://hooks.chatgpt.test.openai.com/cb/other',secret:SECRET}});
+    const done={projectId:'zp_1234567890123456',repo:'o/r',milestoneId:'core',revision:8};
+    const ready={projectId:done.projectId,repo:done.repo,revision:8};
+    assert.throws(()=>queueEvent(t.db,{clientId:me.clientId,name:milestone,data:{...done,summary:'texto del modelo'},now:T0}),/INVALID_EVENT_POINTER/);
+    assert.equal(queueEvent(t.db,{clientId:me.clientId,name:milestone,data:done,now:T0}),1);
+    assert.equal(queueEvent(t.db,{clientId:me.clientId,name:milestone,data:done,now:T0}),0);
+    assert.equal(queueEvent(t.db,{clientId:me.clientId,name:delivery,data:ready,now:T0}),1);
+    await t.flush();
+    const sent=t.posts.filter(x=>x.body.eventId);
+    assert.deepEqual(sent.map(x=>x.body.name).sort(),[milestone,delivery].sort());
+    assert.deepEqual(sent.find(x=>x.body.name===milestone).body.data,done);
+    assert.deepEqual(sent.find(x=>x.body.name===delivery).body.data,ready);
+    assert.ok(sent.every(x=>!x.url.includes('/other')));
+    assert.equal(await t.flush(),0);
   }finally{t.db.close();}
 });

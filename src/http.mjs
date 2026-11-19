@@ -50,7 +50,8 @@ export function conversationSessionId(identity,meta){
 }
 
 const hostname=h=>{try{return new URL('http://'+(h??'')).hostname.toLowerCase().replace(/^\[|\]$/g,'');}catch{return '';}};
-function jsonRpcError(res,status,code,message,headers={}){
+function jsonRpcError(res,status,code,message,headers={},entry){
+  if(entry)entry.rpc='error:'+code;
   res.writeHead(status,{'content-type':'application/json','cache-control':'no-store',...headers});
   res.end(JSON.stringify({jsonrpc:'2.0',error:{code,message},id:null}));
 }
@@ -65,16 +66,32 @@ async function readBody(req){
   if(size>MAX_BODY)throw Object.assign(new Error('Request body too large'),{status:413});
   return Buffer.concat(parts);
 }
-async function sendWeb(res,response){
+async function sendWeb(res,response,entry){
   const headers={};
   response.headers.forEach((v,k)=>{headers[k]=v;});
   res.writeHead(response.status,headers);
   if(!response.body){res.end();return;}
   const reader=response.body.getReader();
   res.on('close',()=>{reader.cancel().catch(()=>{});});
+  // Solo JSON acotado: los streams SSE se transmiten sin guardar su contenido.
+  const json=entry&&response.headers.get('content-type')?.split(';')[0].trim().toLowerCase()==='application/json';
+  const chunks=[];let size=0,complete=false;
   try{
-    for(;;){const {done,value}=await reader.read();if(done)break;res.write(value);}
+    for(;;){
+      const {done,value}=await reader.read();if(done){complete=true;break;}
+      if(json&&size<=1048576){size+=value.byteLength;if(size<=1048576)chunks.push(Buffer.from(value));}
+      res.write(value);
+    }
   }catch{/* client went away */}
+  if(complete&&json&&size<=1048576){
+    try{
+      const body=JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      if(body?.jsonrpc==='2.0'&&!Array.isArray(body)){
+        if(Object.hasOwn(body,'result')&&!Object.hasOwn(body,'error'))entry.rpc='result';
+        else if(Number.isInteger(body.error?.code)&&!Object.hasOwn(body,'result'))entry.rpc='error:'+body.error.code;
+      }
+    }catch{/* JSON desconocido: rpc=- */}
+  }
   res.end();
 }
 
@@ -118,9 +135,9 @@ export function createHttpServer({runtime,oauth,settings,log=console,maxSessions
   }
   // Una llamada en vuelo protege a su transporte: cerrarlo cortaría la respuesta
   // de una tool que igual termina en el servidor.
-  async function serve(holder,res,respond){
+  async function serve(holder,res,respond,entry){
     holder.inflight++;holder.busyAt=Date.now();
-    try{await sendWeb(res,await respond());}
+    try{await sendWeb(res,await respond(),entry);}
     finally{holder.inflight--;holder.seen=Date.now();}
   }
   async function openSession(identity,request,parsed){
@@ -165,14 +182,14 @@ export function createHttpServer({runtime,oauth,settings,log=console,maxSessions
   async function handleMcp(req,res,identity,entry){
     const url='http://127.0.0.1'+req.url;
     if(req.method==='POST'&&String(req.headers['content-type']??'').split(';')[0].trim().toLowerCase()!=='application/json')
-      return jsonRpcError(res,415,-32600,'Content-Type must be application/json');
+      return jsonRpcError(res,415,-32600,'Content-Type must be application/json',{},entry);
     const raw=req.method==='POST'?await readBody(req):null;
     const request=new Request(url,{method:req.method,headers:req.headers,
       ...(raw?{body:raw}:{})});
     let parsed;
     if(raw){
       try{parsed=JSON.parse(raw.toString('utf8'));}
-      catch{return jsonRpcError(res,400,-32700,'Parse error');}
+      catch{return jsonRpcError(res,400,-32700,'Parse error',{},entry);}
     }
     entry.method=typeof parsed?.method==='string'&&/^[a-zA-Z0-9/_-]{1,64}$/.test(parsed.method)?parsed.method:'-';
     const sid=req.headers['mcp-session-id'];
@@ -181,12 +198,12 @@ export function createHttpServer({runtime,oauth,settings,log=console,maxSessions
     if(typeof sid==='string'&&sid){
       entry.era='legacy';counts.legacy++;
       const s=sessions.get(sid);
-      if(!s)return jsonRpcError(res,404,-32001,'Session not found');
+      if(!s)return jsonRpcError(res,404,-32001,'Session not found',{},entry);
       if(s.identity.host!==identity.host||s.identity.clientId!==identity.clientId)
-        return jsonRpcError(res,403,-32002,'Session belongs to another identity');
+        return jsonRpcError(res,403,-32002,'Session belongs to another identity',{},entry);
       s.seen=Date.now();
-      if(req.method!=='POST')return sendWeb(res,await s.transport.handleRequest(request,{parsedBody:parsed}));
-      return serve(s,res,()=>s.transport.handleRequest(request,{parsedBody:parsed}));
+      if(req.method!=='POST')return sendWeb(res,await s.transport.handleRequest(request,{parsedBody:parsed}),entry);
+      return serve(s,res,()=>s.transport.handleRequest(request,{parsedBody:parsed}),entry);
     }
     // El predicado oficial distingue el intento de descubrimiento moderno
     // del initialize legacy; los errores de sobre moderno nunca caen en 2025.
@@ -194,9 +211,9 @@ export function createHttpServer({runtime,oauth,settings,log=console,maxSessions
       entry.era='legacy';counts.legacy++;
       if(req.method==='POST'&&parsed&&!Array.isArray(parsed)&&isInitializeRequest(parsed)){
         const {holder,respond}=await openSession(identity,request,parsed);
-        return serve(holder,res,respond);
+        return serve(holder,res,respond,entry);
       }
-      return jsonRpcError(res,400,-32000,'Bad Request: no valid session; send initialize first');
+      return jsonRpcError(res,400,-32000,'Bad Request: no valid session; send initialize first',{},entry);
     }
     entry.era='modern';counts.modern++;
     // 2026 no tiene Mcp-Session-Id. Una conversación tiene el mismo hash OAuth
@@ -207,19 +224,19 @@ export function createHttpServer({runtime,oauth,settings,log=console,maxSessions
       return {...await registerSession({sessionId:id??ephemeralId,host:identity.host,clientId:identity.clientId}),
         source:id?'conversation':'transport'};
     }),{legacy:'reject'});
-    try{return await sendWeb(res,await modern.fetch(request,{parsedBody:parsed}));}
+    try{return await sendWeb(res,await modern.fetch(request,{parsedBody:parsed}),entry);}
     finally{await modern.close();}
   }
   const server=createServer(async(req,res)=>{
     const start=process.hrtime.bigint(),path=(req.url??'').split('?')[0];
-    const entry={era:'unknown',method:'-',client:'-'};
+    const entry={era:'unknown',method:'-',client:'-',rpc:'-'};
     let logged=false;
     const record=()=>{
       if(logged)return;
       logged=true;
       const durationMs=Number((process.hrtime.bigint()-start)/1_000_000n);
       log.info?.('HTTP method='+req.method+' path='+path+' status='+res.statusCode+' durationMs='+durationMs+
-        (path==='/mcp'?' MCP era='+entry.era+' method='+entry.method+' client='+entry.client:''));
+        (path==='/mcp'?' rpc='+entry.rpc+' MCP era='+entry.era+' method='+entry.method+' client='+entry.client:''));
     };
     if(typeof res.once==='function'){
       res.once('finish',record);

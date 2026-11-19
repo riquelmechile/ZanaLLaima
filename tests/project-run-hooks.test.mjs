@@ -540,6 +540,25 @@ test('B2b: errores inesperados se normalizan en run.reason y en auditoría',asyn
   }finally{await f.cleanup();}
 });
 
+test('cancel de corrida por MCP real rechaza controles Unicode sin alterar la corrida',async()=>{
+  const f=await remoteFixture();let server,client;
+  try{
+    const started=await setup(f);
+    const before=await remoteRead(db=>loadRun(db,started.projectId));
+    server=f.runtime.createServer(async()=>f.owner);
+    client=new Client({name:'unicode-cancel',version:'1.0.0'});
+    const [ct,st]=InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(st),client.connect(ct)]);
+    for(const control of ['\u0000','\u200b','\u202e']){
+      const result=await client.callTool({name:'zana_project_run_cancel',arguments:{
+        repo:gh.repo,expectedRevision:before.revision,reason:'Motivo de cancelación '+control+' que no debe ser aceptado'}});
+      assert.equal(result.isError,true,control.codePointAt(0));
+      assert.match(JSON.stringify(result.content),/INVALID_REASON/);
+      assert.deepEqual(await remoteRead(db=>loadRun(db,started.projectId)),before);
+    }
+  }finally{await client?.close();await server?.close();await f.cleanup();}
+});
+
 test('B2b: MCP real rechaza milestone.id inválido por el esquema zod',async()=>{
   const f=await remoteFixture();
   let server,client;

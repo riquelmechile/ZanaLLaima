@@ -133,7 +133,7 @@ const NEW_TOOLS={
       action:z.enum(['attach','release']).default('attach')}).strict()],
   zana_project_run_cancel:['Never call it without asking the user. Cancel an active project run only after explicit authorization; first cancel any active milestone mission. A later zana_project_run_start with the same approved plan creates a new run',false,
     z.object({repo:z.string().min(3).max(201),expectedRevision:z.number().int().min(0),
-      reason:z.string().min(8).max(300).regex(/^[^\p{Cc}\p{Cf}]+$/u)}).strict()],
+      reason:z.string().min(8).max(300)}).strict()],
   zana_project_delivery_status:['Read-only: verify every merged milestone commit is in the current base head and its required CI checks are green; never deploy',true,
     z.object({repo:z.string().min(3).max(201)}).strict()],
   zana_project_next:['Read the project run after each merge to learn which milestone is ready next',true,

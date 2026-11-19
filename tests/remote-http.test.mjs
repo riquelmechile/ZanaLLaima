@@ -634,6 +634,15 @@ test('MCP 2026-07-28: SDK, 59 tools, panel, sesión OAuth, revisión, eventos, H
     assert.equal(offJson.result?._meta?.['io.modelcontextprotocol/serverInfo']?.name,'zana-llaima');
     const bad=await fetch(s.base+'/mcp',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'text/plain'},body:'bad'});
     assert.equal(bad.status,415);
+    const okList=await mrpc('tools/list');
+    assert.equal(okList.status,200);assert.ok((await okList.json()).result?.tools?.length);
+    const badList=await mrpc('tools/list',{cursor:null});
+    assert.equal(badList.status,200);
+    const badJson=await badList.json();
+    assert.equal(badJson.error?.code,-32603);
+    assert.ok(logs.some(x=>x.includes('method=tools/list')&&x.includes('rpc=result')));
+    assert.ok(logs.some(x=>x.includes('method=tools/list')&&x.includes('rpc=error:-32603')));
+    assert.ok(logs.every(x=>!x.includes(badJson.error.message)),'el log no expone el mensaje RPC');
     const health=await (await fetch(s.base+'/health')).json();
     assert.equal(health.protocol.served,'2025+2026-07-28');
     assert.ok(health.protocol.counts.modern>0);

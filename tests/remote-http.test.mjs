@@ -15,6 +15,17 @@ import {remoteRead} from '../src/store.mjs';
 
 const CacheableResultSchema=z.object({ttlMs:z.number().int().nonnegative(),
   cacheScope:z.enum(['public','private'])}).passthrough();
+function portableSchema(node,tool,path='$'){
+  if(!node||typeof node!=='object')return;
+  for(const [key,value] of Object.entries(node)){
+    const at=path+'.'+key;
+    if(key==='pattern'){
+      assert.equal(typeof value,'string',tool+' '+at);
+      assert.doesNotMatch(value,/\\[pPu]\{|\\k<|\(\?</,tool+' '+at);
+      assert.doesNotThrow(()=>new RegExp(value),tool+' '+at);
+    }else portableSchema(value,tool,at);
+  }
+}
 const PASSWORD='p'.repeat(40);
 const REDIRECT='https://chatgpt.com/connector_platform_oauth_redirect';
 const PUBLIC='https://zanallaima.test/mcp';
@@ -563,6 +574,8 @@ test('MCP 2026-07-28: SDK, 59 tools, panel, sesión OAuth, revisión, eventos, H
     assert.equal(a.client.getProtocolEra(),'modern');
     assert.equal(a.transport.sessionId,undefined,'modern no negocia Mcp-Session-Id');
     const names=(await a.client.listTools()).tools;
+    for(const tool of names)for(const field of ['inputSchema','outputSchema'])
+      portableSchema(tool[field],tool.name+'.'+field);
     assert.deepEqual(names.map(x=>x.name).sort(),REMOTE_TOOL_NAMES,'modern expone las 59 tools, con los metadatos app-only');
     assert.deepEqual(names.find(x=>x.name==='zana_panel_decide')._meta?.ui?.visibility,['app']);
     const panel=names.find(x=>x.name==='zana_project_approval_panel');
@@ -602,6 +615,8 @@ test('MCP 2026-07-28: SDK, 59 tools, panel, sesión OAuth, revisión, eventos, H
     const listed=await mrpc('events/list');
     assert.equal(listed.status,200);
     const listedJson=JSON.parse(await listed.text());
+    for(const event of listedJson.result.events)for(const field of ['inputSchema','payloadSchema'])
+      portableSchema(event[field],event.name+'.'+field);
     assert.ok(listedJson.result?.events?.some(e=>e.name==='zana.review.ready'),JSON.stringify(listedJson));
     assert.deepEqual([listedJson.result.ttlMs,listedJson.result.cacheScope],[0,'private']);
     CacheableResultSchema.parse(listedJson.result);
@@ -619,6 +634,15 @@ test('MCP 2026-07-28: SDK, 59 tools, panel, sesión OAuth, revisión, eventos, H
     assert.equal(offJson.result?._meta?.['io.modelcontextprotocol/serverInfo']?.name,'zana-llaima');
     const bad=await fetch(s.base+'/mcp',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'text/plain'},body:'bad'});
     assert.equal(bad.status,415);
+    const okList=await mrpc('tools/list');
+    assert.equal(okList.status,200);assert.ok((await okList.json()).result?.tools?.length);
+    const badList=await mrpc('tools/list',{cursor:null});
+    assert.equal(badList.status,200);
+    const badJson=await badList.json();
+    assert.equal(badJson.error?.code,-32603);
+    assert.ok(logs.some(x=>x.includes('method=tools/list')&&x.includes('rpc=result')));
+    assert.ok(logs.some(x=>x.includes('method=tools/list')&&x.includes('rpc=error:-32603')));
+    assert.ok(logs.every(x=>!x.includes(badJson.error.message)),'el log no expone el mensaje RPC');
     const health=await (await fetch(s.base+'/health')).json();
     assert.equal(health.protocol.served,'2025+2026-07-28');
     assert.ok(health.protocol.counts.modern>0);

@@ -2,6 +2,8 @@
 
 ## [Sin publicar]
 
+- MCP: patrones de schemas portables para clientes no JavaScript; conserva validación Unicode en el handler y registra `rpc=result|error:<código>|-` sin exponer contenidos ni bufferizar SSE.
+
 - MCP Events `events/list` añade `ttlMs: 0` y `cacheScope: private` por identidad OAuth en 2025 y 2026; el HTTP registra método, ruta sin query, estado y duración de todas las rutas, preservando era, método RPC y cliente de `/mcp` sin datos sensibles.
 
 - Soporte dual de MCP 2025 (sesiones existentes) y 2026-07-28 (descubrimiento y herramientas por petición) sin duplicar el catálogo, con aislamiento OAuth, panel MCP Apps, MCP Events y contadores seguros en `/health` local.

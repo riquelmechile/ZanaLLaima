@@ -306,8 +306,7 @@ test('C3: schemas zod MCP reales rechazan ids y motivo de cancelación',async()=
     for(const [name,args] of [
       ['hito mayúsculo',{...rec,milestoneId:'CORE'}],
       ['misión inválida',{...rec,missionId:'bad mission!'}],
-      ['motivo corto',{repo:'o/r',expectedRevision:0,reason:'corto'}],
-      ['motivo invisible',{repo:'o/r',expectedRevision:0,reason:'Control\u200B oculto'}]
+      ['motivo corto',{repo:'o/r',expectedRevision:0,reason:'corto'}]
     ]){
       const tool=name.startsWith('motivo')?'zana_project_run_cancel':'zana_project_reconcile';
       const response=await client.callTool({name:tool,arguments:args});
@@ -315,6 +314,21 @@ test('C3: schemas zod MCP reales rechazan ids y motivo de cancelación',async()=
       assert.match(JSON.stringify(response.content),/Input validation error/,name);
     }
     assert.equal((await f.call('zana_session_status',{},owner)).writerMarked,false);
+    // Unicode no se publica como pattern: el handler debe rechazarlo con corrida real.
+    const started=await setup(f);
+    await client.close();await server.close();
+    server=f.runtime.createServer(async()=>f.owner);
+    client=new Client({name:'c3-mcp-handler',version:'1.0'});
+    const [ct2,st2]=InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(st2),client.connect(ct2)]);
+    const before=await remoteRead(db=>loadRun(db,started.projectId));
+    for(const control of ['\u0000','\u200b','\u202e']){
+      const response=await client.callTool({name:'zana_project_run_cancel',arguments:{
+        repo:'o/r',expectedRevision:before.revision,reason:'Control '+control+' oculto en cancelación'}});
+      assert.equal(response.isError,true);
+      assert.match(JSON.stringify(response.content),/INVALID_REASON/);
+      assert.deepEqual(await remoteRead(db=>loadRun(db,started.projectId)),before);
+    }
   }finally{await client?.close();await server?.close();await f.cleanup();}
 });
 

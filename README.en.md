@@ -19,7 +19,7 @@ GPT codes, tests and reviews on GitHub with no terminal: a remote MCP sets the r
 
 ## What is it?
 
-- **A remote MCP** that plugs into the ChatGPT app as a connector, with OAuth and closed registration. It runs on your own server, behind an HTTPS tunnel (for example Cloudflare Tunnel).
+- **A remote MCP** that plugs into the ChatGPT app as a connector, with OAuth and closed registration. It serves sessionful MCP 2025 and per-request MCP 2026-07-28 on the same URL, behind an HTTPS tunnel (for example Cloudflare Tunnel).
 - **A complete harness for a single GPT.** It organizes the mission into units with a budget. GPT writes code **only** on its mission branch (it can also edit and comment on its PR and trigger the checks), the tests run in GitHub Actions, and the 4R review is done by the same GPT in **another conversation**.
 - **An honest delivery gate.** The review is published by a GitHub reviewer account (separate from the author) on the exact SHA, and `zana_merge` merges only when everything is green on that same SHA.
 

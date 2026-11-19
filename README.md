@@ -19,7 +19,7 @@ GPT programa, prueba y revisa en GitHub sin terminal: un MCP remoto pone las reg
 
 ## ¿Qué es?
 
-- **Un MCP remoto** que se conecta a la app de ChatGPT como conector, con OAuth y registro cerrado. Corre en tu propio servidor, detrás de un túnel HTTPS (por ejemplo Cloudflare Tunnel).
+- **Un MCP remoto** que se conecta a la app de ChatGPT como conector, con OAuth y registro cerrado. Sirve MCP 2025 con sesiones y 2026-07-28 por petición en la misma URL, detrás de un túnel HTTPS (por ejemplo Cloudflare Tunnel).
 - **Un harness completo para un solo GPT.** Organiza la misión en unidades con presupuesto. GPT escribe código **solo** en la rama de su misión (además puede editar y comentar su PR y disparar los checks), los tests corren en GitHub Actions y la revisión 4R la hace el mismo GPT en **otra conversación**.
 - **Un portón de entrega honesto.** La review la publica una cuenta revisora de GitHub (distinta de la autora) sobre el SHA exacto, y `zana_merge` solo mergea con todo en verde sobre ese mismo SHA.
 

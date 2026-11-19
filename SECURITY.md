@@ -8,7 +8,7 @@ No publiques detalles de explotación, credenciales, llaves ni logs sensibles en
 
 ## Modo remoto (0.10.0)
 
-- **Transporte:** MCP Streamable HTTP que escucha solo en la interfaz loopback IPv4 (`src/http.mjs`). Lo publica un túnel saliente (por ejemplo Cloudflare); el servidor no necesita puertos abiertos.
+- **Transporte:** MCP Streamable HTTP 2025 con sesiones y MCP 2026-07-28 por petición en el mismo `/mcp`, que escucha solo en loopback IPv4 (`src/http.mjs`). El primero conserva `Mcp-Session-Id`; el segundo usa `_meta["openai/session"]` vinculada al cliente OAuth y, sin ella, una identidad efímera por petición. Nunca se infiere la identidad de cabeceras sin validar el Bearer. Solo registra era, método, estado y prefijo del clientId, sin argumentos ni tokens. Un túnel saliente lo publica sin abrir puertos.
 - **Autenticación:** servidor OAuth 2.1 propio (`src/oauth.mjs`) con registro **cerrado**. El operador abre una ventana de alta de hasta 60 minutos (`node src/cli.mjs remote-enroll <minutos>`); fuera de ella no se registran clientes. Cada conexión nueva exige la clave de consentimiento del operador (`ZANA_OAUTH_CONSENT_PASSWORD`, al menos 32 caracteres). Hay un tope de 50 clientes registrados; `remote-clients` y `remote-revoke` los listan y revocan.
 - **Tokens:** viven solo en el entorno del servidor (`ZANA_DOWNSTREAM_GITHUB_TOKEN` para la cuenta autora, `ZANA_REVIEWER_TOKEN` para la revisora). Nunca se piden al modelo, no viajan en argumentos ni respuestas, se redactan de resultados, errores y auditoría, y no se commitean. El repositorio solo trae ejemplos sin valores.
 - **Auditoría:** cada llamada queda en SQLite con un HMAC de sus argumentos, no los argumentos en claro.

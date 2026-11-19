@@ -1,21 +1,20 @@
 #!/usr/bin/env node
-// Remote MCP Streamable HTTP listener (2025-era sessionful transport).
+// Remote MCP: sesiones Streamable HTTP 2025 + peticiones 2026-07-28.
 // Listens on 127.0.0.1 only; a Cloudflare tunnel publishes it. Every /mcp
 // request needs an OAuth access token from the embedded authorization server
 // (closed registration, src/oauth.mjs). Each MCP session gets its own
 // transport and McpServer; its Mcp-Session-Id is bound to the OAuth identity
 // that opened it. La sesión de ZanaLLaima de cada tool call (dueña de unidades,
 // autora y revisora, con su creación guardada en SQLite) es la conversación de
-// ChatGPT cuando viene; si no, la del transporte (ver conversationSessionId). Requests carrying a 2026 per-request envelope are answered with
-// a protocol error, so negotiating clients fall back to the sessionful
-// handshake. Wiring adapted from panter-ai@1a99048 src/server.ts
+// ChatGPT cuando viene; si no, la del transporte (ver conversationSessionId).
+// Wiring adapted from panter-ai@1a99048 src/server.ts
 // (/health, Host/Origin allowlists, 401 challenge, no-store).
 import {createServer} from 'node:http';
 import {createHash,randomUUID} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {dirname,join,resolve,isAbsolute} from 'node:path';
 import {pathToFileURL} from 'node:url';
-import {WebStandardStreamableHTTPServerTransport,isInitializeRequest} from '@modelcontextprotocol/server';
+import {WebStandardStreamableHTTPServerTransport,isInitializeRequest,isLegacyRequest,createMcpHandler} from '@modelcontextprotocol/server';
 import {EmbeddedOAuth} from './oauth.mjs';
 import {createOperatorPage} from './operator-page.mjs';
 import {createRemoteRuntime} from './remote.mjs';
@@ -161,20 +160,12 @@ export function createHttpServer({runtime,oauth,settings,log=console,maxSessions
     await server.connect(transport);
     return {holder,respond:()=>transport.handleRequest(request,{parsedBody:parsed})};
   }
-  // Intentos de la revisión 2026-07-28 de un cliente autenticado, que este
-  // servidor todavía rechaza. Solo en memoria y solo visibles en el /health
-  // local: sirven para saber si el cliente ya intenta el protocolo nuevo antes
-  // de abrirlo. Los textos vienen del cliente: van acotados y con tope de claves.
-  const modern={count:0,last:null,versions:Object.create(null),methods:Object.create(null)};
-  function noteModern(parsed){
-    const label=v=>typeof v==='string'?v.replace(/[\p{Cc}\p{Cf}]/gu,'').slice(0,40)||'?':'?';
-    const bump=(bag,key)=>{if(key in bag||Object.keys(bag).length<10)bag[key]=(bag[key]??0)+1;};
-    modern.count++;modern.last=new Date().toISOString();
-    bump(modern.versions,label(parsed.params._meta['io.modelcontextprotocol/protocolVersion']));
-    bump(modern.methods,label(parsed.method));
-  }
-  async function handleMcp(req,res,identity){
+  // Contadores agregados de peticiones autenticadas: nunca registramos argumentos ni tokens.
+  const counts={legacy:0,modern:0};
+  async function handleMcp(req,res,identity,entry){
     const url='http://127.0.0.1'+req.url;
+    if(req.method==='POST'&&String(req.headers['content-type']??'').split(';')[0].trim().toLowerCase()!=='application/json')
+      return jsonRpcError(res,415,-32600,'Content-Type must be application/json');
     const raw=req.method==='POST'?await readBody(req):null;
     const request=new Request(url,{method:req.method,headers:req.headers,
       ...(raw?{body:raw}:{})});
@@ -183,33 +174,48 @@ export function createHttpServer({runtime,oauth,settings,log=console,maxSessions
       try{parsed=JSON.parse(raw.toString('utf8'));}
       catch{return jsonRpcError(res,400,-32700,'Parse error');}
     }
+    entry.method=typeof parsed?.method==='string'&&/^[a-zA-Z0-9/_-]{1,64}$/.test(parsed.method)?parsed.method:'-';
     const sid=req.headers['mcp-session-id'];
+    // Un transporte establecido conserva su era y su identidad, incluso si
+    // el cliente adjunta por accidente una _meta de otra revisión.
     if(typeof sid==='string'&&sid){
+      entry.era='legacy';counts.legacy++;
       const s=sessions.get(sid);
       if(!s)return jsonRpcError(res,404,-32001,'Session not found');
       if(s.identity.host!==identity.host||s.identity.clientId!==identity.clientId)
         return jsonRpcError(res,403,-32002,'Session belongs to another identity');
       s.seen=Date.now();
-      // Solo los POST cuentan como llamada en vuelo: un GET de streaming puede
-      // quedar abierto horas y no debe fijar el transporte.
       if(req.method!=='POST')return sendWeb(res,await s.transport.handleRequest(request,{parsedBody:parsed}));
       return serve(s,res,()=>s.transport.handleRequest(request,{parsedBody:parsed}));
     }
-    if(req.method==='POST'&&parsed&&!Array.isArray(parsed)&&isInitializeRequest(parsed)){
-      const {holder,respond}=await openSession(identity,request,parsed);
-      return serve(holder,res,respond);
+    // El predicado oficial distingue el intento de descubrimiento moderno
+    // del initialize legacy; los errores de sobre moderno nunca caen en 2025.
+    if(await isLegacyRequest(request,parsed)){
+      entry.era='legacy';counts.legacy++;
+      if(req.method==='POST'&&parsed&&!Array.isArray(parsed)&&isInitializeRequest(parsed)){
+        const {holder,respond}=await openSession(identity,request,parsed);
+        return serve(holder,res,respond);
+      }
+      return jsonRpcError(res,400,-32000,'Bad Request: no valid session; send initialize first');
     }
-    const envelope=parsed&&!Array.isArray(parsed)&&parsed.params?._meta&&
-      Object.keys(parsed.params._meta).some(k=>k.startsWith('io.modelcontextprotocol/'));
-    if(envelope){
-      noteModern(parsed);
-      return jsonRpcError(res,400,-32602,'Unsupported protocol version: this endpoint serves the sessionful 2025 Streamable HTTP transport; send initialize');
-    }
-    return jsonRpcError(res,400,-32000,'Bad Request: no valid session; send initialize first');
+    entry.era='modern';counts.modern++;
+    // 2026 no tiene Mcp-Session-Id. Una conversación tiene el mismo hash OAuth
+    // que 2025; sin openai/session cada petición equivale a un transporte nuevo.
+    const ephemeralId=randomUUID();
+    const modern=createMcpHandler(()=>runtime.createServer(async ctx=>{
+      const id=conversationSessionId(identity,ctx?.mcpReq?._meta);
+      return {...await registerSession({sessionId:id??ephemeralId,host:identity.host,clientId:identity.clientId}),
+        source:id?'conversation':'transport'};
+    }),{legacy:'reject'});
+    try{return await sendWeb(res,await modern.fetch(request,{parsedBody:parsed}));}
+    finally{await modern.close();}
   }
   const server=createServer(async(req,res)=>{
     try{
       const path=(req.url??'').split('?')[0];
+      const entry={era:'unknown',method:'-',client:'-'};
+      if(path==='/mcp')res.once('finish',()=>log.info?.(
+        'MCP era='+entry.era+' method='+entry.method+' status='+res.statusCode+' client='+entry.client));
       if(req.method==='GET'&&path==='/health'){
         const h=await runtime.health();
         // Through the tunnel only status, version and counts; the detail (error
@@ -218,7 +224,7 @@ export function createHttpServer({runtime,oauth,settings,log=console,maxSessions
         const local=['127.0.0.1','::1'].includes(peer)&&!req.headers['cf-connecting-ip']&&
           ['127.0.0.1','localhost'].includes(hostname(req.headers.host));
         const body=local?{...h,name:'zana-llaima',version:packageVersion,mode:'remote',sessions:sessions.size,
-            protocol:{served:'2025 (initialize, con sesiones)',modernRejected:modern}}
+            protocol:{served:'2025+2026-07-28',counts:{...counts}}}
           :{status:h.status,version:packageVersion,sessions:sessions.size,staleTickets:h.staleTickets};
         res.writeHead(h.status==='ok'?200:503,{'content-type':'application/json','cache-control':'no-store'});
         res.end(JSON.stringify(body));
@@ -241,8 +247,9 @@ export function createHttpServer({runtime,oauth,settings,log=console,maxSessions
       if(!identity){
         res.writeHead(401,{'www-authenticate':oauth.challenge(),'cache-control':'no-store'});res.end('Unauthorized');return;
       }
+      entry.client=identity.clientId.slice(0,9);
       res.setHeader('Cache-Control','no-store');
-      await handleMcp(req,res,identity);
+      await handleMcp(req,res,identity,entry);
     }catch(error){
       log.error('MCP request failed:',clean(error,secrets()));
       if(!res.headersSent)res.writeHead(error?.status??500,{'content-type':'text/plain'});

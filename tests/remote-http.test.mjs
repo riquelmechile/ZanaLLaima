@@ -698,7 +698,7 @@ test('HTTP: una línea por ruta sin token, code, state, cookie ni query OAuth',a
   const s=await server(f,{log:{error(){},info(line){logs.push(line);}}});
   try{
     setEnrollment(s.settings.oauthDb,5);
-    const {access_token:token}=await login(s.base);
+    const {access_token:token,client_id}=await login(s.base);
     const state='state_SENTINEL_92',code='code_SENTINEL_72',cookie='cookie_SENTINEL_17';
     await fetch(s.base+'/authorize?state='+state+'&code='+code,{redirect:'manual'}).then(r=>r.text());
     await fetch(s.base+'/oauth/consent?sid=sid_SENTINEL_11&state='+state,
@@ -713,6 +713,6 @@ test('HTTP: una línea por ruta sin token, code, state, cookie ni query OAuth',a
       for(const secret of [state,code,cookie,token,'sid_SENTINEL_11','token_QUERY_SENTINEL','?'])
         assert.ok(!line.includes(secret),'HTTP log filtró '+secret);
     }
-    assert.ok(logs.at(-1).includes('MCP era=unknown')&&logs.at(-1).includes('client=-'));
+    assert.ok(logs.at(-1).includes('MCP era=unknown')&&logs.at(-1).includes('client='+client_id.slice(0,9)));
   }finally{await s.close();await f.cleanup();}
 });

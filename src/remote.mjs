@@ -1366,7 +1366,8 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
     const filter=z.object({host:z.string().max(100)}).strict(),
       named=z.enum(listEvents({host:'zana-chatgpt'}).events.map(event=>event.name));
     server.server.setRequestHandler('events/list',{params:z.object({cursor:z.string().optional()}).passthrough().optional(),
-      result:z.object({events:z.array(z.unknown())}).passthrough()},async(_input,ctx)=>events.list(await identityOf(ctx)));
+      result:z.object({events:z.array(z.unknown()),ttlMs:z.number().int().nonnegative(),
+        cacheScope:z.literal('private')}).passthrough()},async(_input,ctx)=>events.list(await identityOf(ctx)));
     server.server.setRequestHandler('events/subscribe',{params:z.object({name:named,arguments:filter,
       delivery:z.object({mode:z.literal('webhook'),url:z.string().max(2048),secret:z.string().max(256)}).strict(),
       cursor:z.string().nullable().optional(),ttlMs:z.number().int().nonnegative().nullable().optional(),

@@ -57,7 +57,7 @@ test('loss of native contexts falls back to solo with honest mixed provenance',(
   assert.equal(status.maxParallel,1);
 });
 
-test('capacity reduction never overbooks and model mismatch blocks review launch',()=>{
+test('capacity reduction never overbooks and model mismatch never blocks review',()=>{
   const m=prepared();
   openReview(m,{candidateSha:sha(5),hostReport:{
     nativeSubagents:{available:true,maxConcurrent:4}
@@ -70,7 +70,14 @@ test('capacity reduction never overbooks and model mismatch blocks review launch
   submitReview(m,{lensId:p.id,token:p.run.token,candidateSha:sha(5),
     verdict:'PASS',summary:'Checked verified candidate',evidence:['Reviewed tests'],
     execution:'NATIVE_SUBAGENT',contextId:'one'});
-  assert.equal(nextReviewBatch(m,{model:'other'}).mode,'BLOCKED');
+  assert.equal(nextReviewBatch(m,{model:'other'}).mode,'SOLO_SEQUENTIAL');
+  assert.equal(nextReviewBatch(m,{model:'other'}).lenses.length,1);
+  const different = prepared();
+  openReview(different,{candidateSha:sha(6),hostReport:{model:'gpt-6',reasoningEffort:'high',
+    nativeSubagents:{available:true,maxConcurrent:2}}});
+  assert.equal(different.review.mode,'NATIVE_PLANNED');
+  assert.equal(nextReviewBatch(different,{model:'gpt-6',reasoningEffort:'high',
+    nativeSubagents:{available:true,maxConcurrent:2}}).mode,'NATIVE_PLANNED');
 });
 
 test('candidate drift invalidates all pending packets and dirty tree counts as drift',()=>{

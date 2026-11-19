@@ -22,7 +22,7 @@ test('maximum policy requests, never claims actual model or fanout', () => {
   assert.equal(evaluateHost(host).modelStatus, 'HOST_REPORTED_UNVERIFIED');
   assert.equal(evaluateHost({}).executionMode, 'INLINE');
   assert.equal(evaluateHost({}).modelStatus, 'REQUESTED_UNVERIFIED');
-  assert.equal(evaluateHost({ model: 'other' }).allowed, false);
+  assert.equal(evaluateHost({ model: 'other' }).allowed, true);
 });
 
 test('local native batch plans two independent read units and no fake launches', () => {
@@ -70,12 +70,23 @@ test('reject dependency cycles, escaping paths, unauthorized writes and stale co
   assert.throws(() => completeUnit(m, 'read-a', batch.packets[0].token, evidence), /stale/);
 });
 
-test('explicit model mismatch blocks planning and unverified results stay labeled', () => {
+test('el modelo informado distinto no bloquea la reserva y conserva la trazabilidad', () => {
   const m = createMission(spec());
-  assert.equal(nextBatch(m, { model: 'different-model' }).mode, 'BLOCKED');
-  const b = startBatch(m, host).batch;
+  const mismatch = {model:'gpt-6',reasoningEffort:'high',nativeSubagents:host.nativeSubagents};
+  const status = evaluateHost(mismatch);
+  assert.equal(status.allowed, true);
+  assert.equal(status.modelStatus, 'HOST_REPORTED_MISMATCH');
+  assert.deepEqual(status.reported, {model:'gpt-6',reasoningEffort:'high'});
+  assert.equal(nextBatch(m, mismatch).mode, 'PARALLEL_PLAN');
+  const b = startBatch(m, mismatch).batch;
+  assert.equal(b.packets.length, 2);
+  assert.equal(m.units[0].status, 'RUNNING');
   completeUnit(m, b.packets[0].unitId, b.packets[0].token, { ...evidence, success: false });
   completeUnit(m, b.packets[1].unitId, b.packets[1].token, evidence);
   assert.equal(m.units[0].result.assurance, 'HOST_REPORTED_UNVERIFIED');
   assert.equal(nextBatch(m, host).mode, 'IDLE');
+  const invalid = evaluateHost({model:5,reasoningEffort:'x'.repeat(81)});
+  assert.equal(invalid.allowed, true);
+  assert.equal(invalid.modelStatus, 'HOST_REPORTED_MISMATCH');
+  assert.deepEqual(invalid.reported, {model:null,reasoningEffort:null});
 });

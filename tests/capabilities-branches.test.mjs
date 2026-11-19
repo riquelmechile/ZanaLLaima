@@ -39,7 +39,7 @@ test('native capacity reports are bounded, invalid reports never gain verificati
   assert.equal(full.verified.model,null);
   assert.equal(full.verified.nativeLaunches,null);
   const bad=capabilityContract({model:'not-requested'});
-  assert.equal(bad.decision.allowed,false);
+  assert.equal(bad.decision.allowed,true);
   assert.equal(bad.verified.model,null);
   assert.throws(()=>capabilityContract(null),/Host report must be an object/);
   assert.throws(()=>capabilityContract([]),/Host report must be an object/);

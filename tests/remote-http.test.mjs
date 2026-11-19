@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import * as z from 'zod/v4';
 import {createHash,randomBytes} from 'node:crypto';
 import {join} from 'node:path';
 import {request as httpRequest} from 'node:http';
@@ -12,6 +13,8 @@ import {REMOTE_TOOL_NAMES} from '../src/remote.mjs';
 import {runCli,parseCliCommand} from '../src/cli.mjs';
 import {remoteRead} from '../src/store.mjs';
 
+const CacheableResultSchema=z.object({ttlMs:z.number().int().nonnegative(),
+  cacheScope:z.enum(['public','private'])}).passthrough();
 const PASSWORD='p'.repeat(40);
 const REDIRECT='https://chatgpt.com/connector_platform_oauth_redirect';
 const PUBLIC='https://zanallaima.test/mcp';
@@ -144,6 +147,7 @@ test('Streamable HTTP sessions: two conversations get two sessions; the reviewer
       accept:'application/json, text/event-stream','mcp-session-id':a.transport.sessionId,'mcp-protocol-version':sa.client.protocolVersion},
       body:JSON.stringify({jsonrpc:'2.0',id:91,method:'events/list',params:{}})});
     const listedText=await listed.text(),listedJson=JSON.parse(listedText.split('\n').filter(l=>l.startsWith('data:')).map(l=>l.slice(5)).pop()??listedText);
+    assert.deepEqual([listedJson.result.ttlMs,listedJson.result.cacheScope],[0,'private']);
     assert.deepEqual(listedJson.result.events.map(e=>[e.name,e.inputSchema.properties.host.enum]),[['zana.review.ready',['zana-chatgpt']],['zana.review.done',['zana-chatgpt']],['zana.project.milestone_done',['zana-chatgpt']],['zana.project.ready_to_deliver',['zana-chatgpt']]]);
     const badSub=await fetch(s.base+'/mcp',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json',
       accept:'application/json, text/event-stream','mcp-session-id':a.transport.sessionId,'mcp-protocol-version':sa.client.protocolVersion},
@@ -599,6 +603,8 @@ test('MCP 2026-07-28: SDK, 59 tools, panel, sesión OAuth, revisión, eventos, H
     assert.equal(listed.status,200);
     const listedJson=JSON.parse(await listed.text());
     assert.ok(listedJson.result?.events?.some(e=>e.name==='zana.review.ready'),JSON.stringify(listedJson));
+    assert.deepEqual([listedJson.result.ttlMs,listedJson.result.cacheScope],[0,'private']);
+    CacheableResultSchema.parse(listedJson.result);
     const subscription={name:'zana.review.ready',arguments:{host:'zana-chatgpt'},
       delivery:{mode:'webhook',url:'https://hooks.example.com/modern',secret:'whsec_'+Buffer.alloc(32,4).toString('base64')}};
     const subscribed=await mrpc('events/subscribe',subscription);
@@ -685,4 +691,28 @@ test('E1 r4: suscribir y cancelar eventos de proyecto por HTTP JSON-RPC real',as
     }
     assert.equal(await active(),0,'unsubscribe HTTP debe borrar las suscripciones, no solo responder {}');
   }finally{if(client)await client.client.close();await s.close();await f.cleanup();}
+});
+
+test('HTTP: una línea por ruta sin token, code, state, cookie ni query OAuth',async()=>{
+  const f=await remoteFixture(),logs=[];
+  const s=await server(f,{log:{error(){},info(line){logs.push(line);}}});
+  try{
+    setEnrollment(s.settings.oauthDb,5);
+    const {access_token:token}=await login(s.base);
+    const state='state_SENTINEL_92',code='code_SENTINEL_72',cookie='cookie_SENTINEL_17';
+    await fetch(s.base+'/authorize?state='+state+'&code='+code,{redirect:'manual'}).then(r=>r.text());
+    await fetch(s.base+'/oauth/consent?sid=sid_SENTINEL_11&state='+state,
+      {headers:{cookie:'__Host-zana-consent='+cookie},redirect:'manual'}).then(r=>r.text());
+    await fetch(s.base+'/health').then(r=>r.text());
+    await fetch(s.base+'/mcp?token=token_QUERY_SENTINEL',{headers:{authorization:'Bearer '+token}}).then(r=>r.text());
+    const paths=logs.map(line=>line.match(/ path=([^ ]+)/)?.[1]);
+    assert.deepEqual(paths,['/register','/authorize','/oauth/consent','/oauth/consent','/token',
+      '/authorize','/oauth/consent','/health','/mcp']);
+    for(const line of logs){
+      assert.match(line,/HTTP method=(GET|POST) path=\/[^ ]* status=\d+ durationMs=\d+/);
+      for(const secret of [state,code,cookie,token,'sid_SENTINEL_11','token_QUERY_SENTINEL','?'])
+        assert.ok(!line.includes(secret),'HTTP log filtró '+secret);
+    }
+    assert.ok(logs.at(-1).includes('MCP era=unknown')&&logs.at(-1).includes('client=-'));
+  }finally{await s.close();await f.cleanup();}
 });

@@ -25,7 +25,9 @@ test('pedir una revisión avisa al monitor suscrito y la ejecución despertada r
   try{
     const ready=await t.f.authorReady(),author={session:ready.author};
     const identity={clientId:author.session.clientId,host:'zana-chatgpt'};
-    assert.deepEqual((await t.f.runtime.events.list(identity)).events.map(e=>e.name),[REVIEW_EVENT,REVIEW_DONE_EVENT,'zana.project.milestone_done','zana.project.ready_to_deliver']);
+    const catalog=await t.f.runtime.events.list(identity);
+    assert.deepEqual([catalog.ttlMs,catalog.cacheScope],[0,'private']);
+    assert.deepEqual(catalog.events.map(e=>e.name),[REVIEW_EVENT,REVIEW_DONE_EVENT,'zana.project.milestone_done','zana.project.ready_to_deliver']);
     const sub=await t.f.runtime.events.subscribe(identity,t.input);
     assert.match(sub.id,/^sub_/);
     const r=await t.f.call('zana_review_request',{missionId:ready.missionId},author.session);

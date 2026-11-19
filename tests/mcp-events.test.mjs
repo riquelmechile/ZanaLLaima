@@ -44,6 +44,7 @@ test('solo acepta callbacks HTTPS públicos y firma como Standard Webhooks',()=>
 test('suscribirse exige el desafío firmado, el host propio y queda ligado al cliente OAuth',async()=>{
   const t=setup();
   try{
+    assert.deepEqual([listEvents(me).ttlMs,listEvents(me).cacheScope],[0,'private']);
     assert.deepEqual(listEvents(me).events.map(e=>[e.name,e.delivery]),[[REVIEW_EVENT,['webhook']],[REVIEW_DONE_EVENT,['webhook']],['zana.project.milestone_done',['webhook']],['zana.project.ready_to_deliver',['webhook']]]);
     await assert.rejects(t.subscribe(me,{name:'otro.evento'}),/Unknown event/);
     await assert.rejects(t.subscribe(me,{arguments:{host:'otro-host'}}),/filter/);

@@ -704,7 +704,8 @@ test('HTTP: una línea por ruta sin token, code, state, cookie ni query OAuth',a
     await fetch(s.base+'/oauth/consent?sid=sid_SENTINEL_11&state='+state,
       {headers:{cookie:'__Host-zana-consent='+cookie},redirect:'manual'}).then(r=>r.text());
     await fetch(s.base+'/health').then(r=>r.text());
-    await fetch(s.base+'/mcp?token=token_QUERY_SENTINEL',{headers:{authorization:'Bearer '+token}}).then(r=>r.text());
+    await fetch(s.base+'/mcp?token=token_QUERY_SENTINEL',{method:'POST',
+      headers:{authorization:'Bearer '+token,'content-type':'text/plain'},body:'invalid'}).then(r=>r.text());
     const paths=logs.map(line=>line.match(/ path=([^ ]+)/)?.[1]);
     assert.deepEqual(paths,['/register','/authorize','/oauth/consent','/oauth/consent','/token',
       '/authorize','/oauth/consent','/health','/mcp']);

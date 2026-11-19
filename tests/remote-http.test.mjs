@@ -559,7 +559,8 @@ test('MCP 2026-07-28: SDK, 59 tools, panel, sesión OAuth, revisión, eventos, H
     assert.equal(a.client.getProtocolEra(),'modern');
     assert.equal(a.transport.sessionId,undefined,'modern no negocia Mcp-Session-Id');
     const names=(await a.client.listTools()).tools;
-    assert.deepEqual(names.map(x=>x.name).sort(),REMOTE_TOOL_NAMES.filter(x=>x!=='zana_panel_decide'));
+    assert.deepEqual(names.map(x=>x.name).sort(),REMOTE_TOOL_NAMES,'modern expone las 59 tools, con los metadatos app-only');
+    assert.deepEqual(names.find(x=>x.name==='zana_panel_decide')._meta?.ui?.visibility,['app']);
     const panel=names.find(x=>x.name==='zana_project_approval_panel');
     assert.ok(panel._meta?.ui?.resourceUri&&panel._meta['openai/outputTemplate'],'panel MCP Apps');
     const resources=(await a.client.listResources()).resources;

@@ -16,10 +16,10 @@ const PASSWORD='p'.repeat(40);
 const REDIRECT='https://chatgpt.com/connector_platform_oauth_redirect';
 const PUBLIC='https://zanallaima.test/mcp';
 
-async function server(f,{password=PASSWORD,maxSessions,runtime=f.runtime,idleMs,conversationIdleMs}={}){
+async function server(f,{password=PASSWORD,maxSessions,runtime=f.runtime,idleMs,conversationIdleMs,log={error(){}}}={}){
   const settings={...httpSettings({ZANA_PUBLIC_HOST:'zanallaima.test',ZANA_OAUTH_DB:join(f.dir,'oauth.sqlite')}),password};
   const oauth=new EmbeddedOAuth({path:settings.oauthDb,resource:PUBLIC,redirectUris:[REDIRECT],password});
-  const http=createHttpServer({runtime,oauth,settings,log:{error(){}},...(maxSessions===undefined?{}:{maxSessions}),
+  const http=createHttpServer({runtime,oauth,settings,log,...(maxSessions===undefined?{}:{maxSessions}),
     ...(idleMs?{idleMs}:{}),...(conversationIdleMs?{conversationIdleMs}:{})});
   await new Promise(ok=>http.listen(0,'127.0.0.1',ok));
   const base='http://127.0.0.1:'+http.address().port;
@@ -212,7 +212,7 @@ test('Streamable HTTP sessions: two conversations get two sessions; the reviewer
     const envelope=await fetch(s.base+'/mcp',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},
       body:JSON.stringify({jsonrpc:'2.0',id:1,method:'server/discover',params:{_meta:{'io.modelcontextprotocol/protocolVersion':'2026-07-28'}}})});
     assert.equal(envelope.status,400);
-    assert.match((await envelope.json()).error.message,/Unsupported protocol version/);
+    assert.ok((await envelope.json()).error,'el intento malformado debe seguir fallando');
     const badJson=await fetch(s.base+'/mcp',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:'{'});
     assert.equal(badJson.status,400);
     const big=await fetch(s.base+'/mcp',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},
@@ -234,16 +234,20 @@ test('Streamable HTTP sessions: two conversations get two sessions; the reviewer
   }finally{await s.close();await f.cleanup();}
 });
 
-test('a negotiating 2026 client falls back to the sessionful transport',async()=>{
+test('un cliente negociador usa modern y un cliente clásico conserva initialize',async()=>{
   const f=await remoteFixture();
   const s=await server(f);
   try{
     setEnrollment(s.settings.oauthDb,5);
     const {access_token:token}=await login(s.base);
+    const legacy=await connect(s.base,token);
+    assert.ok(legacy.transport.sessionId,'legacy session established');
+    assert.equal((await legacy.call('zana_profile')).requested.model,'gpt-6-astra');
     const c=await connect(s.base,token,{versionNegotiation:{mode:'auto'}});
-    assert.ok(c.transport.sessionId,'legacy session established');
+    assert.equal(c.client.getProtocolEra(),'modern');
+    assert.equal(c.transport.sessionId,undefined);
     assert.equal((await c.call('zana_profile')).requested.model,'gpt-6-astra');
-    await c.client.close();
+    await c.client.close();await legacy.client.close();
   }finally{await s.close();await f.cleanup();}
 });
 
@@ -535,35 +539,84 @@ test('transportes: los de conversación se sueltan a los minutos; uno con una ll
   }finally{release();if(s)await s.close();await f.cleanup();}
 });
 
-test('los intentos del protocolo 2026-07-28 se rechazan, pero quedan contados en el /health local',async()=>{
-  const f=await remoteFixture();
-  const s=await server(f);
+test('MCP 2026-07-28: SDK, 59 tools, panel, sesión OAuth, revisión, eventos, HTTP y logs',async()=>{
+  const logs=[];
+  const f=await remoteFixture({runtimeOptions:{eventPost:async(url,headers,body)=>{
+    const message=JSON.parse(body);return {status:200,body:JSON.stringify({challenge:message.challenge})};
+  }}});
+  const s=await server(f,{log:{error(){},info(line){logs.push(line);}}});
+  const open=[];
+  const meta=session=>({'openai/session':session});
+  const modernCall=async(c,name,args={},session='conversacion-a')=>{
+    const r=await c.client.callTool({name,arguments:args,_meta:meta(session)});
+    return r.isError?{error:r.content?.[0]?.text}:r.structuredContent;
+  };
   try{
     setEnrollment(s.settings.oauthDb,5);
-    const {access_token:token}=await login(s.base);
-    const health=async(headers={})=>(await fetch(s.base+'/health',{headers})).json();
-    assert.deepEqual((await health()).protocol,{served:'2025 (initialize, con sesiones)',modernRejected:{count:0,last:null,versions:{},methods:{}}});
-    const modern=(method,version)=>rpc(s.base,token,{jsonrpc:'2.0',id:1,method,params:{_meta:{'io.modelcontextprotocol/protocolVersion':version}}});
-    assert.equal((await modern('server/discover','2026-07-28')).status,400);
-    assert.equal((await modern('tools/list','2026-07-28')).status,400);
-    assert.equal((await modern('tools/call','x'.repeat(500)+'\u0000')).status,400);
-    for(let i=0;i<12;i++)await modern('m'+i,'v'+i);
-    assert.equal((await rpc(s.base,token,{jsonrpc:'2.0',id:2,method:'tools/list'})).status,400,'sin sobre no es un intento moderno');
-    const seen=(await health()).protocol.modernRejected;
-    assert.equal(seen.count,15);
-    assert.match(seen.last,/^20\d\d-/);
-    assert.equal(seen.versions['2026-07-28'],2);
-    assert.deepEqual([seen.methods['server/discover'],seen.methods['tools/list']],[1,1]);
-    assert.ok(Object.keys(seen.versions).length<=10&&Object.keys(seen.methods).length<=10,'acotado: valores del cliente no crecen sin tope');
-    assert.ok(Object.keys(seen.versions).every(k=>k.length<=40&&!k.includes('\u0000')));
-    assert.equal((await health({'cf-connecting-ip':'203.0.113.9'})).protocol,undefined,'por el túnel no se publica');
-    // Sin autenticación no se cuenta nada: el contador no lo puede inflar un tercero.
-    await fetch(s.base+'/mcp',{method:'POST',headers:{'content-type':'application/json'},
-      body:JSON.stringify({jsonrpc:'2.0',id:1,method:'x',params:{_meta:{'io.modelcontextprotocol/protocolVersion':'2026-07-28'}}})});
-    assert.equal((await health()).protocol.modernRejected.count,15);
-  }finally{await s.close();await f.cleanup();}
+    const first=await login(s.base),token=first.access_token;
+    const a=await connect(s.base,token,{versionNegotiation:{mode:{pin:'2026-07-28'}}});
+    open.push(a);
+    assert.equal(a.client.getProtocolEra(),'modern');
+    assert.equal(a.transport.sessionId,undefined,'modern no negocia Mcp-Session-Id');
+    const names=(await a.client.listTools()).tools;
+    assert.deepEqual(names.map(x=>x.name).sort(),REMOTE_TOOL_NAMES.filter(x=>x!=='zana_panel_decide'));
+    const panel=names.find(x=>x.name==='zana_project_approval_panel');
+    assert.ok(panel._meta?.ui?.resourceUri&&panel._meta['openai/outputTemplate'],'panel MCP Apps');
+    const resources=(await a.client.listResources()).resources;
+    assert.ok(resources.some(x=>x.uri===panel._meta.ui.resourceUri));
+    const resource=await a.client.readResource({uri:panel._meta.ui.resourceUri});
+    assert.ok(resource.contents[0]._meta?.ui,'CSP de la vista no desaparece en modern');
+    const status=await modernCall(a,'zana_session_status');
+    assert.match(status.session.id,/^oai-[0-9a-f]{32}$/);
+    assert.equal((await modernCall(a,'zana_session_status')).session.id,status.session.id);
+    const workspace=await modernCall(a,'zana_workspace_create',{idea:'Proyecto OAuth moderno con aislación de cliente'});
+    assert.ok(workspace.workspaceId);
+    const second=await login(s.base);
+    const b=await connect(s.base,second.access_token,{versionNegotiation:{mode:{pin:'2026-07-28'}}});
+    open.push(b);
+    assert.notEqual((await modernCall(b,'zana_session_status')).session.id,status.session.id);
+    assert.match((await modernCall(b,'zana_workspace_get',{workspaceId:workspace.workspaceId})).error,/WORKSPACE_NOT_FOUND/);
+    // Cada conversación modern mantiene su propia identidad de escritora/revisora.
+    const init=await modernCall(a,'zana_mission_init',{spec:f.spec,github:{repo:'o/r',base:'main'}});
+    const packet=(await modernCall(a,'zana_start_batch')).packets[0];
+    f.api.state.diffText='diff --git a/src/a.mjs b/src/a.mjs\n--- a/src/a.mjs\n+++ b/src/a.mjs\n@@ -1 +1,2 @@\n a\n+b\n';
+    f.api.state.push(init.github.branch,'a'.repeat(40));f.api.state.green('a'.repeat(40));f.api.state.openPull(init.github.branch);
+    await modernCall(a,'zana_complete_unit',{unitId:packet.unitId,token:packet.token,leaseGeneration:packet.leaseGeneration,
+      outcome:{success:true,summary:'CI verde',evidence:['CI verde']}});
+    const review=await modernCall(a,'zana_review_request',{missionId:init.id});
+    assert.equal((await modernCall(a,'zana_review_claim',{ticket:review.ticket},'conversacion-revisora')).state,'CLAIMED');
+    const denied=await modernCall(a,'zana_ds_github',{operation:'push_files',missionId:init.id,
+      arguments:{owner:'o',repo:'r',branch:init.github.branch,files:[{path:'a',content:'x'}],message:'m'}},'conversacion-revisora');
+    assert.match(denied.error,/REVIEWER_READ_ONLY/);
+    const envelope={'io.modelcontextprotocol/protocolVersion':'2026-07-28',
+      'io.modelcontextprotocol/clientInfo':{name:'raw-test',version:'1'},'io.modelcontextprotocol/clientCapabilities':{}};
+    const mrpc=(method,params={},headers={})=>fetch(s.base+'/mcp',{method:'POST',headers:{
+      authorization:'Bearer '+token,'content-type':'application/json',accept:'application/json, text/event-stream',
+      'mcp-protocol-version':'2026-07-28','mcp-method':method,...(params.name?{'mcp-name':params.name}:{}),...headers},
+      body:JSON.stringify({jsonrpc:'2.0',id:123,method,params:{...params,_meta:{...envelope,'openai/session':'conversacion-a'}}})});
+    const listed=await mrpc('events/list');
+    assert.equal(listed.status,200);
+    assert.match(await listed.text(),/zana.review.ready/);
+    const subscription={name:'zana.review.ready',arguments:{host:'zana-chatgpt'},
+      delivery:{mode:'webhook',url:'https://hooks.example.com/modern',secret:'whsec_'+Buffer.alloc(32,4).toString('base64')}};
+    const subscribed=await mrpc('events/subscribe',subscription);
+    assert.equal(subscribed.status,200);
+    assert.match(await subscribed.text(),/"id"/);
+    const unsubscribed=await mrpc('events/unsubscribe',{name:subscription.name,arguments:subscription.arguments,
+      delivery:{mode:'webhook',url:subscription.delivery.url}});
+    assert.equal(unsubscribed.status,200);
+    assert.deepEqual(JSON.parse(await unsubscribed.text()).result,{});
+    const bad=await fetch(s.base+'/mcp',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'text/plain'},body:'bad'});
+    assert.equal(bad.status,415);
+    const health=await (await fetch(s.base+'/health')).json();
+    assert.equal(health.protocol.served,'2025+2026-07-28');
+    assert.ok(health.protocol.counts.modern>0);
+    assert.equal((await fetch(s.base+'/health',{headers:{'cf-connecting-ip':'203.0.113.9'}}).then(r=>r.json())).protocol,undefined);
+    await fetch(s.base+'/mcp',{method:'POST',headers:{'content-type':'application/json'},body:'{}'});
+    assert.ok(logs.some(x=>x.includes('era=modern')&&x.includes('status=200')&&x.includes(first.client_id.slice(0,9))));
+    assert.ok(logs.every(x=>!x.includes(token)&&!x.includes(second.access_token)&&!x.includes('Proyecto OAuth')));
+  }finally{for(const c of open)await c.client.close().catch(()=>{});await s.close();await f.cleanup();}
 });
-
 
 test('E1 r4: suscribir y cancelar eventos de proyecto por HTTP JSON-RPC real',async()=>{
   const posts=[];

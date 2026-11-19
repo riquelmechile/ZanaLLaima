@@ -221,8 +221,10 @@ export function createHttpServer({runtime,oauth,settings,log=console,maxSessions
       log.info?.('HTTP method='+req.method+' path='+path+' status='+res.statusCode+' durationMs='+durationMs+
         (path==='/mcp'?' MCP era='+entry.era+' method='+entry.method+' client='+entry.client:''));
     };
-    res.once('finish',record);
-    res.once('close',record);
+    if(typeof res.once==='function'){
+      res.once('finish',record);
+      res.once('close',record);
+    }
     try{
       if(req.method==='GET'&&path==='/health'){
         const h=await runtime.health();

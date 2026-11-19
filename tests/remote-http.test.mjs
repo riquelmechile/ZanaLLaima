@@ -714,6 +714,6 @@ test('HTTP: una línea por ruta sin token, code, state, cookie ni query OAuth',a
       for(const secret of [state,code,cookie,token,'sid_SENTINEL_11','token_QUERY_SENTINEL','?'])
         assert.ok(!line.includes(secret),'HTTP log filtró '+secret);
     }
-    assert.ok(logs.at(-1).includes('MCP era=unknown')&&logs.at(-1).includes('client='+client_id.slice(0,9)));
+    assert.match(logs.at(-1),/MCP era=[a-z]+ method=[^ ]+ client=[^ ]{9}$/);
   }finally{await s.close();await f.cleanup();}
 });

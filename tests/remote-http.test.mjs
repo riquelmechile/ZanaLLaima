@@ -609,7 +609,8 @@ test('MCP 2026-07-28: SDK, 59 tools, panel, sesión OAuth, revisión, eventos, H
       delivery:{mode:'webhook',url:subscription.delivery.url}});
     assert.equal(unsubscribed.status,200);
     const offJson=JSON.parse(await unsubscribed.text());
-    assert.deepEqual(offJson.result,{},JSON.stringify(offJson));
+    assert.equal(offJson.result?.resultType,'complete',JSON.stringify(offJson));
+    assert.equal(offJson.result?._meta?.['io.modelcontextprotocol/serverInfo']?.name,'zana-llaima');
     const bad=await fetch(s.base+'/mcp',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'text/plain'},body:'bad'});
     assert.equal(bad.status,415);
     const health=await (await fetch(s.base+'/health')).json();

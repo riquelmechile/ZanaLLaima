@@ -597,16 +597,19 @@ test('MCP 2026-07-28: SDK, 59 tools, panel, sesión OAuth, revisión, eventos, H
       body:JSON.stringify({jsonrpc:'2.0',id:123,method,params:{...params,_meta:{...envelope,'openai/session':'conversacion-a'}}})});
     const listed=await mrpc('events/list');
     assert.equal(listed.status,200);
-    assert.match(await listed.text(),/zana.review.ready/);
+    const listedJson=JSON.parse(await listed.text());
+    assert.ok(listedJson.result?.events?.some(e=>e.name==='zana.review.ready'),JSON.stringify(listedJson));
     const subscription={name:'zana.review.ready',arguments:{host:'zana-chatgpt'},
       delivery:{mode:'webhook',url:'https://hooks.example.com/modern',secret:'whsec_'+Buffer.alloc(32,4).toString('base64')}};
     const subscribed=await mrpc('events/subscribe',subscription);
     assert.equal(subscribed.status,200);
-    assert.match(await subscribed.text(),/"id"/);
+    const subscribedJson=JSON.parse(await subscribed.text());
+    assert.ok(subscribedJson.result?.id,JSON.stringify(subscribedJson));
     const unsubscribed=await mrpc('events/unsubscribe',{name:subscription.name,arguments:subscription.arguments,
       delivery:{mode:'webhook',url:subscription.delivery.url}});
     assert.equal(unsubscribed.status,200);
-    assert.deepEqual(JSON.parse(await unsubscribed.text()).result,{});
+    const offJson=JSON.parse(await unsubscribed.text());
+    assert.deepEqual(offJson.result,{},JSON.stringify(offJson));
     const bad=await fetch(s.base+'/mcp',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'text/plain'},body:'bad'});
     assert.equal(bad.status,415);
     const health=await (await fetch(s.base+'/health')).json();

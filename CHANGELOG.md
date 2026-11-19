@@ -2,6 +2,8 @@
 
 ## [Sin publicar]
 
+- Soporte dual de MCP 2025 (sesiones existentes) y 2026-07-28 (descubrimiento y herramientas por petición) sin duplicar el catálogo, con aislamiento OAuth, panel MCP Apps, MCP Events y contadores seguros en `/health` local.
+
 ## [0.10.0] - 2026-11-18
 
 ### Orquestador de hitos (B1–C6)

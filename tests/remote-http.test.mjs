@@ -626,6 +626,24 @@ test('MCP 2026-07-28: SDK, 59 tools, panel, sesión OAuth, revisión, eventos, H
     await fetch(s.base+'/mcp',{method:'POST',headers:{'content-type':'application/json'},body:'{}'});
     assert.ok(logs.some(x=>x.includes('era=modern')&&x.includes('status=200')&&x.includes(first.client_id.slice(0,9))));
     assert.ok(logs.every(x=>!x.includes(token)&&!x.includes(second.access_token)&&!x.includes('Proyecto OAuth')));
+    const state='state_SENTINEL_92',code='code_SENTINEL_72',cookie='cookie_SENTINEL_17';
+    const before=logs.length;
+    await fetch(s.base+'/authorize?state='+state+'&code='+code,{redirect:'manual'}).then(r=>r.text());
+    await fetch(s.base+'/oauth/consent?sid=sid_SENTINEL_11&state='+state,
+      {headers:{cookie:'__Host-zana-consent='+cookie},redirect:'manual'}).then(r=>r.text());
+    await fetch(s.base+'/mcp?token=token_QUERY_SENTINEL',{method:'POST',
+      headers:{authorization:'Bearer '+token,'content-type':'text/plain'},body:'invalid'}).then(r=>r.text());
+    const logged=logs.slice(before);
+    assert.deepEqual(logged.map(line=>line.match(/ path=([^ ]+)/)?.[1]),
+      ['/authorize','/oauth/consent','/mcp']);
+    for(const line of logs){
+      assert.match(line,/HTTP method=(GET|POST) path=\/[^ ]* status=\d+ durationMs=\d+/);
+      for(const secret of [state,code,cookie,token,'sid_SENTINEL_11','token_QUERY_SENTINEL','?'])
+        assert.ok(!line.includes(secret),'HTTP log filtró '+secret);
+    }
+    assert.match(logs.at(-1),/MCP era=[a-z]+ method=[^ ]+ client=[^ ]{9}$/);
+    for(const path of ['/register','/authorize','/oauth/consent','/token','/health','/mcp'])
+      assert.ok(logs.some(line=>line.includes(' path='+path+' ')),path);
   }finally{for(const c of open)await c.client.close().catch(()=>{});await s.close();await f.cleanup();}
 });
 
@@ -691,29 +709,4 @@ test('E1 r4: suscribir y cancelar eventos de proyecto por HTTP JSON-RPC real',as
     }
     assert.equal(await active(),0,'unsubscribe HTTP debe borrar las suscripciones, no solo responder {}');
   }finally{if(client)await client.client.close();await s.close();await f.cleanup();}
-});
-
-test('HTTP: una línea por ruta sin token, code, state, cookie ni query OAuth',async()=>{
-  const f=await remoteFixture(),logs=[];
-  const s=await server(f,{log:{error(){},info(line){logs.push(line);}}});
-  try{
-    setEnrollment(s.settings.oauthDb,5);
-    const {access_token:token,client_id}=await login(s.base);
-    const state='state_SENTINEL_92',code='code_SENTINEL_72',cookie='cookie_SENTINEL_17';
-    await fetch(s.base+'/authorize?state='+state+'&code='+code,{redirect:'manual'}).then(r=>r.text());
-    await fetch(s.base+'/oauth/consent?sid=sid_SENTINEL_11&state='+state,
-      {headers:{cookie:'__Host-zana-consent='+cookie},redirect:'manual'}).then(r=>r.text());
-    await fetch(s.base+'/health').then(r=>r.text());
-    await fetch(s.base+'/mcp?token=token_QUERY_SENTINEL',{method:'POST',
-      headers:{authorization:'Bearer '+token,'content-type':'text/plain'},body:'invalid'}).then(r=>r.text());
-    const paths=logs.map(line=>line.match(/ path=([^ ]+)/)?.[1]);
-    assert.deepEqual(paths,['/register','/authorize','/oauth/consent','/oauth/consent','/token',
-      '/authorize','/oauth/consent','/health','/mcp']);
-    for(const line of logs){
-      assert.match(line,/HTTP method=(GET|POST) path=\/[^ ]* status=\d+ durationMs=\d+/);
-      for(const secret of [state,code,cookie,token,'sid_SENTINEL_11','token_QUERY_SENTINEL','?'])
-        assert.ok(!line.includes(secret),'HTTP log filtró '+secret);
-    }
-    assert.match(logs.at(-1),/MCP era=[a-z]+ method=[^ ]+ client=[^ ]{9}$/);
-  }finally{await s.close();await f.cleanup();}
 });

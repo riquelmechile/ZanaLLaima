@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import * as z from 'zod/v4';
 import {createHash,randomBytes} from 'node:crypto';
 import {join} from 'node:path';
 import {request as httpRequest} from 'node:http';
@@ -12,6 +13,8 @@ import {REMOTE_TOOL_NAMES} from '../src/remote.mjs';
 import {runCli,parseCliCommand} from '../src/cli.mjs';
 import {remoteRead} from '../src/store.mjs';
 
+const CacheableResultSchema=z.object({ttlMs:z.number().int().nonnegative(),
+  cacheScope:z.enum(['public','private'])}).passthrough();
 const PASSWORD='p'.repeat(40);
 const REDIRECT='https://chatgpt.com/connector_platform_oauth_redirect';
 const PUBLIC='https://zanallaima.test/mcp';
@@ -144,6 +147,7 @@ test('Streamable HTTP sessions: two conversations get two sessions; the reviewer
       accept:'application/json, text/event-stream','mcp-session-id':a.transport.sessionId,'mcp-protocol-version':sa.client.protocolVersion},
       body:JSON.stringify({jsonrpc:'2.0',id:91,method:'events/list',params:{}})});
     const listedText=await listed.text(),listedJson=JSON.parse(listedText.split('\n').filter(l=>l.startsWith('data:')).map(l=>l.slice(5)).pop()??listedText);
+    assert.deepEqual([listedJson.result.ttlMs,listedJson.result.cacheScope],[0,'private']);
     assert.deepEqual(listedJson.result.events.map(e=>[e.name,e.inputSchema.properties.host.enum]),[['zana.review.ready',['zana-chatgpt']],['zana.review.done',['zana-chatgpt']],['zana.project.milestone_done',['zana-chatgpt']],['zana.project.ready_to_deliver',['zana-chatgpt']]]);
     const badSub=await fetch(s.base+'/mcp',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json',
       accept:'application/json, text/event-stream','mcp-session-id':a.transport.sessionId,'mcp-protocol-version':sa.client.protocolVersion},
@@ -599,6 +603,8 @@ test('MCP 2026-07-28: SDK, 59 tools, panel, sesión OAuth, revisión, eventos, H
     assert.equal(listed.status,200);
     const listedJson=JSON.parse(await listed.text());
     assert.ok(listedJson.result?.events?.some(e=>e.name==='zana.review.ready'),JSON.stringify(listedJson));
+    assert.deepEqual([listedJson.result.ttlMs,listedJson.result.cacheScope],[0,'private']);
+    CacheableResultSchema.parse(listedJson.result);
     const subscription={name:'zana.review.ready',arguments:{host:'zana-chatgpt'},
       delivery:{mode:'webhook',url:'https://hooks.example.com/modern',secret:'whsec_'+Buffer.alloc(32,4).toString('base64')}};
     const subscribed=await mrpc('events/subscribe',subscription);
@@ -620,6 +626,24 @@ test('MCP 2026-07-28: SDK, 59 tools, panel, sesión OAuth, revisión, eventos, H
     await fetch(s.base+'/mcp',{method:'POST',headers:{'content-type':'application/json'},body:'{}'});
     assert.ok(logs.some(x=>x.includes('era=modern')&&x.includes('status=200')&&x.includes(first.client_id.slice(0,9))));
     assert.ok(logs.every(x=>!x.includes(token)&&!x.includes(second.access_token)&&!x.includes('Proyecto OAuth')));
+    const state='state_SENTINEL_92',code='code_SENTINEL_72',cookie='cookie_SENTINEL_17';
+    const before=logs.length;
+    await fetch(s.base+'/authorize?state='+state+'&code='+code,{redirect:'manual'}).then(r=>r.text());
+    await fetch(s.base+'/oauth/consent?sid=sid_SENTINEL_11&state='+state,
+      {headers:{cookie:'__Host-zana-consent='+cookie},redirect:'manual'}).then(r=>r.text());
+    await fetch(s.base+'/mcp?token=token_QUERY_SENTINEL',{method:'POST',
+      headers:{authorization:'Bearer '+token,'content-type':'text/plain'},body:'invalid'}).then(r=>r.text());
+    const logged=logs.slice(before);
+    assert.deepEqual(logged.map(line=>line.match(/ path=([^ ]+)/)?.[1]),
+      ['/authorize','/oauth/consent','/mcp']);
+    for(const line of logs){
+      assert.match(line,/HTTP method=(GET|POST) path=\/[^ ]* status=\d+ durationMs=\d+/);
+      for(const secret of [state,code,cookie,token,'sid_SENTINEL_11','token_QUERY_SENTINEL','?'])
+        assert.ok(!line.includes(secret),'HTTP log filtró '+secret);
+    }
+    assert.match(logs.at(-1),/MCP era=[a-z]+ method=[^ ]+ client=[^ ]{9}$/);
+    for(const path of ['/register','/authorize','/oauth/consent','/token','/health','/mcp'])
+      assert.ok(logs.some(line=>line.includes(' path='+path+' ')),path);
   }finally{for(const c of open)await c.client.close().catch(()=>{});await s.close();await f.cleanup();}
 });
 

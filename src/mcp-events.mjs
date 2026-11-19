@@ -96,7 +96,7 @@ function check(identity,input){
 }
 
 export function listEvents({host}){
-  return {events:[{name:REVIEW_EVENT,delivery:['webhook'],
+  return {ttlMs:0,cacheScope:'private',events:[{name:REVIEW_EVENT,delivery:['webhook'],
     description:'A review ticket of this account is ready. Start a new run, load the zana-4r skill and claim it with zana_review_claim.',
     inputSchema:{type:'object',properties:{host:{type:'string',enum:[host]}},required:['host'],additionalProperties:false},
     payloadSchema:{type:'object',properties:{ticketId:{type:'string',format:'uuid'}},required:['ticketId'],additionalProperties:false}},

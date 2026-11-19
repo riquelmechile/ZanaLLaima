@@ -211,11 +211,21 @@ export function createHttpServer({runtime,oauth,settings,log=console,maxSessions
     finally{await modern.close();}
   }
   const server=createServer(async(req,res)=>{
+    const start=process.hrtime.bigint(),path=(req.url??'').split('?')[0];
+    const entry={era:'unknown',method:'-',client:'-'};
+    let logged=false;
+    const record=()=>{
+      if(logged)return;
+      logged=true;
+      const durationMs=Number((process.hrtime.bigint()-start)/1_000_000n);
+      log.info?.('HTTP method='+req.method+' path='+path+' status='+res.statusCode+' durationMs='+durationMs+
+        (path==='/mcp'?' MCP era='+entry.era+' method='+entry.method+' client='+entry.client:''));
+    };
+    if(typeof res.once==='function'){
+      res.once('finish',record);
+      res.once('close',record);
+    }
     try{
-      const path=(req.url??'').split('?')[0];
-      const entry={era:'unknown',method:'-',client:'-'};
-      if(path==='/mcp')res.once('finish',()=>log.info?.(
-        'MCP era='+entry.era+' method='+entry.method+' status='+res.statusCode+' client='+entry.client));
       if(req.method==='GET'&&path==='/health'){
         const h=await runtime.health();
         // Through the tunnel only status, version and counts; the detail (error

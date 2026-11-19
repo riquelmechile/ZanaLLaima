@@ -1369,11 +1369,13 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       result:z.object({events:z.array(z.unknown())}).passthrough()},async(_input,ctx)=>events.list(await identityOf(ctx)));
     server.server.setRequestHandler('events/subscribe',{params:z.object({name:named,arguments:filter,
       delivery:z.object({mode:z.literal('webhook'),url:z.string().max(2048),secret:z.string().max(256)}).strict(),
-      cursor:z.string().nullable().optional(),ttlMs:z.number().int().nonnegative().nullable().optional()}).strict(),
+      cursor:z.string().nullable().optional(),ttlMs:z.number().int().nonnegative().nullable().optional(),
+      _meta:z.object({}).passthrough().optional()}).strict(),
       result:z.object({id:z.string(),refreshBefore:z.string().nullable(),cursor:z.null(),truncated:z.boolean()}).strict()},
       async(input,ctx)=>events.subscribe(await identityOf(ctx),input));
     server.server.setRequestHandler('events/unsubscribe',{params:z.object({name:named,arguments:filter,
-      delivery:z.object({mode:z.literal('webhook').optional(),url:z.string().max(2048)}).strict()}).strict(),
+      delivery:z.object({mode:z.literal('webhook').optional(),url:z.string().max(2048)}).strict(),
+      _meta:z.object({}).passthrough().optional()}).strict(),
       result:z.object({}).strict()},async(input,ctx)=>events.unsubscribe(await identityOf(ctx),input));
     server.registerResource('approval-panel',PANEL_URI,{mimeType:PANEL_MIME},async uri=>({contents:[{
       uri:uri.href,mimeType:PANEL_MIME,text:panelHtml(),

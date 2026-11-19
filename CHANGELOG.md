@@ -2,6 +2,8 @@
 
 ## [Sin publicar]
 
+- Las diferencias de modelo/esfuerzo del anfitrión ya no bloquean lotes ni revisiones: `HOST_REPORTED_MISMATCH` registra `reported` acotado y `allowed` permanece `true` por compatibilidad. Pruebas para reserva de unidades, capacidad y revisión.
+
 - MCP: patrones de schemas portables para clientes no JavaScript; conserva validación Unicode en el handler y registra `rpc=result|error:<código>|-` sin exponer contenidos ni bufferizar SSE.
 
 - MCP Events `events/list` añade `ttlMs: 0` y `cacheScope: private` por identidad OAuth en 2025 y 2026; el HTTP registra método, ruta sin query, estado y duración de todas las rutas, preservando era, método RPC y cliente de `/mcp` sin datos sensibles.

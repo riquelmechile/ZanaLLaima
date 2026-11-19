@@ -2,6 +2,8 @@
 
 **Estado:** guía para la prueba humana. No se ha confirmado que una sesión Codex real haya utilizado este MCP, ni su modelo o esfuerzo. El motor es autónomo y no requiere APIs de inferencia.
 
+Si el modelo o esfuerzo informado difiere de `HOST_REQUEST`, se registra como `HOST_REPORTED_MISMATCH`; no bloquea las unidades ni la revisión. La declaración del anfitrión permanece sin verificación independiente.
+
 ## 1. Preparar el entorno
 
 En Linux, con Node 22.16+ y Codex CLI instalado:

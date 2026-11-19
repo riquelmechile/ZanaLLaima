@@ -17,6 +17,8 @@
 
 El repositorio se define mediante `ZANA_REVIEW_REPO`; la base de comparación `ZANA_REVIEW_TARGET_REF` (predeterminado `refs/heads/main`). El modelo congela `candidateSha`, `treeSha`, `branchRef`, `targetRef`, `baseSha`, `repoRoot`, `clean` y `observedAt`. Las operaciones de revisión vuelven a observar el disco. Una diferencia o un cambio de SHA invalida durablemente los paquetes y resultados de la revisión. Esta observación no concede permisos sobre el sistema operativo ni sustituye una revisión 4R externa.
 
+Una diferencia entre el modelo/esfuerzo solicitado y el informado se registra como `HOST_REPORTED_MISMATCH`, con datos `reported` acotados; no bloquea la planificación ni apertura de la revisión. Las verificaciones de Git, autorización y firmas siguen siendo obligatorias.
+
 ## Cuatro lentes
 
 | Lente | Aspectos que revisa |

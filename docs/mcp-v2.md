@@ -35,6 +35,7 @@ La especificación MCP y la configuración del cliente no conceden permisos de e
 
 - `requested`: requisitos solicitados (modelo, esfuerzo, límites y ausencia de fallback deliberado). No demuestra selección efectiva.
 - `hostReported`: modelo, esfuerzo y capacidad de subagentes tal como los declara el cliente. Su procedencia es `HOST_REPORTED_UNVERIFIED` o `NOT_REPORTED`.
+- La discrepancia de modelo/esfuerzo se informa y queda registrada como `HOST_REPORTED_MISMATCH` junto a `reported` (cadenas de hasta 80 caracteres o `null`). No bloquea; `decision.allowed` sigue siendo `true` por compatibilidad.
 - `verified`: modelo, esfuerzo, ejecuciones y evidencias que realmente se verificaron mediante una fuente independiente y autenticada. Por ahora se mantienen en `null` y `NOT_OBSERVED`: una cadena declarada por el cliente no puede llenarlos.
 
 `decision` expone un **plan** de ejecución limitado a cuatro trabajos independientes. Un informe no puede ampliar permisos, firmar una decisión del operador, certificar un subagente o promover un resultado de RDD a revisión independiente. La futura verificación real debe permanecer en una capa de atestación diferente, no en `hostReport`.

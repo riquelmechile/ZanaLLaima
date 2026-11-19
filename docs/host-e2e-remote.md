@@ -4,6 +4,8 @@
 
 **Resultado registrado (9 nov 2026):** el camino feliz y una ronda de corrección se observaron sobre un deploy real; los casos negativos de la sección 3 todavía no se corrieron en vivo. Por eso `examples/host-e2e-remote.json` dice `PARTIALLY_OBSERVED`: un valor intermedio para cuando falta alguna sección. Ese reporte tampoco trae ids de sesión, links ni extracto de auditoría, porque el repo es público y esos valores quedan en el servidor del operador.
 
+Si el anfitrión informa un modelo/esfuerzo diferente del solicitado, queda registrado como `HOST_REPORTED_MISMATCH` y no bloquea la ejecución. Esta declaración no verifica el modelo real ni relaja los controles de revisión, CI y autorización.
+
 ## 0. Preparación
 
 1. Repo sandbox, por ejemplo `<owner>/zanallaima-sandbox`, en `ZANA_GITHUB_REPOS`, con `main` protegida (checks y review requeridos) y el workflow de `docs/checks-workflow.md`.

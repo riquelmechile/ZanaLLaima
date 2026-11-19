@@ -2,6 +2,8 @@
 
 **PASOS HUMANOS.** Ningún resultado de CI concede permiso de merge ni despliegue. La llave privada permanece fuera del repositorio, de chats y del proceso MCP.
 
+Si el host informa otro modelo o esfuerzo, se registra como `HOST_REPORTED_MISMATCH`; no bloquea unidades ni revisiones. No confundir este permiso de continuar con una verificación del modelo efectivo.
+
 ## 1. Revisora 4R y autorizaciones separadas
 
 La cuenta requerida para el environment `ci-attestation` es la cuenta revisora, que el script recibe en `ZANA_CI_REVIEWER` (nunca queda escrita en el repo). Si es del mismo dueño que la cuenta autora, no presentar esa separación de credenciales como independencia organizacional. Antes de cualquier aprobación, verificar HEAD exacto, revisión 4R y protección de `main`. El script de configuración debe mantener `prevent_self_review=true`.

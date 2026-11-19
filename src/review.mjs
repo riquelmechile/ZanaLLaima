@@ -31,7 +31,6 @@ export function openReview(mission,{candidateSha,hostReport={},risk='MEDIUM',git
     'Candidate must be an exact lowercase 40-character Git SHA');
   insist(['LOW','MEDIUM','HIGH'].includes(risk),'Invalid risk level');
   const host=evaluateHost(hostReport);
-  insist(host.allowed,'The requested model or reasoning effort does not match this host report');
   insist((mission.reviewCount||0)<Math.min(MAX_VERIFIED_ROUNDS,budgetOf(mission).maxReviewRounds),
     'Verified review correction limit reached; operator intervention required');
   if(gitEvidence){
@@ -110,7 +109,6 @@ function choosePlan(review,hostReport){
   if(hostReport===undefined)return {
     mode:review.mode,max:review.mode==='NATIVE_PLANNED'?Math.min(4,review.maxParallel||1):1};
   const host=evaluateHost(hostReport);
-  if(!host.allowed)return {mode:'BLOCKED',max:0,reason:'Required model or reasoning effort mismatch'};
   if(review.mode==='NATIVE_PLANNED'&&host.executionMode==='HOST_NATIVE')
     return {mode:'NATIVE_PLANNED',max:Math.max(1,Math.min(review.maxParallel||1,host.maxParallel,4))};
   return {mode:'SOLO_SEQUENTIAL',max:1,reason:'Native capability is unavailable or review is already solo'};
@@ -123,7 +121,6 @@ export function nextReviewBatch(mission,hostReport){
   const running=review.lenses.filter(x=>x.state==='RUNNING');
   if(running.length)return {mode:'WAITING',lenses:[],reason:'Finish outstanding review packets first'};
   const option=choosePlan(review,hostReport);
-  if(option.mode==='BLOCKED')return {mode:'BLOCKED',lenses:[],reason:option.reason};
   const pending=review.lenses.filter(x=>x.state==='PENDING');
   return {
     mode:option.mode,candidateSha:review.candidateSha,

@@ -96,14 +96,18 @@ export function evaluateHost(report = {}) {
   assert(report && typeof report === 'object' && !Array.isArray(report), 'Host report must be an object');
   const wrongModel = (report.model !== undefined && report.model !== HOST_REQUEST.model) ||
     (report.reasoningEffort !== undefined && report.reasoningEffort !== HOST_REQUEST.reasoningEffort);
+  const bounded = value => typeof value === 'string' && value.length <= 80 ? value : null;
   const n = report.nativeSubagents;
   const available = n?.available === true && Number.isInteger(n.maxConcurrent) && n.maxConcurrent >= 1;
   const max = available ? Math.min(n.maxConcurrent, HOST_REQUEST.parallelBatchCeiling,
     HOST_REQUEST.planningCeiling) : 1;
-  return { requested: HOST_REQUEST, modelStatus: wrongModel ? 'MISMATCH_BLOCKED' :
+  return { requested: HOST_REQUEST, modelStatus: wrongModel ? 'HOST_REPORTED_MISMATCH' :
     report.model === HOST_REQUEST.model && report.reasoningEffort === HOST_REQUEST.reasoningEffort
       ? 'HOST_REPORTED_UNVERIFIED' : 'REQUESTED_UNVERIFIED',
-    allowed: !wrongModel, executionMode: available ? 'HOST_NATIVE' : 'INLINE',
+    allowed: true,
+    ...(wrongModel ? {reported: {model: bounded(report.model),
+      reasoningEffort: bounded(report.reasoningEffort)}} : {}),
+    executionMode: available ? 'HOST_NATIVE' : 'INLINE',
     maxParallel: max, capabilityEvidence: available ? 'HOST_REPORTED_UNVERIFIED' : 'NOT_OBSERVED',
     note: 'This process plans work only. The host owns model selection and any actual native subagent creation.' };
 }
@@ -122,7 +126,6 @@ export function nextBatch(mission, report = {}, grant = null) {
   const host=evaluateHost(report);
   const blocked=reason=>({host,mode:'BLOCKED',units:[],reason});
   if((mission.status||'ACTIVE')!=='ACTIVE')return blocked('Mission not active');
-  if(!host.allowed)return blocked('The reported model/effort differs from the required host request.');
   if(budgetExpired(mission))return blocked('Mission deadline expired; cancel or reconcile before further work');
   if(mission.budget?.deadlineAt && Date.parse(mission.budget.deadlineAt)-Date.now()<5000)
     return blocked('Mission deadline too close to reserve a safe minimum lease');
@@ -176,7 +179,6 @@ export function startBatch(mission, report = {}, grant = null, leaseSeconds = Ma
   assert(Number.isInteger(leaseSeconds)&&leaseSeconds>=5&&leaseSeconds<=budgetOf(mission).maxLeaseSeconds,
     'Lease exceeds mission time budget');
   const plan = nextBatch(mission, report, grant);
-  assert(plan.host.allowed, 'Requested model/effort mismatch');
   assert(plan.units.length, `No runnable batch: ${plan.reason}`);
   const packets = plan.units.map(u => {
     const unit = mission.units.find(x => x.id === u.id);

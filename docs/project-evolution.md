@@ -6,7 +6,7 @@ Objetivo: GPT-6 Astra (configuración solicitada, esfuerzo `max`) coordina subag
 ## Principios inmutables
 
 - GPT es el único orquestador de razonamiento. Xanxito puede aportar control/lecturas locales, **nunca delegar a otros hosts** para este proyecto. Sin subagentes nativos verificados, ejecución secuencial transparente.
-- El backend no consulta proveedores de modelos. No afirmar modelo ni esfuerzo efectivo sin evidencia del anfitrión.
+- El backend no consulta proveedores de modelos. No afirmar modelo ni esfuerzo efectivo sin evidencia del anfitrión. Si hay diferencia, se informa como `HOST_REPORTED_MISMATCH` con los campos `reported` acotados; nunca bloquea una unidad o revisión por sí sola.
 - Ninguna respuesta de un LLM concede permisos: autorización autenticada de usuario, específica por efecto, objeto y alcance. Nunca repetir efectos dudosos tras timeouts.
 - Para proyectos gestionados por ZanaLLaima, escrituras de código solo mediante `zana_ds_github`, con misión activa, unidad RUNNING y rama autorizada. La evolución del propio repositorio puede prepararse mediante el conector GitHub en una rama de PR por autorización expresa del operador; ese camino no produce un ticket, aprobación ni atestación 4R del harness. `main` y `.github/workflows/**` se mantienen protegidos.
 - El revisor usa credencial GitHub distinta, solo del servidor; revisar exactamente el SHA comprobado, diff completo, CI real y cuatro lentes. No promover una «revisión independiente» sin identidad/aislamiento comprobable.

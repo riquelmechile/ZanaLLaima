@@ -6,7 +6,7 @@
 
 1. Clonar la rama exacta del PR, registrar \`git rev-parse HEAD\` y ejecutar el CI local según README. No usar datos reales de clientes.
 2. Conectar MCP siguiendo [host-codex.md](host-codex.md); capturar \`codex --version\`, \`codex mcp list\` y la lista real de herramientas (esperadas: 24).
-3. Registrar el modelo y esfuerzo **visibles en la interfaz del host**, sin atribuir al MCP capacidad de verificar esa selección. Solicitar \`gpt-6-astra\` con esfuerzo \`max\`, si existe esa opción disponible. Si el host no lo ofrece, registrar la limitación y detener cualquier afirmación de conformidad con el contrato de modelo.
+3. Registrar el modelo y esfuerzo **visibles en la interfaz del host**, sin atribuir al MCP capacidad de verificar esa selección. Solicitar \`gpt-6-astra\` con esfuerzo \`max\`, si existe esa opción disponible. Si el host no lo ofrece, registrar `HOST_REPORTED_MISMATCH` y no afirmar conformidad del modelo; esa discrepancia no bloquea la misión ni su revisión.
 
 ## Paso 1. READ: misión y capacidad incremental
 

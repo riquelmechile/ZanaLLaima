@@ -81,8 +81,12 @@ export async function deliveryStatus({github,config,ctx,openBlockingTickets=[],c
   const lineBudget=lineBudgetOf&&await deadline.step(()=>Promise.resolve().then(()=>lineBudgetOf(pull))
     .catch(error=>error instanceof DeadlineError?Promise.reject(error):{unavailable:String(error?.code??'ERROR')}),
   'lineBudget',{fallback:{unavailable:'DEADLINE'}});
+  const unresolvedThreads=await deadline.step(()=>github.unresolvedReviewThreads(ctx.repo,pull.number),
+    'reviewThreads',{fallback:null}).catch(()=>null);
   const mergeable=pull.mergeable===true&&pull.draft!==true&&pull.state==='open';
   const blockers=[];
+  if(unresolvedThreads===null)blockers.push('THREADS_UNAVAILABLE: no se pudieron consultar las conversaciones del PR');
+  else if(unresolvedThreads>0)blockers.push('Hay '+unresolvedThreads+' conversaciones de revisión abiertas');
   if(review.state!=='APPROVED_EXACT_SHA')blockers.push('Review of '+review.login+': '+review.state);
   if(ci.state!=='SUCCESS')blockers.push('CI on '+head+': '+ci.state);
   if(fourR!=='success')blockers.push('zana/4r on '+head+': '+fourR);
@@ -92,7 +96,7 @@ export async function deliveryStatus({github,config,ctx,openBlockingTickets=[],c
   if(!authority.ok)blockers.push('Current review ticket: '+authority.reason);
   return {missionId:ctx.missionId,repo:ctx.repo,pullNumber:pull.number,pullUrl:pull.html_url??null,headSha:head,
     review,currentTicket:authority.ticket??null,ci:{state:ci.state,runs:ci.runs,missing:ci.missing,...(ci.note?{note:ci.note}:{})},fourR,mergeable,
-    mergeableState:pull.mergeable_state??null,openBlockingTickets,ready:blockers.length===0,blockers,
+    mergeableState:pull.mergeable_state??null,openBlockingTickets,unresolvedThreads,ready:blockers.length===0,blockers,
     ...(lineBudget?{lineBudget}:{}),
     ...(deadline.partial.length?{partial:deadline.partial}:{}),readOnly:true};
 }

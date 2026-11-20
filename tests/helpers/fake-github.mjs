@@ -21,7 +21,8 @@ async function bodyOf(req){const parts=[];for await(const c of req)parts.push(c)
 export async function fakeGitHubApi(){
   const state={repo:'o/r',defaultBranch:'main',branches:{main:sha('0')},pulls:[],checkRuns:{},statuses:{},
     reviews:{},commits:{},pullFiles:{},workflowRuns:{},runJobs:{},dispatches:[],merges:[],logs:{},comments:{},requests:[],
-    failNext:null,repoId:4242,files:{},bootstrapLogin:'O',created:{},failCreate:null};
+    failNext:null,repoId:4242,files:{},bootstrapLogin:'O',created:{},failCreate:null,
+    threads:{},failThreads:null,mergeFailure:null};
   const server=createServer(async(req,res)=>{
     const url=new URL(req.url,'http://x');
     const body=req.method==='GET'?'':await bodyOf(req);
@@ -30,6 +31,15 @@ export async function fakeGitHubApi(){
     const send=(status,data,type='application/json')=>{res.writeHead(status,{'content-type':type});
       res.end(typeof data==='string'?data:JSON.stringify(data));};
     if(state.failNext){const f=state.failNext;state.failNext=null;return send(f.status,{message:f.message});}
+    if(url.pathname==='/graphql'&&req.method==='POST'){
+      if(state.failThreads)return send(state.failThreads.status,{message:state.failThreads.message});
+      const vars=JSON.parse(body).variables,start=vars.after?Number(vars.after):0;
+      const all=state.threads[String(vars.number)]??[],slice=all.slice(start,start+100);
+      return send(200,{data:{repository:{pullRequest:{reviewThreads:{
+        nodes:slice.map(isResolved=>({isResolved})),
+        pageInfo:{hasNextPage:start+100<all.length,endCursor:String(start+100)}
+      }}}}});
+    }
     // Lo mínimo del bootstrap: quién es el token, crear un repositorio y consultarlo.
     if(url.pathname==='/user'&&req.method==='GET')return send(200,{login:token===BOOTSTRAP_TOKEN?state.bootstrapLogin:AUTHOR_LOGIN});
     if(url.pathname==='/user/repository_invitations'&&req.method==='GET')return send(200,[{id:7}]);
@@ -109,6 +119,7 @@ export async function fakeGitHubApi(){
       const pull=state.pulls.find(x=>x.number===Number(m[1]));
       const r=JSON.parse(body);
       state.merges.push({number:pull.number,...r,token});
+      if(state.mergeFailure)return send(state.mergeFailure.status,{message:state.mergeFailure.message});
       if(r.sha!==state.branches[pull.head.ref])return send(409,{message:'Head branch was modified. Review and try the merge again.'});
       pull.state='closed';pull.merged=true;pull.merge_commit_sha=sha('9');
       if(state.loseMergeResponse){state.loseMergeResponse=false;res.destroy();return;}

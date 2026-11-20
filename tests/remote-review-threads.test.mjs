@@ -95,6 +95,20 @@ test('fallo HTTP 405 de merge libera adopción solo de la sesión responsable',a
   }finally{await f.cleanup();}
 });
 
+test('NOT_READY por conversaciones pendientes libera adopción tras rechazo del gate GitHub',async()=>{
+  const f=await remoteFixture();
+  try{
+    const r=await approved(f);
+    const adopter=await f.session(),other=await f.session();
+    assert.equal((await f.call('zana_mission_adopt',{missionId:r.missionId},adopter)).adopted,true);
+    f.api.state.threads['7']=[false];
+    const refused=await f.call('zana_merge',{missionId:r.missionId},adopter);
+    assert.equal(refused.state,'NOT_READY');
+    assert.match(refused.blockers.join(' '),/conversaciones de revisión abiertas/);
+    assert.equal((await f.call('zana_mission_adopt',{missionId:r.missionId},other)).adopted,true);
+  }finally{await f.cleanup();}
+});
+
 test('merge exitoso NO libera adopción; otra sesión sigue bloqueada',async()=>{
   const f=await remoteFixture();
   try{

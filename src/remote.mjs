@@ -1128,7 +1128,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         throw error;
       }
       if(result?.merged===false&&(result.state==='STALE_SHA'||result.state==='MERGE_REFUSED'||
-        (result.state==='NOT_READY'&&result.blockers?.some(b=>b.startsWith('Pull request not mergeable')))))
+        (result.state==='NOT_READY'&&result.blockers?.some(b=>b.startsWith('Pull request not mergeable')||/conversaciones de revisión abiertas/.test(b)))))
         await releaseFailedMerge();
       let auditFailed=false;
       try{await audit({caller:session,tool:'zana_merge.result',missionId:id,outcome:result.state,args:{missionId:id},

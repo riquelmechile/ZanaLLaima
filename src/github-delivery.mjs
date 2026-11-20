@@ -76,13 +76,13 @@ export async function deliveryStatus({github,config,ctx,openBlockingTickets=[],c
     {fallback:'UNKNOWN'});
   const review=await deadline.step(()=>independentReview(github,ctx.repo,pull.number,head,pull,config.reviewerLogin),'review',
     {fallback:{login:config.reviewerLogin.toLowerCase(),state:'UNAVAILABLE',unavailableReason:'DEADLINE'}});
+  const unresolvedThreads=await deadline.step(()=>github.unresolvedReviewThreads(ctx.repo,pull.number),
+    'reviewThreads',{fallback:null}).catch(()=>null);
   // Informative only (never a blocker), but inside the same deadline.
   // A failed read (not the deadline) is reported, never thrown: it must not break the tool.
   const lineBudget=lineBudgetOf&&await deadline.step(()=>Promise.resolve().then(()=>lineBudgetOf(pull))
     .catch(error=>error instanceof DeadlineError?Promise.reject(error):{unavailable:String(error?.code??'ERROR')}),
   'lineBudget',{fallback:{unavailable:'DEADLINE'}});
-  const unresolvedThreads=await deadline.step(()=>github.unresolvedReviewThreads(ctx.repo,pull.number),
-    'reviewThreads',{fallback:null}).catch(()=>null);
   const mergeable=pull.mergeable===true&&pull.draft!==true&&pull.state==='open';
   const blockers=[];
   if(unresolvedThreads===null)blockers.push('THREADS_UNAVAILABLE: no se pudieron consultar las conversaciones del PR');

@@ -141,11 +141,11 @@ test('size limits: the delivery line budget runs inside the tool deadline and is
   assert.ok(Date.now()-t0<1500,'the slow file list must not outlive the deadline');
   assert.equal(started,1);
   assert.deepEqual(r.lineBudget,{unavailable:'DEADLINE'});
-  assert.deepEqual(r.partial,['lineBudget','reviewThreads']);
+  assert.deepEqual(r.partial,['lineBudget']);
   // No time left: not even started.
   const none=await deliveryStatus({github:gh,config,ctx,deadline:createDeadline(0),lineBudgetOf:slow});
   assert.equal(started,1);
-  assert.deepEqual(none.partial,['ci','zana/4r','review','lineBudget','reviewThreads']);
+  assert.deepEqual(none.partial,['ci','zana/4r','review','reviewThreads','lineBudget']);
   // In time it is returned as measured; without the callback there is no lineBudget.
   assert.deepEqual((await deliveryStatus({github:gh,config,ctx,lineBudgetOf:async p=>({pull:p.number})})).lineBudget,{pull:1});
   assert.equal('lineBudget' in await deliveryStatus({github:gh,config,ctx}),false);

@@ -158,7 +158,9 @@ export function makeExclusive(){
 // Ronda de corrección: el último ticket FINALIZED de la misión, si pidió cambios.
 export const correctionPrev=(db,missionId)=>{
   const t=db?.prepare("SELECT * FROM review_tickets WHERE mission_id=? AND state='FINALIZED' ORDER BY created_at DESC, rowid DESC LIMIT 1").get(missionId);
-  return t?.verdict==='REQUEST_CHANGES'?t:null;
+  if(t?.verdict==='REQUEST_CHANGES')return t;
+  if(t?.verdict==='APPROVE'&&remoteMission(db,missionId)?.codeUnits.includes('fix-threads-'+t.ticket_id.slice(0,8)))return t;
+  return null;
 };
 export const latestIn=(db,missionId)=>db?.prepare('SELECT * FROM review_tickets WHERE mission_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(missionId)??null;
 // events (opcional): {queue(db,{clientId,ticketId}), flush()} para avisar al monitor suscrito.

@@ -165,7 +165,7 @@ const NEW_TOOLS={
       evidence:z.array(z.string().min(1).max(2000)).min(1).max(20)}).strict()],
   zana_review_diff:['Reviewer session: read one page of the ticket diff (per file, paged); finalize requires every page read',true,
     z.object({ticket:ticket(),page:z.number().int().min(0).max(100000)}).strict()],
-  zana_correction_start:['Author session: after a REQUEST_CHANGES review, add one PENDING code unit to correct it (normal budget and review rounds; the round may only touch the PR files and tests, at most half the PR lines, cap 200)',false,
+  zana_correction_start:['Author session: after REQUEST_CHANGES or APPROVE with unresolved PR threads, add a bounded PENDING code correction unit; request a new review ticket',false,
     z.object({missionId:missionId()}).strict()],
   zana_session_rebind:['Only when zana_session_status shows a different id from the one that started the unit (e.g. a unit started before the conversation id existed): move a RUNNING unit with a live lease to this session without consuming an attempt (expired: zana_recover_expired, zana_unit_retry, zana_start_batch)',false,
     z.object({missionId:missionId(),unitId:z.string().min(1).max(64),token:uuid(),leaseGeneration:z.number().int().positive()}).strict()],
@@ -635,10 +635,12 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
           throw new Error('ADOPT_REVIEW_IN_PROGRESS: existe una revisión en curso');
         const finalizedAt=db.prepare("SELECT finalized_at FROM review_tickets WHERE mission_id=? AND state='FINALIZED' ORDER BY created_at DESC,rowid DESC LIMIT 1")
           .get(id)?.finalized_at??'';
-        const latestAdopt=db.prepare("SELECT session_id,created_at adopted_at FROM remote_activity WHERE mission_id=? AND kind='MISSION_ADOPT' AND created_at>? ORDER BY seq DESC LIMIT 1")
+        const latestAdopt=db.prepare("SELECT seq,session_id,created_at adopted_at FROM remote_activity WHERE mission_id=? AND kind='MISSION_ADOPT' AND created_at>? ORDER BY seq DESC LIMIT 1")
           .get(id,finalizedAt);
         const leaseFor=sessionId=>{
           if(!latestAdopt||latestAdopt.session_id!==sessionId)return null;
+          if(db.prepare("SELECT 1 FROM remote_activity WHERE mission_id=? AND session_id=? AND kind='MISSION_ADOPT_RELEASE' AND seq>? LIMIT 1")
+            .get(id,sessionId,latestAdopt.seq))return {active:false};
           const start=latestAdopt.adopted_at;
           const last=db.prepare('SELECT created_at FROM remote_activity WHERE mission_id=? AND session_id=? AND created_at>=? ORDER BY seq DESC LIMIT 1')
             .get(id,sessionId,start)?.created_at??start;
@@ -957,7 +959,22 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       // inside the mission transaction below.
       const last=await review.latest(id);
       if(!last)throw new Error('NO_CHANGES_REQUESTED: mission '+id+' has no review ticket');
-      const unitId='fix-'+last.ticket_id.slice(0,8);
+      let threadsMode=false,unresolvedThreads=0;
+      if(last.state==='FINALIZED'&&last.verdict==='APPROVE'){
+        const ctx=await missionContext(id,session.sessionId);
+        let pull;
+        try{pull=await github.pull(ctx.repo,last.pr_number);}
+        catch{throw new Error('THREADS_UNAVAILABLE: no se pudo leer el PR de GitHub');}
+        if(pull?.state!=='open'||pull.head?.sha!==last.sha||
+          pull.head?.ref!==ctx.branch||pull.base?.ref!==ctx.base)
+          throw new Error('NO_CHANGES_REQUESTED: el APPROVE no corresponde al head abierto actual');
+        try{unresolvedThreads=await github.unresolvedReviewThreads(ctx.repo,last.pr_number);}
+        catch{throw new Error('THREADS_UNAVAILABLE: GitHub no permitió consultar conversaciones');}
+        if(!unresolvedThreads)throw new Error('NO_CHANGES_REQUESTED: no hay conversaciones de revisión abiertas');
+        threadsMode=true;
+      }else if(last.state!=='FINALIZED'||last.verdict!=='REQUEST_CHANGES')
+        throw new Error('NO_CHANGES_REQUESTED: no existe una revisión finalizada que corregir');
+      const unitId=(threadsMode?'fix-threads-':'fix-')+last.ticket_id.slice(0,8);
       let added;
       await transact((existing,txc)=>{
         if(existing?.id!==id)throw new Error('MISSION_NOT_ACTIVE: mission '+id+' is not the active mission');
@@ -965,8 +982,9 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         // Revalidate inside the mission transaction: the pre-check above ran
         // before it, and a newer ticket may have appeared meanwhile (TOCTOU).
         const now=review.latestIn(txc.db,id);
-        if(now?.ticket_id!==last.ticket_id||now.state!=='FINALIZED'||now.verdict!=='REQUEST_CHANGES')
-          throw new Error('NO_CHANGES_REQUESTED: the latest ticket of mission '+id+' changed and did not end in REQUEST_CHANGES');
+        if(now?.ticket_id!==last.ticket_id||now.state!=='FINALIZED'||now.verdict!==last.verdict||
+          now.sha!==last.sha||now.pr_number!==last.pr_number)
+          throw new Error('NO_CHANGES_REQUESTED: the latest ticket changed during the correction');
         if((existing.status||'ACTIVE')!=='ACTIVE')throw new Error('MISSION_NOT_ACTIVE: mission '+id+' is '+existing.status);
         if(!remoteMission(txc.db,id).codeUnits.length)throw new Error('NO_CODE_UNITS: mission '+id+' has no code units to correct');
         if(existing.units.some(u=>u.id===unitId))throw new Error('CORRECTION_EXISTS: unit '+unitId+' already corrects that review');
@@ -974,8 +992,10 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
           throw new Error('REVIEW_ROUNDS_EXHAUSTED: no review round left for a corrected candidate');
         if(remainingStarts(existing)<=0)throw new Error('Mission work-start budget exhausted');
         if(existing.units.length>=100)throw new Error('Mission already has 100 units');
-        existing.units.push({id:unitId,instruction:'Corregir los hallazgos BLOCKER/CRITICAL que no sean PREEXISTING de la review del ticket '+last.ticket_id+
-          ' (SHA '+last.sha+') en la rama de la misión: zana_start_batch → escribir → zana_checks_* hasta verde → zana_complete_unit → zana_review_request (ticket nuevo).',
+        existing.units.push({id:unitId,instruction:(threadsMode
+          ?'Corregir solo lo señalado en las conversaciones abiertas, en archivos que el PR ya toca más tests'
+          :'Corregir los hallazgos BLOCKER/CRITICAL que no sean PREEXISTING de la review')+
+          ' del ticket '+last.ticket_id+' (SHA '+last.sha+'): zana_start_batch → escribir → checks verdes → zana_complete_unit → zana_review_request (ticket nuevo).',
           effect:'READ',dependsOn:[],paths:[],status:'PENDING',attempts:0,run:null,result:null});
         existing.revision++;
         const rm=remoteMission(txc.db,id);
@@ -986,7 +1006,8 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       let measured=null;
       try{measured=JSON.parse(last.line_budget);}catch{measured=null;}
       const maxLines=Number.isSafeInteger(measured?.lines)&&Array.isArray(measured.touched)&&!measured.truncated?correctionLimit(measured.lines):null;
-      return {missionId:id,unitId,correctsTicket:last.ticket_id,sha:last.sha,mission:publicStatus(added),
+      return {missionId:id,unitId,correctsTicket:last.ticket_id,sha:last.sha,
+        ...(threadsMode?{unresolvedThreads}:{}),mission:publicStatus(added),
         correctionBudget:{files:'los archivos del PR y tests',prFiles:maxLines===null?null:measured.touched.slice(0,100),maxLines,
           ...(maxLines===null?{unmeasured:'el ticket no guardó la medida del PR: zana_review_request responde CORRECTION_UNMEASURED'}:{})},
         next:'zana_start_batch → write on the mission branch (only the PR files and tests, at most correctionBudget.maxLines lines) → zana_checks_start/zana_checks_status until green → zana_complete_unit → zana_review_request'};
@@ -1068,6 +1089,15 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
       return deliveryStatus({github,config,ctx,openBlockingTickets:await review.openBlocking(id),currentTicket:await review.latest(id),lineBudgetOf});
     },
     async zana_merge({missionId:id},session){
+      const releaseFailedMerge=()=>rw((db,mission)=>{
+        const latest=db.prepare("SELECT seq,session_id FROM remote_activity WHERE mission_id=? AND kind='MISSION_ADOPT' ORDER BY seq DESC LIMIT 1").get(id);
+        if(latest?.session_id!==session.sessionId)return;
+        if(mission?.id===id&&mission.units.some(u=>u.status==='RUNNING'&&Date.parse(u.run?.expiresAt)>Date.now()))return;
+        if(db.prepare("SELECT 1 FROM remote_activity WHERE mission_id=? AND session_id=? AND kind='MISSION_ADOPT_RELEASE' AND seq>? LIMIT 1")
+          .get(id,session.sessionId,latest.seq))return;
+        recordActivity(db,{sessionId:session.sessionId,clientId:session.clientId,missionId:id,
+          kind:'MISSION_ADOPT_RELEASE',tool:'zana_merge'});
+      });
       const ctx=await missionContext(id,session.sessionId,{allowInactive:true});
       if(!session.operator){
         if(ctx.reviewer)throw new Error('REVIEWER_READ_ONLY: a reviewer session cannot merge');
@@ -1091,10 +1121,15 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
               args:{missionId:id},detail:{headSha,method:config.mergeMethod},category:'merge'})});
         });
       }catch(error){
+        if(error instanceof GitHubApiError&&[405,409,422].includes(error.status))
+          await releaseFailedMerge();
         await audit({caller:session,tool:'zana_merge.result',missionId:id,outcome:'ERROR',args:{missionId:id},
           detail:{error:clean(error,secrets())},category:'merge'});
         throw error;
       }
+      if(result?.merged===false&&(result.state==='STALE_SHA'||result.state==='MERGE_REFUSED'||
+        (result.state==='NOT_READY'&&result.blockers?.some(b=>b.startsWith('Pull request not mergeable')||/conversaciones de revisión abiertas/.test(b)))))
+        await releaseFailedMerge();
       let auditFailed=false;
       try{await audit({caller:session,tool:'zana_merge.result',missionId:id,outcome:result.state,args:{missionId:id},
         detail:{headSha:result.headSha??null,mergeCommitSha:result.mergeCommitSha??null,method:result.method??null,

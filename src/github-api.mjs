@@ -136,6 +136,25 @@ export class GitHubApi{
     return sha(data?.commit?.sha);
   }
   async pull(repo,number){return this.request('GET',repoPath(repo)+'/pulls/'+positive(number));}
+  async unresolvedReviewThreads(repo,number){
+    repoPath(repo);
+    const [owner,name]=repo.split('/');
+    const query='query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100,after:$after){nodes{isResolved} pageInfo{hasNextPage endCursor}}}}}';
+    let after=null,unresolved=0;
+    for(let page=0;page<50;page++){
+      const response=await this.request('POST','/graphql',{body:{query,variables:{owner,name,number:positive(number),after}}});
+      const threads=response?.data?.repository?.pullRequest?.reviewThreads;
+      if(response?.errors?.length||!Array.isArray(threads?.nodes)||typeof threads?.pageInfo?.hasNextPage!=='boolean'||
+        threads.nodes.some(t=>typeof t?.isResolved!=='boolean'))
+        throw new GitHubApiError(502,'GitHub review threads unavailable');
+      unresolved+=threads.nodes.filter(t=>!t.isResolved).length;
+      if(!threads.pageInfo.hasNextPage)return unresolved;
+      if(!threads.pageInfo.endCursor||threads.pageInfo.endCursor===after)
+        throw new GitHubApiError(502,'GitHub review threads cursor invalid');
+      after=threads.pageInfo.endCursor;
+    }
+    throw new GitHubApiError(502,'GitHub review threads pagination limit reached');
+  }
   async pullDiff(repo,number){
     return this.request('GET',repoPath(repo)+'/pulls/'+positive(number),{accept:'application/vnd.github.diff',raw:true});
   }

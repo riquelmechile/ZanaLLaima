@@ -193,10 +193,11 @@ test('M6: deliveryStatus with no time left is never green',async()=>{
     pull:async()=>({number:1,state:'open',mergeable:true,head:{sha:'h'}}),
     checkRuns:async()=>[{name:'t',status:'completed',conclusion:'success',head_sha:'h'}],
     statuses:async()=>[{context:'zana/4r',state:'success',creator:{login:'rev'}}],
-    pullCommits:async()=>[],pullReviews:async()=>[{user:{login:'rev'},state:'APPROVED',commit_id:'h',id:1}]};
+    pullCommits:async()=>[],pullReviews:async()=>[{user:{login:'rev'},state:'APPROVED',commit_id:'h',id:1}],
+    unresolvedReviewThreads:async()=>0};
   const r=await deliveryStatus({github:gh,config:{reviewerLogin:'rev',requiredChecks:[]},ctx,deadline:createDeadline(0)});
   assert.deepEqual({ci:r.ci.state,fourR:r.fourR,review:r.review.state,ready:r.ready},{ci:'UNKNOWN',fourR:'UNKNOWN',review:'UNAVAILABLE',ready:false});
-  assert.deepEqual(r.partial,['ci','zana/4r','review']);
+  assert.deepEqual(r.partial,['ci','zana/4r','review','reviewThreads']);
   const currentTicket={ticket_id:'t',state:'FINALIZED',verdict:'APPROVE',sha:'h',github_review_id:1};
   assert.equal((await deliveryStatus({github:gh,config:{reviewerLogin:'rev',requiredChecks:[]},ctx,currentTicket})).ready,true);
   // Sobre una base lista, un presupuesto de líneas excedido es informativo: no cambia ready ni blockers.

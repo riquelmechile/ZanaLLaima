@@ -132,7 +132,7 @@ test('size limits: the delivery line budget runs inside the tool deadline and is
   const ctx={missionId:'m',repo:'o/r',branch:'zana/m',base:'main'};
   const gh={openPullsFor:async()=>[{number:1,head:{ref:'zana/m'},base:{ref:'main'}}],
     pull:async()=>({number:1,state:'open',mergeable:true,head:{sha:'h'}}),
-    checkRuns:async()=>[],statuses:async()=>[],pullCommits:async()=>[],pullReviews:async()=>[]};
+    checkRuns:async()=>[],statuses:async()=>[],pullCommits:async()=>[],pullReviews:async()=>[],unresolvedReviewThreads:async()=>0};
   const config={reviewerLogin:'rev',requiredChecks:[]};
   let started=0;
   const slow=()=>{started++;return new Promise(ok=>setTimeout(()=>ok({lines:1}),2000));};
@@ -145,7 +145,7 @@ test('size limits: the delivery line budget runs inside the tool deadline and is
   // No time left: not even started.
   const none=await deliveryStatus({github:gh,config,ctx,deadline:createDeadline(0),lineBudgetOf:slow});
   assert.equal(started,1);
-  assert.deepEqual(none.partial,['ci','zana/4r','review','lineBudget']);
+  assert.deepEqual(none.partial,['ci','zana/4r','review','reviewThreads','lineBudget']);
   // In time it is returned as measured; without the callback there is no lineBudget.
   assert.deepEqual((await deliveryStatus({github:gh,config,ctx,lineBudgetOf:async p=>({pull:p.number})})).lineBudget,{pull:1});
   assert.equal('lineBudget' in await deliveryStatus({github:gh,config,ctx}),false);

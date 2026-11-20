@@ -2,6 +2,10 @@
 
 ## [Sin publicar]
 
+- Corrección por conversaciones abiertas después de 4R APPROVE en el head vigente: GraphQL paginado, nueva unidad acotada `fix-threads-*`, presupuesto de corrección existente y nuevo ticket obligatorio. Entrega bloqueada cuando queden hilos pendientes o falle su consulta.
+- `zana_merge` libera la adopción tras rechazo del merge por GitHub, sin afectar merges exitosos ni unidades con lease vivo; se documenta el cierre de hilos en la skill de orquestación.
+
+
 - Las diferencias de modelo/esfuerzo del anfitrión ya no bloquean lotes ni revisiones: `HOST_REPORTED_MISMATCH` registra `reported` acotado y `allowed` permanece `true` por compatibilidad. Pruebas para reserva de unidades, capacidad y revisión.
 
 - MCP: patrones de schemas portables para clientes no JavaScript; conserva validación Unicode en el handler y registra `rpc=result|error:<código>|-` sin exponer contenidos ni bufferizar SSE.

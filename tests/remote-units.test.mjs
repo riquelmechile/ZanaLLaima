@@ -148,7 +148,7 @@ test('GitHub REST client: guards, errors, pagination limits and job logs',async(
 test('delivery helpers: missing PR, unreadable evidence, dismissed review, merge outcomes',async()=>{
   const ctx={missionId:'m',repo:'o/r',branch:'zana/m',base:'main'};
   const gh=over=>({openPullsFor:async()=>[],pull:async()=>({}),pullCommits:async()=>[],pullReviews:async()=>[],
-    checkRuns:async()=>[],statuses:async()=>[],...over});
+    checkRuns:async()=>[],statuses:async()=>[],unresolvedReviewThreads:async()=>0,...over});
   assert.equal(await missionPull(gh({openPullsFor:async()=>[{number:1,head:{ref:'zana/m'},base:{ref:'dev'}}]}),ctx),null);
   const config={reviewerLogin:'Rev',requiredChecks:[],mergeEnabled:true,mergeMethod:'squash'};
   assert.equal((await deliveryStatus({github:gh(),config,ctx})).state,'NO_PULL_REQUEST');

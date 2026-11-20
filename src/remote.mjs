@@ -984,7 +984,7 @@ export function createRemoteRuntime({env=process.env,config=remoteConfig(env),fe
         const now=review.latestIn(txc.db,id);
         if(now?.ticket_id!==last.ticket_id||now.state!=='FINALIZED'||now.verdict!==last.verdict||
           now.sha!==last.sha||now.pr_number!==last.pr_number)
-          throw new Error('NO_CHANGES_REQUESTED: la última revisión cambió durante la corrección');
+          throw new Error('NO_CHANGES_REQUESTED: the latest ticket changed during the correction');
         if((existing.status||'ACTIVE')!=='ACTIVE')throw new Error('MISSION_NOT_ACTIVE: mission '+id+' is '+existing.status);
         if(!remoteMission(txc.db,id).codeUnits.length)throw new Error('NO_CODE_UNITS: mission '+id+' has no code units to correct');
         if(existing.units.some(u=>u.id===unitId))throw new Error('CORRECTION_EXISTS: unit '+unitId+' already corrects that review');

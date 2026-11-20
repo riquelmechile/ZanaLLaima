@@ -32,7 +32,7 @@ test('APPROVE + conversaciones abiertas crea fix-threads, usa presupuesto existe
     assert.equal(c.error,undefined,c.error);
     assert.match(c.unitId,/^fix-threads-/);
     assert.equal(c.correctionBudget.maxLines,5);
-    assert.match(c.mission.units.find(u=>u.id===c.unitId).instruction,/conversaciones abiertas/);
+    assert.match(await remoteRead((db,mission)=>mission.units.find(u=>u.id===c.unitId)?.instruction),/conversaciones abiertas/);
     assert.equal((await countUnits()).includes(c.unitId),true);
     f.api.state.push(r.branch,sha('b'));f.api.state.green(sha('b'));
     f.api.state.compareFiles=[{filename:'src/otro.mjs',additions:12,deletions:0,status:'modified'}];
